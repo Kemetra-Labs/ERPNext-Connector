@@ -64,10 +64,47 @@ class _Invoice:
 		}
 
 	def get(self, field):
-		return self.values.get(field)
+		# RT-378: ERPNext holds the payload as sent, on the site default company, plus computed totals.
+		return {**self.payload, "company": "RT Company", **self.values}.get(field)
+
+	def reload(self):
+		pass  # RT-378 read-back after submit: the database holds what insert computed
 
 	def submit(self):
 		self._fake.events.append("submit")
+
+
+# RT-378: an existing row that holds exactly what Retail Tower sent; a test overrides fields.
+_HONOURED_ROW = {
+	"qty": 1.0,
+	"uom": "Nos",
+	"rate": 100.0,
+	"amount": 100.0,
+	"price_list_rate": 100.0,
+	"discount_percentage": 0.0,
+	"discount_amount": 0.0,
+	"margin_type": "",
+	"margin_rate_or_amount": 0.0,
+}
+
+
+class _Existing:
+	"""The EXISTING Sales Invoice as ``frappe.get_doc`` reads it back from the database."""
+
+	def __init__(self, docstatus, items):
+		grand = sum(row["amount"] for row in items)
+		self._fields = {
+			"docstatus": docstatus,
+			"currency": "EGP",
+			"customer": "Walk-in",
+			"company": "RT Company",
+			"grand_total": grand,
+			"taxes": [],
+			"items": items,
+		}
+
+	def get(self, field):
+		return self._fields.get(field)
 
 
 class _Frappe(types.ModuleType):
@@ -82,19 +119,19 @@ class _Frappe(types.ModuleType):
 		self._logger = _Logger()
 		self.logger = lambda name=None: self._logger
 		self.events, self.payloads, self.reads = [], [], []
-		self.docstatus, self.items, self.unreadable = docstatus, list(items), unreadable
+		self.docstatus, self.unreadable = docstatus, unreadable
+		self.items = [{**_HONOURED_ROW, **row} for row in items]
 		self.db = types.SimpleNamespace(
 			get_value=self._get_value,
+			get_single_value=lambda doctype, field: "RT Company",  # RT-378 site default company
 			savepoint=lambda name: None,
 			rollback=lambda save_point=None: None,
 		)
 		self.utils = types.SimpleNamespace(get_system_timezone=lambda: "UTC")
 
 	def _get_value(self, doctype, filters, fields=None, **_):
-		if isinstance(filters, dict):
-			return None  # no provenance hit for a fresh post
-		self._read(filters)
-		return self.docstatus
+		assert isinstance(filters, dict), "the existing invoice is read with get_doc (RT-378)"
+		return None  # no provenance hit for a fresh post
 
 	def _read(self, name):
 		self.reads.append(name)
@@ -102,12 +139,13 @@ class _Frappe(types.ModuleType):
 			raise TimeoutError("Lock wait timeout exceeded")
 
 	def get_all(self, doctype, **kwargs):
-		if doctype == "Sales Invoice Item":
-			self._read(kwargs["filters"]["parent"])
-			return [dict(row) for row in self.items]
-		return []
+		return []  # Items: no batch/serial tracking
 
-	def get_doc(self, payload):
+	def get_doc(self, payload, name=None):
+		if name is not None:  # read back an existing invoice from the database
+			assert payload == "Sales Invoice"
+			self._read(name)
+			return _Existing(self.docstatus, [dict(row) for row in self.items])
 		self.payloads.append(payload)
 		return _Invoice(payload, self)
 
@@ -367,3 +405,96 @@ class TestTerminalAckKeysAreVersioned:
 	def test_an_unversioned_work_item_keeps_the_legacy_key(self, load_glue):
 		glue = load_glue(_Frappe())
 		assert self._reject(glue, None) == f"{_REF}:permanently_rejected"
+
+
+class TestReplayRepresentation:
+	"""RT-378 (RT-283 B.3): a replay also verifies the persisted representation."""
+
+	def test_a_repriced_existing_invoice_acks_reconciliation_required(self, load_glue):
+		row = {"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A, "rate": 90.0, "amount": 90.0}
+		fake = _Frappe(items=[row])
+		glue = load_glue(fake)
+		outcome, client = _post(glue, _work_item(), _Store(existing=_EXISTING))
+		assert outcome == "reconciliation_required"
+		assert client.acks[0]["ack"]["reason"]["message"].startswith("representation:")
+		assert fake.events.count("submit") == 0
+
+	def test_an_erp_derived_discount_on_the_existing_invoice_is_a_mismatch(self, load_glue):
+		row = {"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A, "discount_amount": 5.0}
+		glue = load_glue(_Frappe(items=[row]))
+		outcome, _client = _post(glue, _work_item(), _Store(existing=_EXISTING))
+		assert outcome == "reconciliation_required"
+
+	def test_an_expected_representation_that_cannot_be_rebuilt_fails_closed(self, load_glue):
+		fake = _Frappe(items=[{"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A}])
+		glue = load_glue(fake)
+		client = _Client()
+		outcome = glue.post_work_item(
+			_work_item(),
+			client=client,
+			store=_Store(existing=_EXISTING),
+			uom_map=UomMap({}),  # the unit map lost "each" since the sale posted
+			warehouses=PreResolvedWarehouse({_STORE: {"doctype": "Warehouse", "name": "Map WH"}}),
+			customers=StoreCustomerMap({_STORE: "Walk-in"}),
+			tenders=TenderModeMap({"cash": "Cash"}),
+			correlation_id="rt378-test",
+		)
+		assert outcome == "reconciliation_required"
+		assert client.acks[0]["ack"]["reason"]["message"].startswith("representation:")
+
+	def test_a_tender_map_change_does_not_affect_the_replay(self, load_glue):
+		fake = _Frappe(items=[{"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A}])
+		glue = load_glue(fake)
+		client = _Client()
+		outcome = glue.post_work_item(
+			_tendered_work_item(),
+			client=client,
+			store=_Store(existing=_EXISTING),
+			uom_map=UomMap({"each": "Nos"}),
+			warehouses=PreResolvedWarehouse({_STORE: {"doctype": "Warehouse", "name": "Map WH"}}),
+			customers=StoreCustomerMap({_STORE: "Walk-in"}),
+			tenders=TenderModeMap({}),  # "cash" no longer mapped: payments are not compared
+			correlation_id="rt378-test",
+		)
+		assert outcome == "posted"
+
+
+def _tendered_work_item():
+	item = _work_item()
+	wire_sale = {
+		"saleRef": item.sale.sale_ref,
+		"storeId": _STORE,
+		"currencyCode": "EGP",
+		"posTotal": "100.00",
+		"occurredAt": "2026-06-01T10:00:00Z",
+		"businessDate": "2026-06-01",
+		"sourceSystem": "pos-pulse",
+		"externalId": "POS-18101",
+		"warehouseRef": {"doctype": "Warehouse", "name": "Frozen WH"},
+		"tenders": [{"method": "cash", "amount": "100.00"}],
+		"lines": [
+			{
+				"lineRef": _A,
+				"lineName": "Item A",
+				"unitPrice": "100.00",
+				"currencyCode": "EGP",
+				"quantity": "1",
+				"lineAmount": "100.00",
+				"unit": "each",
+				"erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
+			}
+		],
+	}
+	return c.PostingWorkItem.from_wire(
+		{
+			"workItemRef": _REF,
+			"kind": "sale_post",
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-18101",
+			"payloadHash": "a" * 64,
+			"businessDate": "2026-06-01",
+			"itemCursor": "9",
+			"resolutionVersion": 2,
+			"sale": wire_sale,
+		}
+	)

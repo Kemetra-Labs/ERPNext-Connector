@@ -1,0 +1,321 @@
+# Copyright (c) 2026, Retail Tower OS and contributors
+# For license information, please see license.txt
+"""RT-378 (RT-283 F3) — the real glue verifies the persisted representation, no bench.
+
+* **Before submit** (after ``insert()``, inside the savepoint): a mismatch rolls back, nothing is
+  submitted, and the sale is acked ``permanently_rejected`` / ``validation`` with a
+  ``representation:`` reason (D1).
+* **After submit**: the invoice is read back from the database (``reload``) before acking. A
+  mismatch acks ``reconciliation_required`` with the documentRef; the Posting Log keeps the
+  document and the Connector never cancels or amends it (684). An unreadable invoice acks
+  ``failed_transient`` (never a blind ``posted``).
+
+The stand-in Sales Invoice keeps two views: the in-memory document (what ``insert`` computed) and
+the database row (what ``submit`` persisted). Only ``reload`` copies the database view into the
+document, so a glue that skipped the read-back would miss a reprice-on-submit.
+"""
+
+import copy
+import importlib
+import sys
+import types
+
+import pytest
+
+from retail_tower_erpnext_connector.connector.posting import contracts as c
+from retail_tower_erpnext_connector.connector.posting.tender import TenderModeMap
+from retail_tower_erpnext_connector.connector.posting.uom import (
+	PreResolvedWarehouse,
+	StoreCustomerMap,
+	UomMap,
+)
+
+_GLUE = "retail_tower_erpnext_connector.connector.posting.frappe_glue"
+_PKG = "retail_tower_erpnext_connector.connector.posting"
+_MISSING = object()
+_STORE = "33333333-3333-4333-8333-333333333333"
+_REF = "37837837-8378-4378-8378-378378378378"
+_COMPANY = "RT Company"
+_NAME = "ACC-SINV-2026-37800"
+
+
+class _Logger:
+	def __init__(self):
+		self.records = []
+
+	def info(self, record):
+		self.records.append(record)
+
+	warning = error = info
+
+
+def _erp_view(payload, company):
+	"""What ERPNext would hold for ``payload`` when it honours it exactly (floats, like Frappe)."""
+	items = [
+		{
+			"item_code": i["item_code"],
+			"qty": float(i["qty"]),
+			"uom": i["uom"],
+			"rate": float(i["rate"]),
+			"amount": float(i["amount"]),
+			"warehouse": i["warehouse"],
+			"price_list_rate": float(i["price_list_rate"]),
+			"discount_percentage": 0.0,
+			"discount_amount": 0.0,
+			"margin_type": "",
+			"margin_rate_or_amount": 0.0,
+		}
+		for i in payload["items"]
+	]
+	return {
+		"docstatus": 0,
+		"currency": payload["currency"],
+		"customer": payload["customer"],
+		"company": company,
+		"grand_total": sum(i["amount"] for i in items),
+		"paid_amount": 0.0,
+		"change_amount": 0.0,
+		"write_off_amount": 0.0,
+		"outstanding_amount": sum(i["amount"] for i in items),
+		"taxes": [],
+		"items": items,
+	}
+
+
+class _Invoice:
+	def __init__(self, payload, fake):
+		self.payload, self._fake, self.name = payload, fake, _NAME
+		self.doc, self.db_row = {}, {}
+
+	def insert(self):
+		self.doc = _erp_view(self.payload, self._fake.company)
+		self._fake.on_insert(self.doc)
+		self.db_row = copy.deepcopy(self.doc)
+		self._fake.events.append("insert")
+
+	def get(self, field):
+		return self.doc.get(field)
+
+	def submit(self):
+		self.doc["docstatus"] = 1
+		self.db_row = copy.deepcopy(self.doc)
+		self._fake.on_submit(self.db_row)  # persisted only: visible after reload
+		self._fake.events.append("submit")
+
+	def reload(self):
+		self._fake.events.append("reload")
+		if self._fake.unreadable:
+			raise TimeoutError("Lock wait timeout exceeded")
+		self.doc = copy.deepcopy(self.db_row)
+
+	def cancel(self):
+		self._fake.events.append("cancel")
+
+
+class _Frappe(types.ModuleType):
+	def __init__(self, *, on_insert=None, on_submit=None, company=_COMPANY, unreadable=False):
+		super().__init__("frappe")
+		self.ValidationError = type("ValidationError", (Exception,), {})
+		self.exceptions = types.SimpleNamespace(
+			UniqueValidationError=type("UniqueValidationError", (self.ValidationError,), {})
+		)
+		self._logger = _Logger()
+		self.logger = lambda name=None: self._logger
+		self.events, self.payloads = [], []
+		self.on_insert = on_insert or (lambda doc: None)
+		self.on_submit = on_submit or (lambda doc: None)
+		self.company, self.unreadable = company, unreadable
+		self.db = types.SimpleNamespace(
+			get_value=lambda doctype, filters, fields=None, **_: None,  # no provenance hit
+			get_single_value=self._get_single_value,
+			savepoint=lambda name: self.events.append("savepoint"),
+			rollback=lambda save_point=None: self.events.append("rollback"),
+		)
+		self.utils = types.SimpleNamespace(get_system_timezone=lambda: "UTC")
+
+	def _get_single_value(self, doctype, field):
+		assert (doctype, field) == ("Global Defaults", "default_company")
+		return self.company
+
+	def get_all(self, doctype, **kwargs):
+		return []  # Items: no batch/serial tracking
+
+	def get_doc(self, payload):
+		self.payloads.append(payload)
+		return _Invoice(payload, self)
+
+
+class _Client:
+	def __init__(self):
+		self.acks = []
+
+	def ack_outcome(self, ref, request, idempotency_key):
+		self.acks.append({"ack": request.to_wire(), "key": idempotency_key})
+
+
+class _Store:
+	def __init__(self):
+		self.writes = []
+
+	def get_document_ref(self, key):
+		return None
+
+	def record_posted(self, key, ref):
+		self.writes.append((key, ref))
+
+
+@pytest.fixture
+def load_glue():
+	pkg = importlib.import_module(_PKG)
+	saved = [
+		(sys.modules, "frappe", sys.modules.get("frappe", _MISSING)),
+		(sys.modules, _GLUE, sys.modules.get(_GLUE, _MISSING)),
+		(vars(pkg), "frappe_glue", vars(pkg).get("frappe_glue", _MISSING)),
+	]
+
+	def _load(fake):
+		sys.modules["frappe"] = fake
+		sys.modules.pop(_GLUE, None)
+		return importlib.import_module(_GLUE)
+
+	yield _load
+	for namespace, name, value in saved:
+		namespace.pop(name, None)
+		if value is not _MISSING:
+			namespace[name] = value
+
+
+def _work_item(*, version=2):
+	wire = {
+		"workItemRef": _REF,
+		"kind": "sale_post",
+		"sourceSystem": "pos-pulse",
+		"externalId": "POS-37801",
+		"payloadHash": "b" * 64,
+		"businessDate": "2026-06-01",
+		"itemCursor": "11",
+		"sale": {
+			"saleRef": "22222222-2222-4222-8222-222222222222",
+			"storeId": _STORE,
+			"currencyCode": "EGP",
+			"posTotal": "19.00",
+			"occurredAt": "2026-06-01T10:00:00Z",
+			"businessDate": "2026-06-01",
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-37801",
+			"lines": [
+				{
+					"lineRef": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+					"lineName": "Item A",
+					"unitPrice": "9.50",
+					"currencyCode": "EGP",
+					"quantity": "2",
+					"lineAmount": "19.00",
+					"unit": "each",
+					"erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
+				}
+			],
+		},
+	}
+	if version is not None:
+		wire["resolutionVersion"] = version
+	return c.PostingWorkItem.from_wire(wire)
+
+
+def _post(glue, work_item=None):
+	client, store = _Client(), _Store()
+	outcome = glue.post_work_item(
+		work_item or _work_item(),
+		client=client,
+		store=store,
+		uom_map=UomMap({"each": "Nos"}),
+		warehouses=PreResolvedWarehouse({_STORE: {"doctype": "Warehouse", "name": "Store WH"}}),
+		customers=StoreCustomerMap({_STORE: "Walk-in"}),
+		tenders=TenderModeMap({"cash": "Cash"}),
+		correlation_id="rt378-test",
+	)
+	return outcome, client, store
+
+
+def _reprice(doc):
+	"""An enabled selling Pricing Rule: 9.50 -> 9.00 (RT-376), with the difference as a discount."""
+	row = doc["items"][0]
+	row.update({"rate": 9.0, "amount": 18.0, "discount_amount": 0.5, "price_list_rate": 9.5})
+	doc["grand_total"] = 18.0
+
+
+def _add_tax(doc):
+	doc["taxes"] = [{"charge_type": "On Net Total", "rate": 14.0, "tax_amount": 2.66}]
+	doc["grand_total"] = 21.66
+
+
+def _add_discount(doc):
+	doc["items"][0]["discount_percentage"] = 5.0
+
+
+class TestHonouredInvoice:
+	def test_an_exact_invoice_is_read_back_and_acked_posted(self, load_glue):
+		fake = _Frappe()
+		outcome, client, store = _post(load_glue(fake))
+		assert outcome == "posted"
+		assert fake.events == ["savepoint", "insert", "submit", "reload"]
+		assert client.acks[0]["ack"]["outcome"] == "posted"
+		assert len(store.writes) == 1
+
+
+class TestBeforeSubmit:
+	@pytest.mark.parametrize("mutate", [_reprice, _add_tax, _add_discount])
+	def test_a_mismatch_after_insert_rolls_back_and_rejects_as_validation(self, load_glue, mutate):
+		fake = _Frappe(on_insert=mutate)
+		outcome, client, store = _post(load_glue(fake))
+		assert outcome == "permanently_rejected"
+		assert fake.events == ["savepoint", "insert", "rollback"]  # nothing submitted, nothing kept
+		ack = client.acks[0]
+		assert ack["key"] == f"{_REF}:permanently_rejected:v2"
+		assert ack["ack"]["reason"]["category"] == "validation"
+		assert ack["ack"]["reason"]["message"].startswith("representation:")
+		assert store.writes == []
+
+	def test_no_site_default_company_fails_closed_before_insert(self, load_glue):
+		fake = _Frappe(company=None)
+		outcome, client, _store = _post(load_glue(fake))
+		assert outcome == "permanently_rejected"
+		assert fake.payloads == [] and "insert" not in fake.events
+		assert client.acks[0]["ack"]["reason"]["category"] == "validation"
+		assert client.acks[0]["ack"]["reason"]["message"].startswith("representation:")
+
+	def test_an_invoice_on_another_company_is_rejected(self, load_glue):
+		fake = _Frappe(on_insert=lambda doc: doc.update(company="Other Co"))
+		outcome, client, _store = _post(load_glue(fake))
+		assert outcome == "permanently_rejected"
+		assert "company" in client.acks[0]["ack"]["reason"]["message"]
+
+
+class TestAfterSubmit:
+	def test_a_reprice_on_submit_acks_reconciliation_required(self, load_glue):
+		fake = _Frappe(on_submit=_reprice)
+		outcome, client, store = _post(load_glue(fake))
+		assert outcome == "reconciliation_required"
+		ack = client.acks[0]
+		assert ack["key"] == f"{_REF}:reconciliation_required:v2"
+		assert ack["ack"]["outcome"] == "reconciliation_required"
+		assert ack["ack"]["documentRef"] == {"doctype": "Sales Invoice", "name": _NAME}
+		assert ack["ack"]["reason"]["category"] == "validation"
+		assert ack["ack"]["reason"]["message"].startswith("representation:")
+		assert ack["ack"]["resolutionVersion"] == 2
+		assert len(store.writes) == 1  # the Posting Log keeps the document
+		assert "cancel" not in fake.events and "rollback" not in fake.events  # never undone (684)
+
+	def test_an_unversioned_mismatch_still_acks_reconciliation_required(self, load_glue):
+		fake = _Frappe(on_submit=_reprice)
+		outcome, client, _store = _post(load_glue(fake), _work_item(version=None))
+		assert outcome == "reconciliation_required"
+		assert client.acks[0]["key"] == f"{_REF}:reconciliation_required"
+		assert "resolutionVersion" not in client.acks[0]["ack"]
+
+	def test_an_unreadable_invoice_acks_failed_transient(self, load_glue):
+		fake = _Frappe(unreadable=True)
+		outcome, client, store = _post(load_glue(fake))
+		assert outcome == "failed_transient"
+		assert client.acks[0]["ack"] == {"outcome": "failed_transient", "resolutionVersion": 2}
+		assert len(store.writes) == 1  # a re-offer goes through the replay guard and verifies again

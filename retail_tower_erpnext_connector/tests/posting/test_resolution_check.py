@@ -9,6 +9,10 @@ submitted) means ``reconciliation_required``; ``None`` means the document matche
 """
 
 from retail_tower_erpnext_connector.connector.posting import contracts as c
+from retail_tower_erpnext_connector.connector.posting.representation_check import (
+	expected_from_payload,
+	persisted_from_doc,
+)
 from retail_tower_erpnext_connector.connector.posting.resolution_check import (
 	InvoiceLine,
 	InvoiceSnapshot,
@@ -251,3 +255,73 @@ class TestRefundIsHeldToTheFrozenWarehouse:
 
 	def test_a_refund_on_the_frozen_warehouse_matches(self):
 		assert check_existing(_refund(), _invoice(("ITEM-A", "WH-F", _A), ("ITEM-B", "WH-F", _B))) is None
+
+
+def _expected(rate="10.00"):
+	"""RT-378: the representation a replay rebuilds from the work item (both sale lines)."""
+	line = {"qty": "1", "uom": "Nos", "rate": rate, "price_list_rate": rate, "amount": "10.00", "warehouse": "WH-F"}
+	payload = {
+		"currency": "EGP",
+		"customer": "Walk-in",
+		"items": [{"item_code": "ITEM-A", **line}, {"item_code": "ITEM-B", **line}],
+	}
+	return expected_from_payload(payload, company="RT Co", exempt=frozenset({"warehouse"}))
+
+
+def _persisted(rate=10.0):
+	row = {
+		"qty": 1.0,
+		"uom": "Nos",
+		"rate": rate,
+		"amount": 10.0,
+		"warehouse": "WH-F",
+		"price_list_rate": rate,
+		"discount_percentage": 0.0,
+		"discount_amount": 0.0,
+		"margin_type": "",
+		"margin_rate_or_amount": 0.0,
+	}
+	return persisted_from_doc(
+		{
+			"currency": "EGP",
+			"customer": "Walk-in",
+			"company": "RT Co",
+			"grand_total": 20.0,
+			"taxes": [],
+			"items": [{"item_code": "ITEM-A", **row}, {"item_code": "ITEM-B", **row}],
+		}
+	)
+
+
+def _represented(representation):
+	return InvoiceSnapshot(
+		docstatus=1,
+		items=(InvoiceLine("ITEM-A", "WH-F", _A), InvoiceLine("ITEM-B", "WH-F", _B)),
+		representation=representation,
+	)
+
+
+class TestRepresentationOnReplay:
+	"""RT-378: a replay / recovery also checks the representation fields (RT-283 B.3)."""
+
+	def test_a_matching_representation_passes(self):
+		assert check_existing(_item(), _represented(_persisted()), expected=_expected()) is None
+
+	def test_a_repriced_existing_invoice_is_a_mismatch(self):
+		reason = check_existing(_item(), _represented(_persisted(rate=9.0)), expected=_expected())
+		assert reason is not None and reason.startswith("representation:")
+
+	def test_the_identity_checks_run_first(self):
+		snapshot = InvoiceSnapshot(
+			docstatus=2,
+			items=(InvoiceLine("ITEM-A", "WH-F", _A), InvoiceLine("ITEM-B", "WH-F", _B)),
+			representation=_persisted(rate=9.0),
+		)
+		assert "not submitted" in check_existing(_item(), snapshot, expected=_expected())
+
+	def test_without_an_expected_representation_only_the_identity_is_checked(self):
+		assert check_existing(_item(), _represented(_persisted(rate=9.0))) is None
+
+	def test_an_expected_representation_without_a_persisted_one_is_a_mismatch(self):
+		reason = check_existing(_item(), _represented(None), expected=_expected())
+		assert reason is not None and reason.startswith("representation:")

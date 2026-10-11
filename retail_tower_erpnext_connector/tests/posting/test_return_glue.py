@@ -61,10 +61,16 @@ class _Invoice:
 		paid = sum(Decimal(p["amount"]) for p in self.payload.get("payments") or [])
 		self.values = {"grand_total": float(grand), "paid_amount": float(paid), "change_amount": 0.0,
 			"write_off_amount": 0.0, "outstanding_amount": float(grand - paid)}
+		self.values.update(self._fake.after_insert)  # RT-378: what ERPNext computed differently
 		self._fake.events.append("insert")
 
 	def get(self, field):
-		return self.values.get(field)
+		# RT-378: ERPNext holds the payload as sent, on the site default company, plus computed totals.
+		return {**self.payload, "company": "RT Company", **self.values}.get(field)
+
+	def reload(self):
+		self._fake.events.append("reload")
+		self.values.update(self._fake.after_submit)  # RT-378: what submit persisted differently
 
 	def submit(self):
 		self._fake.events.append("submit")
@@ -73,7 +79,7 @@ class _Invoice:
 class _Frappe(types.ModuleType):
 	"""One original invoice: rows A (3 sold) and B (1 sold); ``line_refs=False`` models pre-RT-16."""
 
-	def __init__(self, *, line_refs=True):
+	def __init__(self, *, line_refs=True, after_insert=None, after_submit=None):
 		super().__init__("frappe")
 		self.ValidationError = type("ValidationError", (Exception,), {})
 		self.exceptions = types.SimpleNamespace(
@@ -82,6 +88,7 @@ class _Frappe(types.ModuleType):
 		self._logger = _Logger()
 		self.logger = lambda name=None: self._logger
 		self.events, self.payloads = [], []
+		self.after_insert, self.after_submit = after_insert or {}, after_submit or {}
 		self._rows = [
 			{"name": "row-a", "item_code": "ITEM-A", "qty": 3.0, "idx": 1, "warehouse": "Stores - A",
 				"rt_line_ref": _A if line_refs else None, "uom": "Box", "conversion_factor": 12.0},
@@ -90,6 +97,7 @@ class _Frappe(types.ModuleType):
 		]
 		self.db = types.SimpleNamespace(
 			get_value=self._get_value,
+			get_single_value=lambda doctype, field: "RT Company",  # RT-378 site default company
 			savepoint=lambda name: self.events.append("savepoint"),
 			rollback=lambda save_point=None: self.events.append("rollback"),
 		)
@@ -212,7 +220,7 @@ class TestReturnInGlue:
 		assert payload["items"][0]["conversion_factor"] == 12.0
 		assert payload["payments"] == [{"mode_of_payment": "Cash", "amount": "-100.00"}]
 		assert (payload["posting_date"], payload["posting_time"]) == ("2026-06-05", "09:30:00.000000")
-		assert fake.events == ["savepoint", "insert", "submit"] and len(store.writes) == 1
+		assert fake.events == ["savepoint", "insert", "submit", "reload"] and len(store.writes) == 1
 
 	def test_return_without_refund_tenders_is_rejected_before_building(self, load_glue):
 		fake = _Frappe()
@@ -239,3 +247,44 @@ class TestReturnInGlue:
 		assert outcome == "permanently_rejected" and client.acks[0]["reason"]["category"] == "validation"
 		assert "rt_line_ref" in client.acks[0]["reason"]["message"]
 		assert fake.payloads == []
+
+
+def _repriced_row():
+	"""The returned row as ERPNext would hold it after a Pricing Rule cut the rate 100 -> 90."""
+	return [{"item_code": "ITEM-A", "qty": -1.0, "uom": "Box", "rate": 90.0, "amount": -90.0,
+		"warehouse": "Stores - A", "price_list_rate": 100.0, "discount_amount": 10.0}]
+
+
+class TestReturnRepresentation:
+	"""RT-378: the reversal leg is verified like the sale (negative qty/amount, positive rate)."""
+
+	def test_an_honoured_return_is_read_back_and_posted(self, load_glue):
+		fake = _Frappe()
+		outcome, _client, _store = _post(load_glue(fake), _return())
+		assert outcome == "posted" and "reload" in fake.events
+
+	def test_a_tax_row_after_insert_rolls_back_and_rejects_as_validation(self, load_glue):
+		fake = _Frappe(after_insert={"taxes": [{"charge_type": "On Net Total", "tax_amount": -14.0}]})
+		outcome, client, store = _post(load_glue(fake), _return())
+		assert outcome == "permanently_rejected"
+		assert fake.events == ["savepoint", "insert", "rollback"]
+		assert client.acks[0]["reason"]["category"] == "validation"
+		assert client.acks[0]["reason"]["message"].startswith("representation:")
+		assert store.writes == []
+
+	def test_an_erp_derived_discount_after_insert_rolls_back(self, load_glue):
+		# Same rate and total, but ERPNext filled its own list price 110 and recorded a discount (D6).
+		row = [{"item_code": "ITEM-A", "qty": -1.0, "uom": "Box", "rate": 100.0, "amount": -100.0,
+			"warehouse": "Stores - A", "price_list_rate": 110.0, "discount_amount": 10.0}]
+		fake = _Frappe(after_insert={"items": row})
+		outcome, client, _store = _post(load_glue(fake), _return())
+		assert outcome == "permanently_rejected" and "submit" not in fake.events
+		assert "price_list_rate" in client.acks[0]["reason"]["message"]
+
+	def test_a_reprice_on_submit_acks_reconciliation_required(self, load_glue):
+		fake = _Frappe(after_submit={"items": _repriced_row(), "grand_total": -90.0})
+		outcome, client, store = _post(load_glue(fake), _return())
+		assert outcome == "reconciliation_required"
+		assert client.acks[0]["documentRef"] == {"doctype": "Sales Invoice", "name": "ACC-SINV-2026-00101"}
+		assert client.acks[0]["reason"]["message"].startswith("representation:")
+		assert len(store.writes) == 1 and "rollback" not in fake.events
