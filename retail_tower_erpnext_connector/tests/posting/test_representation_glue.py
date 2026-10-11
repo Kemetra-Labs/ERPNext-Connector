@@ -138,6 +138,8 @@ class _Frappe(types.ModuleType):
 
 	def _get_single_value(self, doctype, field):
 		assert (doctype, field) == ("Global Defaults", "default_company")
+		if isinstance(self.company, BaseException):
+			raise self.company
 		return self.company
 
 	def get_all(self, doctype, **kwargs):
@@ -317,6 +319,14 @@ class TestBeforeSubmit:
 		assert fake.payloads == [] and "insert" not in fake.events
 		assert client.acks[0]["ack"]["reason"]["category"] == "validation"
 		assert client.acks[0]["ack"]["reason"]["message"].startswith("representation:")
+
+	def test_a_transient_error_reading_the_default_company_is_retried(self, load_glue):
+		# Codex PR #66: a lock / timeout on the company read is retryable, never a terminal rejection.
+		fake = _Frappe(company=TimeoutError("Lock wait timeout exceeded"))
+		outcome, client, store = _post(load_glue(fake))
+		assert outcome == "failed_transient"
+		assert client.acks[0]["ack"] == {"outcome": "failed_transient", "resolutionVersion": 2}
+		assert "insert" not in fake.events and store.writes == []
 
 	def test_an_invoice_on_another_company_is_rejected(self, load_glue):
 		fake = _Frappe(on_insert=lambda doc: doc.update(company="Other Co"))

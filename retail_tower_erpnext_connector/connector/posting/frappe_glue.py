@@ -202,7 +202,8 @@ def _sale_company() -> str:
     """The company a Retail Tower SALE is posted on, set explicitly in the payload (RT-378 finding 2).
 
     One source of truth with the representation check. A blank site default fails closed
-    (:class:`RepresentationMismatch` → ``validation``, before anything is built or inserted).
+    (:class:`RepresentationMismatch` → ``validation``, before insert); a transient read error is
+    ``failed_transient`` (read inside the submit stage).
     A store→company map is a future extension.
     """
     company = _site_company()
@@ -415,7 +416,6 @@ _SALE_BUILD_VALIDATION_ERRORS = (
     UnmappedStore,
     UnmappedTender,
     TenderMismatch,
-    RepresentationMismatch,
 )
 
 
@@ -482,12 +482,10 @@ def post_work_item(
             customer_for=customers.for_store,
             posting_stamp=stamp,
             mode_of_payment_for=tenders.resolve,
-            company=_sale_company(),  # RT-378 finding 2: explicit, one source of truth with the check
         )
     except UnmappedUnit as exc:
         return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
     except _SALE_BUILD_VALIDATION_ERRORS as exc:
-        # RT-378: a blank site default company is RepresentationMismatch -> validation, before insert.
         # UnmappedStore (F-009): a store with no configured Customer fails closed → validation,
         # exactly like an unresolved warehouse — never fabricate a customer (Principle VI).
         # RT-78: an unmapped tender method (D5) or a tender total that differs from the lines
@@ -506,8 +504,10 @@ def post_work_item(
 
     # T031 — submit on ERPNext (interim SI-only; rider R1 — no Payment Entry here).
     try:
-        # RT-378: what ERPNext must persist (the payload carries its company explicitly).
-        expected = expected_from_payload(doc_payload)
+        # RT-378 finding 2: the explicit company (site default). Read here, so a transient DB error is
+        # failed_transient and a blank default is validation (RepresentationMismatch), before insert.
+        doc_payload = {**doc_payload, "company": _sale_company()}
+        expected = expected_from_payload(doc_payload)  # what ERPNext must persist
         sinv = _submit_atomically(doc_payload, expected)
         document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
     except _transient_exceptions() as exc:
