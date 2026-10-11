@@ -54,13 +54,10 @@ def run_posting_poll() -> None:
         )
         return
 
-    try:
-        client, post_valid = _build_posting_path()
-    except Exception as exc:  # config/auth not ready — log and skip this tick (no partial work).
-        frappe.logger(_LOGGER).warning(
-            {"event": "posting.poll.skipped", "reason": _safe(str(exc))}
-        )
+    path = _ready_posting_path()
+    if path is None:
         return
+    client, post_valid = path
 
     ack_client = client  # the same 012 client acks invalid items (re-P2b)
     since: str | None = _load_cursor()
@@ -82,13 +79,38 @@ def run_posting_poll() -> None:
             break  # caught up — no more pending pages
 
 
+def _ready_posting_path():
+    """The bound posting path, or ``None`` when this tick must not pull (nothing is lost either way).
+
+    ``None`` when the configuration is not ready (``posting.poll.skipped``) or when the RT-379
+    Compatibility Profile finds the site incompatible. The profile runs AFTER the G5 guard (composed,
+    never a replacement) and before any page is pulled: a critical finding pauses posting and the
+    backlog stays in Backend-Core (D2); warnings are recorded and posting continues.
+    """
+    try:
+        client, post_valid, preflight = _build_posting_path()
+    except Exception as exc:  # config/auth not ready — log and skip this tick (no partial work).
+        frappe.logger(_LOGGER).warning(
+            {"event": "posting.poll.skipped", "reason": _safe(str(exc))}
+        )
+        return None
+    try:
+        ready = preflight()
+    except Exception as exc:  # RT-379: a profile error never lets the tick pull.
+        frappe.logger(_LOGGER).error({"event": "compatibility.failed", "detail": _safe(str(exc))})
+        return None
+    return (client, post_valid) if ready else None
+
+
 def _build_posting_path():
-    """Construct the 012 client + a bound ``post_valid(work_item)`` callable.
+    """Construct the 012 client, a bound ``post_valid(work_item)`` callable and the RT-379 preflight.
 
     Wires: the spec-003-authed PostingFeedClient, the Frappe-backed idempotency store, the signed
     UOM map, and the pre-resolved warehouse map — then binds frappe_glue.post_work_item to them.
+    ``preflight()`` runs the Compatibility Profile against the SAME parsed maps (no second read).
     Finalised at bench time (reads Connector Settings + signed decisions).
     """
+    from . import compatibility_glue
     from .config import require_configured_maps
     from .frappe_glue import post_work_item  # local import: glue imports frappe-only symbols
     from .tender import TenderModeMap
@@ -137,7 +159,12 @@ def _build_posting_path():
             correlation_id=correlation_id,
         )
 
-    return client, post_valid
+    maps = {"uom": uom, "warehouse": warehouse, "customer": customer, "tender": tender_modes}
+
+    def preflight() -> bool:
+        return compatibility_glue.run_preflight(settings, maps)
+
+    return client, post_valid, preflight
 
 
 # --- Connector Settings wiring ---------------------------------------------------------------

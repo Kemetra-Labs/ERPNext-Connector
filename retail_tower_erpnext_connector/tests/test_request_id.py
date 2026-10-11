@@ -195,6 +195,9 @@ def _posting_tick(monkeypatch):
 		}
 	)
 	monkeypatch.setattr(guard, "evaluate", lambda _probe: guard.GuardResult(ok=True, missing=()))
+	# RT-379: a compatible site (the profile itself is covered by test_compatibility_*).
+	profile = importlib.import_module("retail_tower_erpnext_connector.connector.posting.compatibility_glue")
+	monkeypatch.setattr(profile, "run_preflight", lambda _settings, _maps: True)
 	monkeypatch.setattr(poller, "_build_http_transport", lambda _settings: transport)
 	monkeypatch.setattr(poller, "_warn_credential_lifecycle", lambda _settings: None)
 	monkeypatch.setattr(poller, "_load_uom_map", lambda _s: {"each": "Nos"})

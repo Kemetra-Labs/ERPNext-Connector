@@ -18,7 +18,13 @@
   "uom_map",
   "warehouse_map",
   "store_customer_map",
-  "tender_mode_map"
+  "tender_mode_map",
+  "compatibility_section",
+  "posting_currency",
+  "compatibility_status",
+  "compatibility_checked_at",
+  "compatibility_fingerprint",
+  "compatibility_report"
  ],
  "fields": [
   {
@@ -106,11 +112,50 @@
    "options": "RT Tender Mode Map Row",
    "label": "Tender → Mode of Payment Map",
    "description": "RT-78 / RT-10 D5: maps each POS tender method to an ERPNext Mode of Payment (with a company account). A sale carrying tenders posts as a paid Sales Invoice; an unmapped method fails closed → validation. May stay empty while sales are tender-unknown (they post unpaid, as before)."
+  },
+  {
+   "fieldname": "compatibility_section",
+   "fieldtype": "Section Break",
+   "label": "Compatibility Profile (RT-379)"
+  },
+  {
+   "fieldname": "posting_currency",
+   "fieldtype": "Link",
+   "options": "Currency",
+   "label": "Posting Currency",
+   "description": "RT-379: the currency Retail Tower sales post in (ISO 4217). The poller checks it against the company currency and the ERPNext currency precision before every tick; blank pauses posting (critical, the backlog stays in Backend-Core)."
+  },
+  {
+   "fieldname": "compatibility_status",
+   "fieldtype": "Data",
+   "label": "Compatibility Status",
+   "read_only": 1,
+   "description": "RT-379 (read-only, written by the poller): OK, WARNING (posting continues) or CRITICAL (posting paused). It reflects the last profile run: a tick skipped earlier (the G5 index guard, or a missing token / URL / maps) leaves it unchanged, and Compatibility Checked At (checked_at) shows its age."
+  },
+  {
+   "fieldname": "compatibility_checked_at",
+   "fieldtype": "Datetime",
+   "label": "Compatibility Checked At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "compatibility_fingerprint",
+   "fieldtype": "Data",
+   "label": "Compatibility Fingerprint",
+   "read_only": 1,
+   "description": "RT-379: sha256 of the ERPNext/Frappe versions and checked settings. A change is logged as compatibility.drift."
+  },
+  {
+   "fieldname": "compatibility_report",
+   "fieldtype": "Small Text",
+   "label": "Compatibility Report",
+   "read_only": 1,
+   "description": "RT-379: the latest findings, one per line. The connector never changes ERP settings to pass (Pricing 668)."
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-09-29 00:00:00.000000",
+ "modified": "2026-10-11 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Connector",
  "name": "Connector Settings",
