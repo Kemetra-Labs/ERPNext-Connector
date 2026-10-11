@@ -15,7 +15,10 @@ Backend-Core RT-332) before acking ``posted``:
   subset of them;
 * items without ``rt_line_ref`` (documents from before line stamping) are compared by item code as a
   multiset against the required lines no stamped item covered plus the sale lines that carry no
-  ``lineRef`` (a return requires only the lines it names).
+  ``lineRef`` (a return requires only the lines it names);
+* RT-378 (RT-283 B.3): when the glue passes the ``expected`` representation it rebuilt from the work
+  item, the document must also hold exactly the commercial fields Retail Tower sent
+  (:mod:`representation_check`). The identity checks above run first.
 
 ``check_existing`` returns ``None`` when the document matches, otherwise a short human-readable reason
 (no credentials, no ERPNext internals) for the ``reconciliation_required`` ack. Reading the invoice is
@@ -28,6 +31,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from .contracts import PostingWorkItem
+from .representation_check import PREFIX, ExpectedInvoice, PersistedInvoice, check_representation
 
 # Reversal kinds whose rows are re-pointed at the original invoice's rows (and warehouses).
 _LINKED_REVERSALS = frozenset({"void", "return"})
@@ -48,13 +52,37 @@ class InvoiceSnapshot:
 
 	docstatus: int
 	items: tuple[InvoiceLine, ...]
+	# RT-378: the commercial representation ERPNext holds (``None`` when it was not read).
+	representation: PersistedInvoice | None = None
 
 
-def check_existing(work_item: PostingWorkItem, invoice: InvoiceSnapshot) -> str | None:
-	"""``None`` when ``invoice`` matches the work item's frozen resolution, else the mismatch reason."""
+def check_existing(
+	work_item: PostingWorkItem, invoice: InvoiceSnapshot, *, expected: ExpectedInvoice | None = None
+) -> str | None:
+	"""``None`` when ``invoice`` matches the work item's frozen resolution, else the mismatch reason.
+
+	With ``expected`` (RT-378) the document must also hold exactly that representation.
+	"""
 	if invoice.docstatus != 1:
 		return f"existing document is not submitted (docstatus {invoice.docstatus})"
-	return _warehouse_mismatch(work_item, invoice) or _item_mismatch(work_item, invoice)
+	return (
+		_warehouse_mismatch(work_item, invoice)
+		or _item_mismatch(work_item, invoice)
+		or _representation_mismatch(invoice, expected)
+	)
+
+
+def _representation_mismatch(invoice: InvoiceSnapshot, expected: ExpectedInvoice | None) -> str | None:
+	return None if expected is None else check_replayed_representation(invoice, expected)
+
+
+def check_replayed_representation(invoice: InvoiceSnapshot, expected: ExpectedInvoice) -> str | None:
+	"""RT-378: the representation of an EXISTING invoice alone (an unversioned replay has no frozen
+	resolution, so the identity checks above are skipped for it). An invoice posted before RT-377
+	(``ignore_pricing_rule`` 0) is held to the reduced field set (``legacy_allowed``)."""
+	if invoice.representation is None:
+		return f"{PREFIX} the existing document's representation was not read"
+	return check_representation(expected, invoice.representation, legacy_allowed=True)
 
 
 def _warehouse_mismatch(work_item: PostingWorkItem, invoice: InvoiceSnapshot) -> str | None:

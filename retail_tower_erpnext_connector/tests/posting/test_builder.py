@@ -565,3 +565,18 @@ class TestRepricingProtection:
             ("100.00", "100.00"),
             ("11.25", "11.25"),
         ]
+
+
+class TestExplicitCompany:
+    """RT-378 review finding 2: the company is set explicitly from the site default (one source of
+    truth with the representation check), never left to ERPNext's user-scoped default."""
+
+    def test_sets_the_given_company(self):
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer, company="RT Co"
+        )
+        assert doc["company"] == "RT Co"
+
+    def test_without_a_company_the_document_carries_none(self):
+        doc = b.build_sales_invoice(_work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer)
+        assert "company" not in doc

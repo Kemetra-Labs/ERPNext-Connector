@@ -240,6 +240,18 @@ def link_return_to_original(
 	return out
 
 
+def mirror_company(doc: Mapping[str, object], original_company: str | None) -> dict:
+	"""Return a copy of the credit note ``doc`` on the ORIGINAL invoice's company (RT-378 finding 2).
+
+	Applied after :func:`link_void_to_original` / :func:`link_return_to_original`: a void or return
+	lands where the sale did, never on the site default (which may have changed since the sale). An
+	original without a company fails closed (:class:`ReturnLineMismatch` → ``validation``).
+	"""
+	if not original_company:
+		raise ReturnLineMismatch("the original invoice carries no company — the credit note's company is unknown")
+	return {**doc, "company": original_company}
+
+
 def _row_for_line_ref(pos: int, line: Mapping[str, object], rows: Sequence[Mapping[str, object]]):
 	"""The single original row carrying ``line``'s ``rt_line_ref``; fail closed otherwise."""
 	ref = line.get("rt_line_ref")

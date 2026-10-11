@@ -72,7 +72,11 @@ class _Invoice:
 		self._fake.events.append("insert")
 
 	def get(self, field):
-		return self.values.get(field)
+		# RT-378: ERPNext holds the payload as sent, on the site default company, plus computed totals.
+		return {"company": "RT Company", **self.payload, **self.values}.get(field)
+
+	def reload(self):
+		pass  # RT-378 read-back after submit: the database holds what insert computed
 
 	def submit(self):
 		self._fake.events.append("submit")
@@ -94,6 +98,7 @@ class _Frappe(types.ModuleType):
 		self.originals = dict(originals or {})
 		self.db = types.SimpleNamespace(
 			get_value=self._get_value,
+			get_single_value=lambda doctype, field: "RT Company",  # RT-378 site default company
 			savepoint=lambda name: self.events.append("savepoint"),
 			rollback=lambda save_point=None: self.events.append("rollback"),
 		)
@@ -107,7 +112,10 @@ class _Frappe(types.ModuleType):
 		assert filters == _ORIGINAL
 		if fields == ["posting_date", "posting_time"]:
 			return {"posting_date": datetime.date(2026, 6, 1), "posting_time": datetime.timedelta(hours=10)}
-		return {"update_stock": 1, "disable_rounded_total": 1, "is_pos": 0, "customer": "Original Customer"}
+		if fields == "company":
+			return "Original Co"  # RT-378: a reversal replay is held to the original's company
+		return {"update_stock": 1, "disable_rounded_total": 1, "is_pos": 0, "customer": "Original Customer",
+			"company": "Original Co"}
 
 	def get_all(self, doctype, **kwargs):
 		if doctype == "Sales Invoice Item":

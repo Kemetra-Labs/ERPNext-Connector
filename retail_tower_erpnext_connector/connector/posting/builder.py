@@ -64,6 +64,7 @@ def build_sales_invoice(
     customer_for: Callable[[str], str],
     posting_stamp: PostingStamp | None = None,
     mode_of_payment_for: Callable[[str], str] | None = None,
+    company: str | None = None,
 ) -> dict:
     """Build the ERPNext Sales-Invoice payload for one ``sale_post`` work-item.
 
@@ -78,6 +79,8 @@ def build_sales_invoice(
     ``mode_of_payment_for(method) -> Mode of Payment`` resolves the RT-10 D5 tender map (raises
     :class:`tender.UnmappedTender` on a miss). It is only consulted when the sale carries tenders;
     a tender-bearing sale without it fails closed rather than posting unpaid.
+    ``company`` (RT-378) is set explicitly: the glue passes the site default, the value the
+    representation check expects. Without one the document carries no ``company`` key.
     """
     sale = work_item.sale
     warehouse = warehouse_for(sale.store_id)
@@ -106,9 +109,8 @@ def build_sales_invoice(
 
     # F-009 CLOSED: the customer is resolved from the operator-configured store→Customer map
     # (above), never fabricated. The 012 work-item carries no customer; the operator owns the
-    # mapping, identical to the UOM and warehouse maps. `company` is left to ERPNext's default
-    # company (single-company sites); a multi-company store→company mapping is a future extension
-    # if needed — but the customer is the field that actually blocks submit on a configured bench.
+    # mapping, identical to the UOM and warehouse maps. `company` is the explicit site default the
+    # glue passes (RT-378); a multi-company store→company mapping is a future extension if needed.
     doc = {
         "doctype": "Sales Invoice",
         "customer": customer,
@@ -125,6 +127,7 @@ def build_sales_invoice(
         # RT-377 / Pricing 657: ERPNext Pricing Rules must not alter a finalized Retail Tower sale.
         "ignore_pricing_rule": 1,
         "items": items,
+        **({"company": company} if company else {}),  # RT-378: explicit, never ERPNext's user default
     }
 
     # RT-78 / RT-10 D3(b): a tender-bearing sale is settled on this invoice (no Payment Entry).

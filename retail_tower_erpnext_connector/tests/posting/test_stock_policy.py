@@ -334,3 +334,18 @@ class TestReturnLinkage:
 	def test_rejects_a_non_return_document(self):
 		with pytest.raises(ValueError):
 			_link_return({**_return_doc((_A, "ITEM-A", "-1")), "is_return": 0})
+
+
+class TestCompanyMirrorsTheOriginal:
+	"""RT-378 finding 2: a credit note must land on the ORIGINAL invoice's company, not the site default."""
+
+	def test_a_credit_note_takes_the_original_company(self):
+		doc = {**_return_doc((_A, "ITEM-A", "-1")), "company": "Site Default Co"}
+		out = sp.mirror_company(doc, "Original Co")
+		assert out["company"] == "Original Co"
+		assert doc["company"] == "Site Default Co"  # a copy: the input is not mutated
+
+	@pytest.mark.parametrize("company", [None, ""])
+	def test_an_original_without_a_company_fails_closed(self, company):
+		with pytest.raises(sp.ReturnLineMismatch, match="company"):
+			sp.mirror_company(_return_doc((_A, "ITEM-A", "-1")), company)

@@ -73,7 +73,11 @@ class _Invoice:
 		self._fake.events.append("insert")
 
 	def get(self, field):
-		return self.values.get(field)
+		# RT-378: ERPNext holds the payload as sent, on the site default company, plus computed totals.
+		return {"company": "RT Company", **self.payload, **self.values}.get(field)
+
+	def reload(self):
+		pass  # RT-378 read-back after submit: the database holds what insert computed
 
 	def submit(self):
 		self._fake.events.append("submit")
@@ -92,6 +96,7 @@ class _Frappe(types.ModuleType):
 		self.drift = drift or {}
 		self.db = types.SimpleNamespace(
 			get_value=lambda *a, **k: None,
+			get_single_value=lambda doctype, field: "RT Company",  # RT-378 site default company
 			savepoint=lambda name: self.events.append("savepoint"),
 			rollback=lambda save_point=None: self.events.append("rollback"),
 		)

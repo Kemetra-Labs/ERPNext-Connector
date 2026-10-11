@@ -26,6 +26,7 @@ idempotency-store DocType is the deferred [GATED] T020). It RECEIVES an
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timezone
 
 import frappe
@@ -35,7 +36,15 @@ from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
 from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
-from .resolution_check import InvoiceLine, InvoiceSnapshot, check_existing
+from .representation_check import (
+    ExpectedInvoice,
+    RepresentationMismatch,
+    check_representation,
+    expected_from_payload,
+    persisted_from_doc,
+    replay_exemptions,
+)
+from .resolution_check import InvoiceLine, InvoiceSnapshot, check_existing, check_replayed_representation
 from .return_builder import (
     MissingRefundTenders,
     ReturnPricingMismatch,
@@ -51,6 +60,7 @@ from .stock_policy import (
     assert_no_tracked_items,
     link_return_to_original,
     link_void_to_original,
+    mirror_company,
     tracking_item_codes,
 )
 from .tender import (
@@ -143,21 +153,154 @@ def _warehouse_for(work_item: PostingWorkItem, warehouses: PreResolvedWarehouse)
     return lambda _store_id: dict(frozen)
 
 
+class _NotCompared:
+    """A unit / customer / tender map stand-in for a replay rebuild (RT-378): what it feeds is never
+    compared there.
+
+    Payments are not part of the representation check; UOM and customer are exempt on replay
+    (``replay_exemptions``: the frozen resolution carries neither). So a replay needs no current map,
+    and a map changed since the sale cannot turn a matching replay into a failure. It echoes its input
+    (a string) so the pure builders still run.
+    """
+
+    @staticmethod
+    def resolve(value: str) -> str:
+        return value
+
+    @staticmethod
+    def for_store(value: str) -> str:
+        return value
+
+
+class _WarehouseNotCompared:
+    """The warehouse map stand-in for a replay rebuild: the warehouse is exempt (RT-331 owns it), but
+    the builders need a ``{doctype, name}`` identity."""
+
+    @staticmethod
+    def for_store(value: str) -> dict:
+        return {"doctype": "Warehouse", "name": value}
+
+
+class SiteCompanyNotConfigured(Exception):
+    """Global Defaults has no ``default_company``: a sale cannot be posted on an explicit company.
+
+    A plain configuration rejection (``validation``) before insert: nothing was persisted, so it is
+    not a D1 representation mismatch.
+    """
+
+
 def _invoice_snapshot(document_ref: ErpnextDocumentRef) -> InvoiceSnapshot:
-    """⏳ BENCH-VALIDATION. Read back the parts of an existing Sales Invoice the frozen resolution checks."""
-    docstatus = frappe.db.get_value("Sales Invoice", document_ref.name, "docstatus")
-    rows = frappe.get_all(
-        "Sales Invoice Item",
-        filters={"parent": document_ref.name},
-        fields=["item_code", "warehouse", "rt_line_ref"],
-    )
+    """⏳ BENCH-VALIDATION. Read an existing Sales Invoice back from the database (RT-331 + RT-378).
+
+    A document that no longer exists reads as not submitted (docstatus 0), as the RT-331 read did,
+    so it acks ``reconciliation_required`` rather than being re-offered forever.
+    """
+    missing = getattr(frappe, "DoesNotExistError", None)
+    try:
+        doc = frappe.get_doc("Sales Invoice", document_ref.name)
+    except Exception as exc:
+        if missing is not None and isinstance(exc, missing):
+            return InvoiceSnapshot(docstatus=0, items=())
+        raise
     return InvoiceSnapshot(
-        docstatus=int(docstatus or 0),
+        docstatus=int(doc.get("docstatus") or 0),
         items=tuple(
-            InvoiceLine(item_code=r["item_code"], warehouse=r.get("warehouse"), line_ref=r.get("rt_line_ref"))
-            for r in rows
+            InvoiceLine(item_code=r.get("item_code"), warehouse=r.get("warehouse"), line_ref=r.get("rt_line_ref"))
+            for r in doc.get("items") or ()
         ),
+        representation=persisted_from_doc(doc),
     )
+
+
+def _site_company() -> str | None:
+    """⏳ BENCH-VALIDATION. The site default company (Global Defaults ``default_company``)."""
+    return frappe.db.get_single_value("Global Defaults", "default_company")
+
+
+def _sale_company() -> str:
+    """The company a Retail Tower SALE is posted on, set explicitly in the payload (RT-378 finding 2).
+
+    One source of truth with the representation check. A blank site default fails closed
+    (:class:`SiteCompanyNotConfigured` → ``validation``, before insert); a transient read error is
+    ``failed_transient`` (read inside the submit stage).
+    A store→company map is a future extension.
+    """
+    company = _site_company()
+    if not company:
+        raise SiteCompanyNotConfigured(
+            "the site default company (Global Defaults default_company) is not configured — rejected as "
+            "validation before insert (RT-378: every sale is posted on an explicit company)"
+        )
+    return company
+
+
+def _replay_company(work_item: PostingWorkItem) -> str | None:
+    """⏳ BENCH-VALIDATION. The company an EXISTING credit note must be on: its original invoice's
+    (``None`` when unknown: the replay cannot be verified). A sale's company is exempt on replay
+    (``replay_exemptions``): today's site default is not a frozen value."""
+    if work_item.kind != "reversal":
+        return None
+    original = _resolve_original_invoice(work_item)
+    return frappe.db.get_value("Sales Invoice", original, "company") if original else None
+
+
+def _replay_expected(work_item: PostingWorkItem, company: str | None) -> ExpectedInvoice:
+    """Rebuild the payload with the pure builders and take its representation (RT-378, B.3).
+
+    No current map is consulted (:class:`_NotCompared`): every field it would feed is exempt. The
+    sale's tenders are dropped too: payments are never compared, and a sale posted before RT-78 may
+    carry tenders that do not sum to its lines (``TenderMismatch`` would make it unverifiable). A
+    return keeps its refund tenders, which its builder requires.
+    """
+    work_item = dataclasses.replace(work_item, sale=dataclasses.replace(work_item.sale, tenders=()))
+    if work_item.kind == "reversal":
+        stand_in = _NotCompared()
+        payload = _build_reversal(
+            work_item,
+            None,
+            uom_map=stand_in,
+            warehouses=_WarehouseNotCompared(),
+            customers=stand_in,
+            tenders=stand_in,
+        )
+        payload = {**payload, "company": company}
+    else:
+        payload = build_sales_invoice(
+            work_item,
+            uom_for=_NotCompared.resolve,
+            warehouse_for=_WarehouseNotCompared.for_store,
+            customer_for=_NotCompared.for_store,
+            mode_of_payment_for=_NotCompared.resolve,
+            company=company,
+        )
+    return expected_from_payload(payload, exempt=replay_exemptions(work_item))
+
+
+class _CannotVerify(Exception):
+    """The existing invoice cannot be verified now: unreadable, or its expected representation cannot
+    be rebuilt (e.g. no company known). Not a mismatch: retried (RT-378 review finding 1)."""
+
+
+def _existing_mismatch(work_item: PostingWorkItem, document_ref: ErpnextDocumentRef) -> str | None:
+    """RT-331 identity first (versioned work items only), then the RT-378 representation.
+
+    Returns the mismatch reason, or ``None`` when the document matches. Raises :class:`_CannotVerify`
+    when the invoice cannot be read or the expected representation cannot be rebuilt.
+    """
+    try:
+        snapshot = _invoice_snapshot(document_ref)
+        company = _replay_company(work_item)
+    except Exception as exc:
+        raise _CannotVerify(str(exc)) from exc
+    if work_item.resolution_version is not None:
+        identity = check_existing(work_item, snapshot)
+        if identity is not None:
+            return identity
+    try:
+        expected = _replay_expected(work_item, company)
+    except Exception as exc:  # incl. RepresentationMismatch for an unknown company
+        raise _CannotVerify(f"expected representation cannot be rebuilt: {exc}") from exc
+    return check_replayed_representation(snapshot, expected)
 
 
 def _ack_existing(
@@ -173,47 +316,103 @@ def _ack_existing(
     sent a frozen resolution (``resolution_version``), the existing invoice is verified against it
     first: a mismatch (or an unsubmitted document) acks ``reconciliation_required`` with the existing
     ``documentRef`` — never a second document; an unreadable invoice acks ``failed_transient`` so
-    Backend-Core re-offers it — never a blind ``posted``. A work item without a frozen resolution
-    (older Backend-Core) echoes ``posted`` exactly as before.
+    Backend-Core re-offers it — never a blind ``posted``.
+    RT-378: every replay, versioned or not, is also held to the persisted representation (Item, qty,
+    rate, amount, list price, no discount or margin, currency, company, no tax row, grand total). An
+    unversioned work item (no frozen resolution) skips only the RT-331 identity checks. An invoice
+    posted before RT-377 (``ignore_pricing_rule`` 0) gets the reduced field set. When the expected
+    representation cannot be rebuilt, the document cannot be verified: ``failed_transient`` like an
+    unreadable invoice, so DP2's retry budget ends it as repairable. ``reconciliation_required`` is
+    only for a real mismatch.
     """
-    version = work_item.resolution_version
-    if version is not None:
-        try:
-            mismatch = check_existing(work_item, _invoice_snapshot(document_ref))
-        except Exception as exc:  # the read failed: retry later, never assume the document matches.
-            client.ack_outcome(
-                work_item.work_item_ref,
-                OutcomeAckRequest.failed_transient(resolution_version=work_item.resolution_version),
-                idempotency_key=_ack_key(work_item, "failed_transient"),
-            )
-            _log_signal("posting.verify.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
-            return "failed_transient"
-        if mismatch is not None:
-            client.ack_outcome(
-                work_item.work_item_ref,
-                OutcomeAckRequest.reconciliation_required(
-                    document_ref,
-                    # Bounded + scrubbed like every other reason (RT-48: 1..1000 chars).
-                    to_rejection_reason(FailureKind.VALIDATION, message=mismatch),
-                    resolution_version=version,
-                ),
-                idempotency_key=_ack_key(work_item, "reconciliation_required"),
-            )
-            _log_signal(
-                "posting.reconciliation_required",
-                work_item,
-                correlation_id,
-                document_ref=document_ref.name,
-                detail=mismatch,
-            )
-            return "reconciliation_required"
+    try:
+        mismatch = _existing_mismatch(work_item, document_ref)
+    except _CannotVerify as exc:  # retry later, never assume the document matches.
+        return _ack_verify_transient(client, work_item, correlation_id, exc)
+    if mismatch is not None:
+        return _ack_reconciliation(client, work_item, document_ref, correlation_id, mismatch)
+    return _ack_posted(client, work_item, document_ref, correlation_id, signal)
+
+
+def _ack_posted(
+    client: PostingFeedClient,
+    work_item: PostingWorkItem,
+    document_ref: ErpnextDocumentRef,
+    correlation_id: str,
+    signal: str,
+) -> str:
     client.ack_outcome(
         work_item.work_item_ref,
-        OutcomeAckRequest.posted(document_ref, resolution_version=version),
+        OutcomeAckRequest.posted(document_ref, resolution_version=work_item.resolution_version),
         idempotency_key=_ack_key(work_item, "posted"),
     )
     _log_signal(signal, work_item, correlation_id, document_ref=document_ref.name)
     return "posted"
+
+
+def _ack_verify_transient(
+    client: PostingFeedClient, work_item: PostingWorkItem, correlation_id: str, exc: BaseException
+) -> str:
+    """The invoice could not be read back: ``failed_transient`` so Backend-Core re-offers it."""
+    client.ack_outcome(
+        work_item.work_item_ref,
+        OutcomeAckRequest.failed_transient(resolution_version=work_item.resolution_version),
+        idempotency_key=_ack_key(work_item, "failed_transient"),
+    )
+    _log_signal("posting.verify.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
+    return "failed_transient"
+
+
+def _ack_reconciliation(
+    client: PostingFeedClient,
+    work_item: PostingWorkItem,
+    document_ref: ErpnextDocumentRef,
+    correlation_id: str,
+    mismatch: str,
+) -> str:
+    """An ERP document exists but does not match: ``reconciliation_required``, never cancelled or amended."""
+    client.ack_outcome(
+        work_item.work_item_ref,
+        OutcomeAckRequest.reconciliation_required(
+            document_ref,
+            # Bounded + scrubbed like every other reason (RT-48: 1..1000 chars).
+            to_rejection_reason(FailureKind.VALIDATION, message=mismatch),
+            resolution_version=work_item.resolution_version,
+        ),
+        idempotency_key=_ack_key(work_item, "reconciliation_required"),
+    )
+    _log_signal(
+        "posting.reconciliation_required",
+        work_item,
+        correlation_id,
+        document_ref=document_ref.name,
+        detail=scrub_message(mismatch),  # a rebuild failure embeds exception text (Gate G4)
+    )
+    return "reconciliation_required"
+
+
+def _ack_submitted(
+    client: PostingFeedClient,
+    work_item: PostingWorkItem,
+    sinv,
+    expected: ExpectedInvoice,
+    correlation_id: str,
+) -> str:
+    """RT-378 after submit: read the invoice back from the database before acking ``posted``.
+
+    ⏳ BENCH-VALIDATION. ERPNext validates again on submit (RT-376 saw a Pricing Rule reprice there),
+    so the in-memory check after insert is not proof. A mismatch acks ``reconciliation_required`` and
+    the document stays as ERPNext holds it (684). An unreadable invoice acks ``failed_transient``.
+    """
+    document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
+    try:
+        sinv.reload()
+        mismatch = check_representation(expected, persisted_from_doc(sinv))
+    except Exception as exc:
+        return _ack_verify_transient(client, work_item, correlation_id, exc)
+    if mismatch is not None:
+        return _ack_reconciliation(client, work_item, document_ref, correlation_id, mismatch)
+    return _ack_posted(client, work_item, document_ref, correlation_id, "posting.posted")
 
 
 def _find_posted_invoice(work_item: PostingWorkItem) -> ErpnextDocumentRef | None:
@@ -239,6 +438,16 @@ def _find_posted_invoice(work_item: PostingWorkItem) -> ErpnextDocumentRef | Non
     if not name:
         return None
     return ErpnextDocumentRef(doctype="Sales Invoice", name=name)
+
+
+# Sale build errors that are a non-retryable ``validation`` rejection (never a guessed value).
+_SALE_BUILD_VALIDATION_ERRORS = (
+    MoneyConformanceError,
+    UnresolvedWarehouse,
+    UnmappedStore,
+    UnmappedTender,
+    TenderMismatch,
+)
 
 
 def post_work_item(
@@ -307,7 +516,7 @@ def post_work_item(
         )
     except UnmappedUnit as exc:
         return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
-    except (MoneyConformanceError, UnresolvedWarehouse, UnmappedStore, UnmappedTender, TenderMismatch) as exc:
+    except _SALE_BUILD_VALIDATION_ERRORS as exc:
         # UnmappedStore (F-009): a store with no configured Customer fails closed → validation,
         # exactly like an unresolved warehouse — never fabricate a customer (Principle VI).
         # RT-78: an unmapped tender method (D5) or a tender total that differs from the lines
@@ -326,7 +535,11 @@ def post_work_item(
 
     # T031 — submit on ERPNext (interim SI-only; rider R1 — no Payment Entry here).
     try:
-        sinv = _submit_atomically(doc_payload)
+        # RT-378 finding 2: the explicit company (site default). Read here, so a transient DB error is
+        # failed_transient and a blank default is validation (RepresentationMismatch), before insert.
+        doc_payload = {**doc_payload, "company": _sale_company()}
+        expected = expected_from_payload(doc_payload)  # what ERPNext must persist
+        sinv = _submit_atomically(doc_payload, expected)
         document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
     except _transient_exceptions() as exc:
         # T051 — transient (timeout/lock) → failed_transient; DP2 re-offers (no self-retry).
@@ -337,8 +550,10 @@ def post_work_item(
         )
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
         return "failed_transient"
-    except SettlementDrift as exc:
+    except (SettlementDrift, RepresentationMismatch, SiteCompanyNotConfigured) as exc:
         # RT-78 — ERPNext's computed totals left change/outstanding/write-off on a settled invoice.
+        # RT-378 / D1 — ERPNext holds a value Retail Tower did not send ("representation: ...");
+        # SiteCompanyNotConfigured is a plain config rejection (no default company), before insert.
         # _submit_atomically already rolled the insert back; nothing was submitted. Caught BEFORE the
         # dup-provenance clause, whose fallback catches Exception on a frappe missing those names.
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
@@ -384,14 +599,9 @@ def post_work_item(
         # EXISTING one, so it is verified against the frozen resolution like any other (RT-331).
         return _ack_existing(client, work_item, conflict.existing, correlation_id, "posting.conflict")
 
-    # T032 — ack posted + documentRef; the DP2 sale fact is never mutated.
-    client.ack_outcome(
-        work_item.work_item_ref,
-        OutcomeAckRequest.posted(document_ref, resolution_version=work_item.resolution_version),
-        idempotency_key=_ack_key(work_item, "posted"),
-    )
-    _log_signal("posting.posted", work_item, correlation_id, document_ref=document_ref.name)
-    return "posted"
+    # T032 — ack posted + documentRef once the persisted invoice is verified (RT-378); the DP2 sale
+    # fact is never mutated.
+    return _ack_submitted(client, work_item, sinv, expected, correlation_id)
 
 
 def _resolve_original_invoice(work_item: PostingWorkItem) -> str | None:
@@ -554,7 +764,8 @@ def _post_reversal(
     # recovered exactly like the forward path — and because the builder wrote the reversal's
     # work_item_ref into rt_external_id (#28 re-key), it does NOT collide with the original SI's slot.
     try:
-        sinv = _submit_atomically(doc_payload)
+        expected = expected_from_payload(doc_payload)  # RT-378: company = the original's (linked)
+        sinv = _submit_atomically(doc_payload, expected)
         document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
     except _transient_exceptions() as exc:
         client.ack_outcome(
@@ -564,8 +775,9 @@ def _post_reversal(
         )
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
         return "failed_transient"
-    except SettlementDrift as exc:
+    except (SettlementDrift, RepresentationMismatch) as exc:
         # RT-78 — ERPNext's computed totals left change/outstanding/write-off on a settled invoice.
+        # RT-378 / D1 — ERPNext holds a value Retail Tower did not send ("representation: ...").
         # _submit_atomically already rolled the insert back; nothing was submitted. Caught BEFORE the
         # dup-provenance clause, whose fallback catches Exception on a frappe missing those names.
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
@@ -593,13 +805,7 @@ def _post_reversal(
         # Same as the forward sale: the concurrently recorded document is verified first (RT-331).
         return _ack_existing(client, work_item, conflict.existing, correlation_id, "posting.conflict")
 
-    client.ack_outcome(
-        work_item.work_item_ref,
-        OutcomeAckRequest.posted(document_ref, resolution_version=work_item.resolution_version),
-        idempotency_key=_ack_key(work_item, "posted"),
-    )
-    _log_signal("posting.posted", work_item, correlation_id, document_ref=document_ref.name)
-    return "posted"
+    return _ack_submitted(client, work_item, sinv, expected, correlation_id)  # RT-378 read-back
 
 
 def _recover_or_reject_unsupported(
@@ -634,7 +840,7 @@ def _recover_or_reject_unsupported(
 _SUBMIT_SAVEPOINT = "rt_posting_submit"
 
 
-def _submit_atomically(doc_payload: dict):
+def _submit_atomically(doc_payload: dict, expected: ExpectedInvoice):
     """Insert + submit one Sales Invoice as a unit: on ANY failure, undo it before re-raising (RT-48).
 
     ⏳ BENCH-VALIDATION. A submit can fail PART-WAY. The RT-48 bench run proved it: a missing
@@ -643,11 +849,19 @@ def _submit_atomically(doc_payload: dict):
     ``permanently_rejected``. Stock and ERP truth would diverge from the DP2 outcome (Principle VI).
     Rolling back to a savepoint keeps "rejected" meaning "nothing posted", so the later ``re_post``
     repair starts clean. The caller's exception mapping is unchanged.
+
+    RT-378 (D1): after ``insert()`` the document ERPNext computed must hold exactly ``expected``;
+    otherwise :class:`RepresentationMismatch` rolls it back like any other failure.
     """
     frappe.db.savepoint(_SUBMIT_SAVEPOINT)
     try:
         sinv = frappe.get_doc(doc_payload)
         sinv.insert()
+        # RT-378 first: a repriced paid sale also fails to settle, and D1 requires the
+        # "representation:" reason for it, not the settlement one.
+        mismatch = check_representation(expected, persisted_from_doc(sinv))
+        if mismatch is not None:
+            raise RepresentationMismatch(mismatch)
         if doc_payload.get("payments"):
             # RT-78: verify ERPNext's computed totals settle the invoice exactly before submitting.
             assert_settled(
@@ -746,7 +960,7 @@ def _log_stamp_adjustments(stamp: PostingStamp, work_item: PostingWorkItem, corr
 
 def _build_reversal(
     work_item: PostingWorkItem,
-    stamp: PostingStamp,
+    stamp: PostingStamp | None,
     *,
     uom_map: UomMap,
     warehouses: PreResolvedWarehouse,
@@ -776,22 +990,27 @@ def _build_reversal(
 
 
 def _link_to_original(kind: str, doc_payload: dict, original: dict) -> dict:
-    """Mirror/link a void (whole sale) or a partial return (by rt_line_ref) onto its original invoice."""
+    """Mirror/link a void (whole sale) or a partial return (by rt_line_ref) onto its original invoice.
+
+    RT-378 finding 2: either way the credit note lands on the original invoice's company.
+    """
     if kind == "return":
-        return link_return_to_original(
+        linked = link_return_to_original(
             doc_payload,
             original_update_stock=original["update_stock"],
             original_items=original["items"],
             original_customer=original["customer"],
         )
-    return link_void_to_original(
-        doc_payload,
-        original_update_stock=original["update_stock"],
-        original_disable_rounded_total=original["disable_rounded_total"],
-        original_items=original["items"],
-        original_is_pos=original["is_pos"],
-        original_payments=original["payments"],
-    )
+    else:
+        linked = link_void_to_original(
+            doc_payload,
+            original_update_stock=original["update_stock"],
+            original_disable_rounded_total=original["disable_rounded_total"],
+            original_items=original["items"],
+            original_is_pos=original["is_pos"],
+            original_payments=original["payments"],
+        )
+    return mirror_company(linked, original["company"])
 
 
 def _read_original_invoice(name: str) -> dict:
@@ -806,7 +1025,10 @@ def _read_original_invoice(name: str) -> dict:
     ⏳ BENCH-VALIDATION.
     """
     flags = frappe.db.get_value(
-        "Sales Invoice", name, ["update_stock", "disable_rounded_total", "is_pos", "customer"], as_dict=True
+        "Sales Invoice",
+        name,
+        ["update_stock", "disable_rounded_total", "is_pos", "customer", "company"],
+        as_dict=True,
     ) or {}
     rows = frappe.get_all(
         "Sales Invoice Item",
@@ -825,6 +1047,7 @@ def _read_original_invoice(name: str) -> dict:
         "disable_rounded_total": int(flags.get("disable_rounded_total") or 0),
         "is_pos": int(flags.get("is_pos") or 0),
         "customer": flags.get("customer"),
+        "company": flags.get("company"),  # RT-378: the credit note lands on the original's company
         "items": [dict(row) for row in rows],
         "payments": [dict(row) for row in payments],
     }
