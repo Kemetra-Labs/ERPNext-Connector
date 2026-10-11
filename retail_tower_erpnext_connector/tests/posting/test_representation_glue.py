@@ -318,7 +318,9 @@ class TestBeforeSubmit:
 		assert outcome == "permanently_rejected"
 		assert fake.payloads == [] and "insert" not in fake.events
 		assert client.acks[0]["ack"]["reason"]["category"] == "validation"
-		assert client.acks[0]["ack"]["reason"]["message"].startswith("representation:")
+		# Nothing was persisted, so this is a plain config rejection, not a D1 representation mismatch.
+		message = client.acks[0]["ack"]["reason"]["message"]
+		assert not message.startswith("representation:") and "default_company" in message
 
 	def test_a_transient_error_reading_the_default_company_is_retried(self, load_glue):
 		# Codex PR #66: a lock / timeout on the company read is retryable, never a terminal rejection.

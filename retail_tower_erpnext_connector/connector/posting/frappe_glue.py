@@ -154,12 +154,13 @@ def _warehouse_for(work_item: PostingWorkItem, warehouses: PreResolvedWarehouse)
 
 
 class _NotCompared:
-    """A map stand-in for a replay rebuild (RT-378): the fields it feeds are never compared there.
+    """A unit / customer / tender map stand-in for a replay rebuild (RT-378): what it feeds is never
+    compared there.
 
-    Payments are not part of the representation check; warehouse, UOM and customer are exempt on
-    replay (``replay_exemptions``: RT-331 owns the warehouse, and the frozen resolution carries no UOM
-    or customer). So a replay needs no current map at all, and a map changed since the sale cannot
-    turn a matching replay into a failure. It echoes its input so the pure builders still run.
+    Payments are not part of the representation check; UOM and customer are exempt on replay
+    (``replay_exemptions``: the frozen resolution carries neither). So a replay needs no current map,
+    and a map changed since the sale cannot turn a matching replay into a failure. It echoes its input
+    (a string) so the pure builders still run.
     """
 
     @staticmethod
@@ -167,8 +168,25 @@ class _NotCompared:
         return value
 
     @staticmethod
+    def for_store(value: str) -> str:
+        return value
+
+
+class _WarehouseNotCompared:
+    """The warehouse map stand-in for a replay rebuild: the warehouse is exempt (RT-331 owns it), but
+    the builders need a ``{doctype, name}`` identity."""
+
+    @staticmethod
     def for_store(value: str) -> dict:
         return {"doctype": "Warehouse", "name": value}
+
+
+class SiteCompanyNotConfigured(Exception):
+    """Global Defaults has no ``default_company``: a sale cannot be posted on an explicit company.
+
+    A plain configuration rejection (``validation``) before insert: nothing was persisted, so it is
+    not a D1 representation mismatch.
+    """
 
 
 def _invoice_snapshot(document_ref: ErpnextDocumentRef) -> InvoiceSnapshot:
@@ -203,13 +221,16 @@ def _sale_company() -> str:
     """The company a Retail Tower SALE is posted on, set explicitly in the payload (RT-378 finding 2).
 
     One source of truth with the representation check. A blank site default fails closed
-    (:class:`RepresentationMismatch` → ``validation``, before insert); a transient read error is
+    (:class:`SiteCompanyNotConfigured` → ``validation``, before insert); a transient read error is
     ``failed_transient`` (read inside the submit stage).
     A store→company map is a future extension.
     """
     company = _site_company()
     if not company:
-        raise RepresentationMismatch("representation: the site default company (Global Defaults) is not configured")
+        raise SiteCompanyNotConfigured(
+            "the site default company (Global Defaults default_company) is not configured — rejected as "
+            "validation before insert (RT-378: every sale is posted on an explicit company)"
+        )
     return company
 
 
@@ -235,15 +256,20 @@ def _replay_expected(work_item: PostingWorkItem, company: str | None) -> Expecte
     if work_item.kind == "reversal":
         stand_in = _NotCompared()
         payload = _build_reversal(
-            work_item, None, uom_map=stand_in, warehouses=stand_in, customers=stand_in, tenders=stand_in
+            work_item,
+            None,
+            uom_map=stand_in,
+            warehouses=_WarehouseNotCompared(),
+            customers=stand_in,
+            tenders=stand_in,
         )
         payload = {**payload, "company": company}
     else:
         payload = build_sales_invoice(
             work_item,
             uom_for=_NotCompared.resolve,
-            warehouse_for=_NotCompared.for_store,
-            customer_for=_NotCompared.resolve,
+            warehouse_for=_WarehouseNotCompared.for_store,
+            customer_for=_NotCompared.for_store,
             mode_of_payment_for=_NotCompared.resolve,
             company=company,
         )
@@ -524,9 +550,10 @@ def post_work_item(
         )
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
         return "failed_transient"
-    except (SettlementDrift, RepresentationMismatch) as exc:
+    except (SettlementDrift, RepresentationMismatch, SiteCompanyNotConfigured) as exc:
         # RT-78 — ERPNext's computed totals left change/outstanding/write-off on a settled invoice.
-        # RT-378 / D1 — ERPNext holds a value Retail Tower did not send ("representation: ...").
+        # RT-378 / D1 — ERPNext holds a value Retail Tower did not send ("representation: ...");
+        # SiteCompanyNotConfigured is a plain config rejection (no default company), before insert.
         # _submit_atomically already rolled the insert back; nothing was submitted. Caught BEFORE the
         # dup-provenance clause, whose fallback catches Exception on a frappe missing those names.
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
