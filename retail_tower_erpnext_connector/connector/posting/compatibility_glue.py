@@ -25,6 +25,7 @@ Tax sources (D4), per ERPNext v15 source (``accounts_controller.set_taxes_and_ch
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping
 
 import frappe
@@ -48,7 +49,16 @@ def run_preflight(settings, maps: Mapping[str, Mapping]) -> bool:
 	try:
 		snapshot = read_snapshot(settings, maps)
 	except Exception as exc:  # an unreadable site must pause posting, never wave it through
-		_log({"event": "compatibility.unreadable", "detail": _safe(f"{type(exc).__name__}: {exc}")})
+		detail = _safe(f"{type(exc).__name__}: {exc}")
+		_log({"event": "compatibility.unreadable", "detail": detail})
+		# Best effort: show the pause on Connector Settings (Codex PR #67). The fingerprint is kept,
+		# so a recovery is compared with the last real evaluation.
+		_write(
+			{
+				"compatibility_status": "CRITICAL",
+				"compatibility_report": f"CRITICAL\ncritical: the site could not be read: {detail}",
+			}
+		)
 		return False
 	result = evaluate(snapshot)
 	event = drift_event(settings.get("compatibility_fingerprint"), result)
@@ -76,7 +86,7 @@ def read_snapshot(settings, maps: Mapping[str, Mapping]) -> SiteSnapshot:
 		currency_precision=_currency_precision(currency),
 		default_company=company,
 		company_currency=frappe.db.get_value("Company", company, "default_currency") if company else None,
-		mapped=_mapped_records(maps),
+		mapped=_mapped_records(maps, company),
 		tax_sources=_tax_sources(company),
 		validate_selling_price=_flag("Selling Settings", "validate_selling_price"),
 		selling_pricing_rules=int(frappe.db.count("Pricing Rule", {"selling": 1, "disable": 0}) or 0),
@@ -113,15 +123,31 @@ def _mapped_names(maps: Mapping[str, Mapping]) -> dict[str, set[str]]:
 	}
 
 
-def _mapped_records(maps: Mapping[str, Mapping]) -> tuple[MappedRecord, ...]:
-	records = []
-	for doctype, names in _mapped_names(maps).items():
-		flag = _FLAGS[doctype][0]
-		fields = [flag, "company"] if doctype == "Warehouse" else [flag]
-		for name in sorted(names):
-			row = frappe.db.get_value(doctype, name, fields, as_dict=True)
-			records.append(_record_for(doctype, name, row))
-	return tuple(records)
+def _mapped_records(maps: Mapping[str, Mapping], company: str | None) -> tuple[MappedRecord, ...]:
+	return tuple(
+		_read_record(doctype, name, company)
+		for doctype, names in _mapped_names(maps).items()
+		for name in sorted(names)
+	)
+
+
+def _read_record(doctype: str, name: str, company: str | None) -> MappedRecord:
+	flag = _FLAGS[doctype][0]
+	fields = [flag, "company"] if doctype == "Warehouse" else [flag]
+	record = _record_for(doctype, name, frappe.db.get_value(doctype, name, fields, as_dict=True))
+	if doctype == "Mode of Payment" and record.exists:
+		record = dataclasses.replace(record, has_company_account=_has_company_account(name, company))
+	return record
+
+
+def _has_company_account(mode_of_payment: str, company: str | None) -> bool:
+	"""ERPNext v15 ``get_bank_cash_account`` needs a default account for the company on the mode."""
+	accounts = frappe.get_all(
+		"Mode of Payment Account",
+		filters={"parent": mode_of_payment, "company": company},
+		pluck="default_account",
+	)
+	return any(accounts)
 
 
 def _record_for(doctype: str, name: str, row) -> MappedRecord:
@@ -199,14 +225,23 @@ def _pos_profiles(company: str) -> list[str]:
 
 def _record(result) -> None:
 	"""Write the read-only status fields (D3). A write failure is logged; the decision stands."""
-	values = {
-		"compatibility_status": result.status,
-		"compatibility_report": result.report(),
-		"compatibility_fingerprint": result.fingerprint,
-		"compatibility_checked_at": frappe.utils.now_datetime(),
-	}
+	_write(
+		{
+			"compatibility_status": result.status,
+			"compatibility_report": result.report(),
+			"compatibility_fingerprint": result.fingerprint,
+		}
+	)
+
+
+def _write(values: dict) -> None:
+	"""Write status fields (plus the check time) without bumping ``modified``; a failure is logged."""
 	try:
-		frappe.db.set_single_value(_SETTINGS, values, update_modified=False)
+		frappe.db.set_single_value(
+			_SETTINGS,
+			{**values, "compatibility_checked_at": frappe.utils.now_datetime()},
+			update_modified=False,
+		)
 	except Exception as exc:
 		_log({"event": "compatibility.record_failed", "detail": _safe(f"{type(exc).__name__}: {exc}")})
 

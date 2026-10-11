@@ -16,7 +16,9 @@ fingerprint. It is composed with the Gate G5 index guard (``index_guard``), neve
 * company currency other than the posting currency;
 * Global Defaults ``default_company`` missing (RT-378 posts every sale on it explicitly), or a mapped
   Warehouse belonging to another company (comment 11556);
-* a mapped UOM, Warehouse, Customer or Mode of Payment that is missing or disabled;
+* a mapped UOM, Warehouse, Customer or Mode of Payment that is missing or disabled, or a mapped Mode of
+  Payment without an account for ``default_company`` (ERPNext v15 ``get_bank_cash_account`` would
+  throw for every tender sale);
 * a tax source that would auto-apply a tax row to a Retail Tower invoice (D4).
 
 **Warnings** (recorded and logged; posting continues): Selling Settings ``validate_selling_price``
@@ -72,6 +74,8 @@ class MappedRecord:
 	exists: bool
 	disabled: bool
 	company: str | None = None
+	# Mode of Payment only: has a Mode of Payment Account for default_company (None = not applicable).
+	has_company_account: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -188,6 +192,8 @@ def _mapped_findings(snapshot: SiteSnapshot) -> list[str]:
 			findings.append(f"mapped {record.doctype} {record.name!r} does not exist")
 		elif record.disabled:
 			findings.append(f"mapped {record.doctype} {record.name!r} is disabled")
+		elif record.has_company_account is False:
+			findings.append(f"mapped {record.doctype} {record.name!r} has no account for the default company")
 	return findings
 
 
@@ -222,7 +228,10 @@ def fingerprint(snapshot: SiteSnapshot) -> str:
 		"currency_precision": snapshot.currency_precision,
 		"default_company": snapshot.default_company,
 		"company_currency": snapshot.company_currency,
-		"mapped": sorted([r.doctype, r.name, r.exists, r.disabled, r.company or ""] for r in snapshot.mapped),
+		"mapped": sorted(
+			[r.doctype, r.name, r.exists, r.disabled, r.company or "", str(r.has_company_account)]
+			for r in snapshot.mapped
+		),
 		"tax_sources": sorted(snapshot.tax_sources),
 		"validate_selling_price": snapshot.validate_selling_price,
 		"selling_pricing_rules": snapshot.selling_pricing_rules,

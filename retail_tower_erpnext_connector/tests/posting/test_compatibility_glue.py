@@ -62,6 +62,9 @@ def _site():
 			"Item Tax": [],
 			"Tax Rule": [],
 			"POS Profile": [],
+			"Mode of Payment Account": [
+				{"parent": "Cash", "company": "RT Co", "default_account": "Cash - RT"}
+			],
 		},
 		"pricing_rules": 0,
 		"precision": 2,
@@ -301,3 +304,30 @@ class TestRunPreflight:
 		fake.db.set_single_value = _fail
 		assert load_glue(fake).run_preflight(_Settings(), _MAPS) is True
 		assert "compatibility.record_failed" in _events(fake)
+
+
+class TestCodexFindings:
+	def test_a_mode_of_payment_without_an_account_for_the_company_is_read_as_such(self, load_glue):
+		site = _site()
+		site["lists"]["Mode of Payment Account"] = [
+			{"parent": "Cash", "company": "Other Co", "default_account": "Cash - OC"}
+		]
+		snapshot = load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS)
+		(mop,) = [r for r in snapshot.mapped if r.doctype == "Mode of Payment"]
+		assert mop.has_company_account is False
+
+	def test_a_mode_of_payment_with_an_account_for_the_company_is_read_as_such(self, load_glue):
+		snapshot = load_glue(_Frappe(_site())).read_snapshot(_Settings(), _MAPS)
+		(mop,) = [r for r in snapshot.mapped if r.doctype == "Mode of Payment"]
+		assert mop.has_company_account is True
+
+	def test_an_unreadable_site_records_a_critical_status_and_keeps_the_fingerprint(self, load_glue):
+		fake = _Frappe(_site(), unreadable=True)
+		assert load_glue(fake).run_preflight(_Settings(compatibility_fingerprint="f" * 64), _MAPS) is False
+		((doctype, values, update_modified),) = fake.writes
+		assert doctype == "Connector Settings" and update_modified is False
+		assert values["compatibility_status"] == "CRITICAL"
+		assert (
+			values["compatibility_report"].startswith("CRITICAL") and "read" in values["compatibility_report"]
+		)
+		assert "compatibility_fingerprint" not in values  # recovery is then compared with the last real check

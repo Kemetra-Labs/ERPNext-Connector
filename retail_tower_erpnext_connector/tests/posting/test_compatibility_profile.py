@@ -28,7 +28,7 @@ def _snapshot(**overrides):
 			cp.MappedRecord("UOM", "Nos", exists=True, disabled=False),
 			cp.MappedRecord("Warehouse", "Stores - RT", exists=True, disabled=False, company="RT Co"),
 			cp.MappedRecord("Customer", "Walk-in", exists=True, disabled=False),
-			cp.MappedRecord("Mode of Payment", "Cash", exists=True, disabled=False),
+			cp.MappedRecord("Mode of Payment", "Cash", exists=True, disabled=False, has_company_account=True),
 		),
 		tax_sources=(),
 		validate_selling_price=False,
@@ -206,3 +206,37 @@ class TestReport:
 		report = result.report()
 		assert report.splitlines()[0].startswith("CRITICAL")
 		assert all(line in report for line in (*result.critical, *result.warnings))
+
+
+class TestModeOfPaymentAccount:
+	"""Codex PR #67: ERPNext v15 get_bank_cash_account throws for a Mode of Payment without an account
+	for the company, so every tender sale would be rejected one by one. Pause instead (D2)."""
+
+	def test_a_mapped_mode_of_payment_without_a_company_account_is_critical(self):
+		mapped = (
+			cp.MappedRecord(
+				"Mode of Payment", "Card", exists=True, disabled=False, has_company_account=False
+			),
+		)
+		critical = _critical(mapped=mapped)
+		assert len(critical) == 1 and "Card" in critical[0] and "account" in critical[0]
+
+	def test_the_account_state_is_part_of_the_fingerprint(self):
+		snap = _snapshot()
+		without = dataclasses.replace(
+			snap,
+			mapped=(
+				cp.MappedRecord(
+					"Mode of Payment", "Cash", exists=True, disabled=False, has_company_account=False
+				),
+			),
+		)
+		with_account = dataclasses.replace(
+			snap,
+			mapped=(
+				cp.MappedRecord(
+					"Mode of Payment", "Cash", exists=True, disabled=False, has_company_account=True
+				),
+			),
+		)
+		assert cp.evaluate(without).fingerprint != cp.evaluate(with_account).fingerprint
