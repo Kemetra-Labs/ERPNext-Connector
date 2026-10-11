@@ -94,7 +94,12 @@ def _ready_posting_path():
             {"event": "posting.poll.skipped", "reason": _safe(str(exc))}
         )
         return None
-    return (client, post_valid) if preflight() else None
+    try:
+        ready = preflight()
+    except Exception as exc:  # RT-379: a profile error never lets the tick pull.
+        frappe.logger(_LOGGER).error({"event": "compatibility.failed", "detail": _safe(str(exc))})
+        return None
+    return (client, post_valid) if ready else None
 
 
 def _build_posting_path():

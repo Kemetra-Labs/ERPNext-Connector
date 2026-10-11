@@ -130,7 +130,7 @@
    "fieldtype": "Data",
    "label": "Compatibility Status",
    "read_only": 1,
-   "description": "RT-379 (read-only, written by the poller): OK, WARNING (posting continues) or CRITICAL (posting paused)."
+   "description": "RT-379 (read-only, written by the poller): OK, WARNING (posting continues) or CRITICAL (posting paused). It reflects the last profile run: a tick skipped earlier (the G5 index guard, or a missing token / URL / maps) leaves it unchanged, and Compatibility Checked At (checked_at) shows its age."
   },
   {
    "fieldname": "compatibility_checked_at",

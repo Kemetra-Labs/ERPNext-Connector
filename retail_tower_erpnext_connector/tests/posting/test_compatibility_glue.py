@@ -52,7 +52,7 @@ def _site():
 			("Company", "RT Co"): {"default_currency": "EGP"},
 			("UOM", "Nos"): {"enabled": 1},
 			("Warehouse", "Stores - RT"): {"disabled": 0, "company": "RT Co"},
-			("Customer", "Walk-in"): {"disabled": 0},
+			("Customer", "Walk-in"): {"disabled": 0, "customer_group": "All", "tax_category": None},
 			("Mode of Payment", "Cash"): {"enabled": 1},
 		},
 		"lists": {
@@ -62,13 +62,19 @@ def _site():
 			"Item Tax": [],
 			"Tax Rule": [],
 			"POS Profile": [],
+			"POS Profile User": [],
 			"Mode of Payment Account": [
 				{"parent": "Cash", "company": "RT Co", "default_account": "Cash - RT"}
 			],
 		},
 		"pricing_rules": 0,
-		# ERPNext's own Tax Rule evaluation (party.set_taxes): customer -> template it would apply.
+		# ERPNext's own Tax Rule evaluation (party.set_taxes): customer -> (template, required category).
 		"tax_rule_templates": {},
+		# Address tax categories and each customer's default (billing, shipping) addresses.
+		"address_categories": {},
+		"default_addresses": {},
+		# Accounts Settings fields this ERPNext v15 minor has (the template flag only from 15.67).
+		"accounts_fields": {"add_taxes_from_item_tax_template", "add_taxes_from_taxes_and_charges_template"},
 		"precision": 2,
 	}
 
@@ -80,7 +86,8 @@ class _Frappe(types.ModuleType):
 		self._site, self.unreadable = site, unreadable
 		self._logger = _Logger()
 		self.logger = lambda name=None: self._logger
-		self.writes = []
+		self.writes, self.set_taxes_calls = [], []
+		self.session = types.SimpleNamespace(user="Administrator")
 		self.db = types.SimpleNamespace(
 			get_single_value=self._get_single_value,
 			get_value=self._get_value,
@@ -113,7 +120,11 @@ class _Frappe(types.ModuleType):
 		return [r[pluck] for r in rows] if pluck else rows
 
 	def get_meta(self, doctype):
-		return types.SimpleNamespace(get_field=lambda name: types.SimpleNamespace(fieldname=name))
+		fields = self._site["accounts_fields"] if doctype == "Accounts Settings" else None
+		return types.SimpleNamespace(
+			get_field=lambda name: types.SimpleNamespace(fieldname=name),
+			has_field=lambda name: fields is None or name in fields,
+		)
 
 	def _set_single_value(self, doctype, values, **kwargs):
 		self.writes.append((doctype, dict(values), kwargs.get("update_modified", True)))
@@ -153,6 +164,10 @@ def load_glue():
 		"frappe",
 		"frappe.model",
 		"frappe.model.meta",
+		"frappe.contacts",
+		"frappe.contacts.doctype",
+		"frappe.contacts.doctype.address",
+		"frappe.contacts.doctype.address.address",
 		"erpnext",
 		"erpnext.accounts",
 		"erpnext.accounts.party",
@@ -165,16 +180,25 @@ def load_glue():
 		meta = types.ModuleType("frappe.model.meta")
 		meta.get_field_precision = lambda df, doc=None, currency=None: fake._site["precision"]
 		party = types.ModuleType("erpnext.accounts.party")
-		party.set_taxes = lambda customer, party_type, posting_date, company, **kw: (
-			fake._site["tax_rule_templates"].get(customer)
-			if party_type == "Customer" and company == "RT Co"
-			else None
+		party.set_taxes = lambda *args, **kwargs: _set_taxes(fake, *args, **kwargs)
+		party.get_address_tax_category = (
+			lambda tax_category=None, billing_address=None, shipping_address=None: (
+				fake._site["address_categories"].get(billing_address) or tax_category or ""
+			)
 		)
+		address = types.ModuleType("frappe.contacts.doctype.address.address")
+		address.get_default_address = lambda doctype, name, sort_key="is_primary_address": fake._site[
+			"default_addresses"
+		].get((name, sort_key))
 		sys.modules.update(
 			{
 				"frappe": fake,
 				"frappe.model": types.ModuleType("frappe.model"),
 				"frappe.model.meta": meta,
+				"frappe.contacts": types.ModuleType("frappe.contacts"),
+				"frappe.contacts.doctype": types.ModuleType("frappe.contacts.doctype"),
+				"frappe.contacts.doctype.address": types.ModuleType("frappe.contacts.doctype.address"),
+				"frappe.contacts.doctype.address.address": address,
 				"erpnext": types.SimpleNamespace(__version__="15.38.1"),
 				"erpnext.accounts": types.ModuleType("erpnext.accounts"),
 				"erpnext.accounts.party": party,
@@ -188,6 +212,23 @@ def load_glue():
 		namespace.pop(name, None)
 		if value is not _MISSING:
 			namespace[name] = value
+
+
+def _set_taxes(fake, *args, **kwargs):
+	"""ERPNext's party.set_taxes stand-in: records the call; a rule may require a tax category.
+
+	Positional args are ``(party, party_type, posting_date, company)``, as the glue passes them.
+	"""
+	customer, party_type, posting_date, company = args
+	fake.set_taxes_calls.append({"customer": customer, "posting_date": posting_date, **kwargs})
+	assert (party_type, company) == ("Customer", "RT Co")
+	template, category = _rule(fake, customer)
+	return template if category in (None, kwargs.get("tax_category")) else None
+
+
+def _rule(fake, customer):
+	rule = fake._site["tax_rule_templates"].get(customer)
+	return rule if isinstance(rule, tuple) else (rule, None)
 
 
 def _events(fake):
@@ -229,13 +270,14 @@ class TestReadSnapshot:
 class TestTaxSources:
 	"""D4, per ERPNext v15 source: what can add a tax row on a server-side insert."""
 
-	def test_a_default_sales_taxes_template_is_reported(self, load_glue):
+	def test_a_default_sales_taxes_template_is_read_as_a_warning_source(self, load_glue):
+		# Review finding 6: not an auto-applying source in v15; reported for visibility only.
 		site = _site()
 		site["lists"]["Sales Taxes and Charges Template"] = [
 			{"name": "VAT 14%", "is_default": 1, "disabled": 0, "company": "RT Co"}
 		]
 		snapshot = load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS)
-		assert any("VAT 14%" in s for s in snapshot.tax_sources)
+		assert snapshot.default_tax_templates == ("VAT 14%",) and snapshot.tax_sources == ()
 
 	def test_an_assigned_item_tax_template_is_reported_while_auto_add_is_on(self, load_glue):
 		site = _site()
@@ -363,3 +405,72 @@ class TestCodexFindings:
 			values["compatibility_report"].startswith("CRITICAL") and "read" in values["compatibility_report"]
 		)
 		assert "compatibility_fingerprint" not in values  # recovery is then compared with the last real check
+
+
+class TestDeepReviewRound:
+	def _flag_on(self, site):
+		site["singles"][("Accounts Settings", "add_taxes_from_taxes_and_charges_template")] = 1
+		return site
+
+	def test_the_tax_category_comes_from_the_default_billing_address_as_erpnext_derives_it(self, load_glue):
+		# Finding 1: customer without a category, billing address "VAT Registered", a matching rule.
+		site = self._flag_on(_site())
+		site["default_addresses"] = {("Walk-in", "is_primary_address"): "Walk-in-Billing"}
+		site["address_categories"] = {"Walk-in-Billing": "VAT Registered"}
+		site["tax_rule_templates"] = {"Walk-in": ("VAT 14%", "VAT Registered")}
+		fake = _Frappe(site)
+		snapshot = load_glue(fake).read_snapshot(_Settings(), _MAPS)
+		assert any("VAT 14%" in s for s in snapshot.tax_sources)
+		(call,) = fake.set_taxes_calls
+		assert call["tax_category"] == "VAT Registered" and call["customer_group"] == "All"
+		result = load_glue(fake).run_preflight(_Settings(), _MAPS)
+		assert result is False
+
+	def test_without_the_address_category_the_restricted_rule_does_not_apply(self, load_glue):
+		site = self._flag_on(_site())
+		site["tax_rule_templates"] = {"Walk-in": ("VAT 14%", "VAT Registered")}
+		fake = _Frappe(site)
+		assert load_glue(fake).read_snapshot(_Settings(), _MAPS).tax_sources == ()
+		assert fake.set_taxes_calls[0]["tax_category"] == ""
+
+	def test_an_erpnext_before_15_67_is_critical_with_an_honest_message(self, load_glue):
+		# Finding 2: the template flag does not exist yet; get_single_value would throw.
+		site = _site()
+		site["accounts_fields"] = {"add_taxes_from_item_tax_template"}
+		del site["singles"][("Accounts Settings", "add_taxes_from_taxes_and_charges_template")]
+		fake = _Frappe(site)
+		glue = load_glue(fake)
+		snapshot = glue.read_snapshot(_Settings(), _MAPS)
+		assert any("15.67" in u for u in snapshot.unsupported)
+		assert glue.run_preflight(_Settings(), _MAPS) is False
+		assert "compatibility.unreadable" not in _events(fake)
+
+	def test_a_disabled_pos_profile_that_is_the_users_default_is_reported(self, load_glue):
+		# Finding 4: get_pos_profile's user-default query has no disabled filter.
+		site = _site()
+		site["lists"]["POS Profile"] = [
+			{"name": "Old POS", "disabled": 1, "company": "RT Co", "taxes_and_charges": "VAT 14%"}
+		]
+		site["lists"]["POS Profile User"] = [{"parent": "Old POS", "user": "Administrator", "default": 1}]
+		snapshot = load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS)
+		assert any("Old POS" in s for s in snapshot.tax_sources)
+
+	def test_a_disabled_pos_profile_that_is_nobodys_default_is_not_reported(self, load_glue):
+		site = _site()
+		site["lists"]["POS Profile"] = [
+			{"name": "Old POS", "disabled": 1, "company": "RT Co", "taxes_and_charges": "VAT 14%"}
+		]
+		assert load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS).tax_sources == ()
+
+	def test_an_evaluation_error_records_critical_and_never_pulls(self, load_glue, monkeypatch):
+		# Trivial 7: never a stale OK.
+		fake = _Frappe(_site())
+		glue = load_glue(fake)
+
+		def _boom(snapshot):
+			raise RuntimeError("profile bug")
+
+		monkeypatch.setattr(glue, "evaluate", _boom)
+		assert glue.run_preflight(_Settings(), _MAPS) is False
+		assert fake.writes[-1][1]["compatibility_status"] == "CRITICAL"
+		assert "compatibility.failed" in _events(fake)

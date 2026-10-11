@@ -175,3 +175,9 @@ class TestCompatibilityProfileFields:
         }
         assert new <= set(doctype["field_order"])
         assert {f["fieldname"] for f in doctype["fields"]} == set(doctype["field_order"])
+
+
+    def test_the_status_description_says_it_reflects_the_last_profile_run(self, fields_by_name: dict[str, dict]):
+        # Review trivial 8: a tick skipped earlier (G5 guard, missing config) leaves it unchanged.
+        description = fields_by_name["compatibility_status"]["description"]
+        assert "last profile run" in description and "checked_at" in description.replace("Checked At", "checked_at")

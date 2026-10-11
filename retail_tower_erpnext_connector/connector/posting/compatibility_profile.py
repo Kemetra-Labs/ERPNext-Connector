@@ -19,11 +19,14 @@ fingerprint. It is composed with the Gate G5 index guard (``index_guard``), neve
 * a mapped UOM, Warehouse, Customer or Mode of Payment that is missing or disabled, or a mapped Mode of
   Payment without an account for ``default_company`` (ERPNext v15 ``get_bank_cash_account`` would
   throw for every tender sale);
-* a tax source that would auto-apply a tax row to a Retail Tower invoice (D4).
+* a tax source that would auto-apply a tax row to a Retail Tower invoice (D4);
+* a check this ERPNext minor cannot support (e.g. v15 < 15.67 has no Accounts Settings
+  ``add_taxes_from_taxes_and_charges_template``), with an explicit message.
 
 **Warnings** (recorded and logged; posting continues): Selling Settings ``validate_selling_price``
-enabled (input to Pricing Planning Gate 2), and enabled selling Pricing Rules (neutralised per
-document by RT-377; shown for visibility).
+enabled (input to Pricing Planning Gate 2), enabled selling Pricing Rules (neutralised per document
+by RT-377; shown for visibility), and a default Sales Taxes and Charges Template (ERPNext v15 does
+not apply it on a server-side insert: review finding 6).
 
 The Connector never changes ERP settings to pass the profile (668). This module imports NO frappe.
 """
@@ -93,6 +96,10 @@ class SiteSnapshot:
 	tax_sources: tuple[str, ...]
 	validate_selling_price: bool
 	selling_pricing_rules: int
+	# Checks this ERPNext minor cannot support (critical, with their own message).
+	unsupported: tuple[str, ...] = ()
+	# Default Sales Taxes and Charges Templates: visibility only, v15 does not apply them on insert.
+	default_tax_templates: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -123,6 +130,7 @@ class ProfileResult:
 def evaluate(snapshot: SiteSnapshot) -> ProfileResult:
 	"""Critical findings, warnings and the drift fingerprint for ``snapshot``."""
 	critical = (
+		*snapshot.unsupported,
 		*_version_findings(snapshot),
 		*_custom_field_findings(snapshot),
 		*_currency_findings(snapshot),
@@ -210,6 +218,11 @@ def _warnings(snapshot: SiteSnapshot) -> tuple[str, ...]:
 		warnings.append(
 			"Selling Settings validate_selling_price is enabled (input to Pricing Planning Gate 2)"
 		)
+	warnings += [
+		f"default Sales Taxes and Charges Template {name!r} is set: ERPNext v15 does not apply it on a "
+		"server-side insert (the is_default fallback is not reached), and RT-378 rejects any tax row"
+		for name in snapshot.default_tax_templates
+	]
 	if snapshot.selling_pricing_rules:
 		warnings.append(
 			f"{snapshot.selling_pricing_rules} enabled selling Pricing Rule(s); neutralised per document "
@@ -235,6 +248,8 @@ def fingerprint(snapshot: SiteSnapshot) -> str:
 		"tax_sources": sorted(snapshot.tax_sources),
 		"validate_selling_price": snapshot.validate_selling_price,
 		"selling_pricing_rules": snapshot.selling_pricing_rules,
+		"unsupported": sorted(snapshot.unsupported),
+		"default_tax_templates": sorted(snapshot.default_tax_templates),
 	}
 	payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
 	return hashlib.sha256(payload.encode("utf-8")).hexdigest()

@@ -16,13 +16,16 @@ editing the form). It never changes an ERP setting to pass (668).
 Tax sources (D4), per ERPNext v15 source (``accounts_controller.set_taxes_and_charges``,
 ``sales_invoice.set_pos_fields``, ``party.set_taxes``), for a server-side insert:
 
-* a default Sales Taxes and Charges Template of the company (listed by the ratified scope);
 * an Item Tax Template assigned to an Item or Item Group, while Accounts Settings
   ``add_taxes_from_item_tax_template`` is on (the v15 default);
 * a Sales Tax Rule that ERPNext's own evaluation (``party.set_taxes`` → ``get_tax_template``:
   customer, group, dates, disabled template...) applies to a mapped Customer, while
   ``add_taxes_from_taxes_and_charges_template`` is on;
-* a POS Profile of the company with ``taxes_and_charges`` (paid ``is_pos`` sales take it).
+* a POS Profile of the company with ``taxes_and_charges`` (paid ``is_pos`` sales take it), including
+  the scheduler user's default profile even when disabled.
+
+A default Sales Taxes and Charges Template is NOT applied on a server-side insert in v15 (the
+``is_default`` fallback in ``set_taxes`` is not reached), so it is a warning, not critical.
 """
 
 from __future__ import annotations
@@ -51,25 +54,35 @@ def run_preflight(settings, maps: Mapping[str, Mapping]) -> bool:
 	try:
 		snapshot = read_snapshot(settings, maps)
 	except Exception as exc:  # an unreadable site must pause posting, never wave it through
-		detail = _safe(f"{type(exc).__name__}: {exc}")
-		_log({"event": "compatibility.unreadable", "detail": detail})
-		# Best effort: show the pause on Connector Settings (Codex PR #67). The fingerprint is kept,
-		# so a recovery is compared with the last real evaluation.
-		_write(
-			{
-				"compatibility_status": "CRITICAL",
-				"compatibility_report": f"CRITICAL\ncritical: the site could not be read: {detail}",
-			}
+		# Best effort: show the pause on Connector Settings (Codex PR #67).
+		_pause(
+			"compatibility.unreadable", f"the site could not be read: {_safe(f'{type(exc).__name__}: {exc}')}"
 		)
 		return False
-	result = evaluate(snapshot)
-	event = drift_event(settings.get("compatibility_fingerprint"), result)
-	if event is not None:
-		_log(event)
-	if not result.ok:
-		_log({"event": "compatibility.critical", "critical": list(result.critical)})
+	try:
+		result = evaluate(snapshot)
+		event = drift_event(settings.get("compatibility_fingerprint"), result)
+		if event is not None:
+			_log(event)
+		if not result.ok:
+			_log({"event": "compatibility.critical", "critical": list(result.critical)})
+	except Exception as exc:  # never a stale OK and never a pull on a profile error
+		_pause(
+			"compatibility.failed",
+			f"the profile could not be evaluated: {_safe(f'{type(exc).__name__}: {exc}')}",
+		)
+		return False
 	_record(result)
 	return result.ok
+
+
+def _pause(event: str, reason: str) -> None:
+	"""Log ``event`` and record a CRITICAL status (best effort). The fingerprint is kept, so a
+	recovery is compared with the last real evaluation."""
+	try:
+		_log({"event": event, "detail": reason})
+	finally:
+		_write({"compatibility_status": "CRITICAL", "compatibility_report": f"CRITICAL\ncritical: {reason}"})
 
 
 def read_snapshot(settings, maps: Mapping[str, Mapping]) -> SiteSnapshot:
@@ -92,6 +105,8 @@ def read_snapshot(settings, maps: Mapping[str, Mapping]) -> SiteSnapshot:
 		tax_sources=_tax_sources(company, set((maps.get("customer") or {}).values())),
 		validate_selling_price=_flag("Selling Settings", "validate_selling_price"),
 		selling_pricing_rules=int(frappe.db.count("Pricing Rule", {"selling": 1, "disable": 0}) or 0),
+		unsupported=_unsupported(),
+		default_tax_templates=_default_templates(company) if company else (),
 	)
 
 
@@ -113,6 +128,30 @@ def _currency_precision(currency: str | None) -> int | None:
 
 def _flag(doctype: str, field: str) -> bool:
 	return bool(int(frappe.db.get_single_value(doctype, field) or 0))
+
+
+# Accounts Settings flags the tax checks read, and the honest message when this v15 minor lacks one
+# (``get_single_value`` throws on an unknown field, which would otherwise read as "unreadable").
+_ACCOUNTS_FLAGS = {
+	"add_taxes_from_taxes_and_charges_template": (
+		"ERPNext v15 < 15.67: Tax Rule auto-apply semantics not supported by the profile; upgrade to >= 15.67"
+	),
+	"add_taxes_from_item_tax_template": (
+		"ERPNext without Accounts Settings add_taxes_from_item_tax_template: Item Tax Template auto-apply "
+		"semantics not supported by the profile; upgrade ERPNext v15"
+	),
+}
+
+
+def _accounts_flag(field: str) -> bool | None:
+	"""An Accounts Settings flag, or ``None`` when this ERPNext minor does not have the field."""
+	if not frappe.get_meta("Accounts Settings").has_field(field):
+		return None
+	return _flag("Accounts Settings", field)
+
+
+def _unsupported() -> tuple[str, ...]:
+	return tuple(message for field, message in _ACCOUNTS_FLAGS.items() if _accounts_flag(field) is None)
 
 
 def _mapped_names(maps: Mapping[str, Mapping]) -> dict[str, set[str]]:
@@ -171,24 +210,25 @@ def _tax_sources(company: str | None, customers: set[str]) -> tuple[str, ...]:
 	if not company:
 		return ()
 	return (
-		*_default_templates(company),
 		*_item_tax_templates(company),
 		*_tax_rules(company, customers),
 		*_pos_profiles(company),
 	)
 
 
-def _default_templates(company: str) -> list[str]:
-	names = frappe.get_all(
-		"Sales Taxes and Charges Template",
-		filters={"is_default": 1, "disabled": 0, "company": company},
-		pluck="name",
+def _default_templates(company: str) -> tuple[str, ...]:
+	"""Default Sales Taxes and Charges Templates (a warning: v15 does not apply them on insert)."""
+	return tuple(
+		frappe.get_all(
+			"Sales Taxes and Charges Template",
+			filters={"is_default": 1, "disabled": 0, "company": company},
+			pluck="name",
+		)
 	)
-	return [f"default Sales Taxes and Charges Template {name!r}" for name in names]
 
 
 def _item_tax_templates(company: str) -> list[str]:
-	if not _flag("Accounts Settings", "add_taxes_from_item_tax_template"):
+	if not _accounts_flag("add_taxes_from_item_tax_template"):
 		return []
 	templates = frappe.get_all("Item Tax Template", filters={"disabled": 0, "company": company}, pluck="name")
 	if not templates:
@@ -211,14 +251,13 @@ def _tax_rules(company: str, customers: set[str]) -> list[str]:
 	``party.set_taxes`` runs ERPNext's ``get_tax_template`` (customer, group, tax category, dates,
 	disabled templates), so an expired rule or one restricted to another customer is not reported.
 	"""
-	if not _flag("Accounts Settings", "add_taxes_from_taxes_and_charges_template"):
+	if not _accounts_flag("add_taxes_from_taxes_and_charges_template"):
 		return []
 	from erpnext.accounts.party import set_taxes
 
 	today = frappe.utils.nowdate()
 	found = []
 	for customer in sorted(customers):
-		# The group and tax category, as ERPNext's own _get_party_details passes them.
 		party = (
 			frappe.db.get_value("Customer", customer, ["customer_group", "tax_category"], as_dict=True) or {}
 		)
@@ -228,7 +267,7 @@ def _tax_rules(company: str, customers: set[str]) -> list[str]:
 			today,
 			company,
 			customer_group=party.get("customer_group"),
-			tax_category=party.get("tax_category"),
+			tax_category=_tax_category(customer, party.get("tax_category")),
 		)
 		if template:
 			found.append(
@@ -238,13 +277,43 @@ def _tax_rules(company: str, customers: set[str]) -> list[str]:
 	return found
 
 
+def _tax_category(customer: str, customer_category: str | None) -> str:
+	"""The tax category ERPNext v15 derives on insert (``party._get_party_details``): the default
+	billing (or, per Accounts Settings, shipping) Address's category overrides the Customer's."""
+	from erpnext.accounts.party import get_address_tax_category
+	from frappe.contacts.doctype.address.address import get_default_address
+
+	billing = get_default_address("Customer", customer)
+	shipping = get_default_address("Customer", customer, "is_shipping_address")
+	return get_address_tax_category(customer_category, billing, shipping)
+
+
 def _pos_profiles(company: str) -> list[str]:
-	names = frappe.get_all(
+	"""POS Profiles ``get_pos_profile`` can pick for a paid sale: any enabled one of the company, and
+	the scheduler user's default one whatever its disabled flag (that query has no disabled filter)."""
+	enabled = frappe.get_all(
 		"POS Profile",
 		filters={"disabled": 0, "company": company, "taxes_and_charges": ["is", "set"]},
 		pluck="name",
 	)
-	return [f"POS Profile {name!r} taxes_and_charges (paid sales)" for name in names]
+	return [
+		f"POS Profile {name!r} taxes_and_charges (paid sales)"
+		for name in sorted({*enabled, *_user_default_pos_profiles(company)})
+	]
+
+
+def _user_default_pos_profiles(company: str) -> list[str]:
+	users = sorted({"Administrator", frappe.session.user})
+	parents = frappe.get_all(
+		"POS Profile User", filters={"user": ["in", users], "default": 1}, pluck="parent"
+	)
+	if not parents:
+		return []
+	return frappe.get_all(
+		"POS Profile",
+		filters={"name": ["in", parents], "company": company, "taxes_and_charges": ["is", "set"]},
+		pluck="name",
+	)
 
 
 def _record(result) -> None:

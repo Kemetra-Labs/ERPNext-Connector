@@ -240,3 +240,22 @@ class TestModeOfPaymentAccount:
 			),
 		)
 		assert cp.evaluate(without).fingerprint != cp.evaluate(with_account).fingerprint
+
+
+class TestReviewRound:
+	def test_an_unsupported_feature_is_critical_with_its_own_message(self):
+		message = "ERPNext v15 < 15.67: Tax Rule auto-apply semantics not supported by the profile; upgrade to >= 15.67"
+		critical = _critical(unsupported=(message,))
+		assert critical == (message,)
+
+	def test_a_default_sales_taxes_template_is_a_warning_not_critical(self):
+		# Review finding 6: v15 does not reach the is_default fallback on a server-side insert.
+		result = cp.evaluate(_snapshot(default_tax_templates=("VAT 14%",)))
+		assert result.ok and result.status == "WARNING"
+		assert "VAT 14%" in result.warnings[0] and "does not apply" in result.warnings[0]
+
+	@pytest.mark.parametrize(
+		("field", "value"), [("unsupported", ("x",)), ("default_tax_templates", ("VAT 14%",))]
+	)
+	def test_the_new_fields_are_part_of_the_fingerprint(self, field, value):
+		assert cp.evaluate(_snapshot(**{field: value})).fingerprint != cp.evaluate(_snapshot()).fingerprint

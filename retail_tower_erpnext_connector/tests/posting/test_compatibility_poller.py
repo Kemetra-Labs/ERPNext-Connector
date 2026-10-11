@@ -103,6 +103,21 @@ class TestComposition:
 		poller.run_posting_poll()
 		assert calls == {"build": 1, "preflight": 1, "pages": 0}
 
+	def test_a_preflight_that_raises_pulls_nothing(self, load_poller, monkeypatch):
+		# Trivial 7: an unexpected profile error never lets the tick pull.
+		poller = load_poller(_Frappe())
+		calls = _wire(monkeypatch, poller, profile_ok=True)
+
+		def _build():
+			def _boom():
+				raise RuntimeError("profile bug")
+
+			return object(), lambda item: None, _boom
+
+		monkeypatch.setattr(poller, "_build_posting_path", _build)
+		poller.run_posting_poll()
+		assert calls["pages"] == 0
+
 	def test_the_g5_guard_runs_first_and_its_failure_skips_the_profile(self, load_poller, monkeypatch):
 		poller = load_poller(_Frappe(), guard_ok=False)
 		calls = _wire(monkeypatch, poller, profile_ok=True)
