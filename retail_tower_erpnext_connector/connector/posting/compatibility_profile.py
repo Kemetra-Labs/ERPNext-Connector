@@ -81,6 +81,8 @@ class MappedRecord:
 	has_company_account: bool | None = None
 	# Warehouse only: a group warehouse cannot hold stock (ERPNext rejects it on the invoice).
 	is_group: bool = False
+	# Customer only: frozen and the scheduler user lacks the frozen_accounts_modifier role.
+	frozen_blocked: bool = False
 
 
 @dataclass(frozen=True)
@@ -202,6 +204,10 @@ def _mapped_findings(snapshot: SiteSnapshot) -> list[str]:
 			findings.append(f"mapped {record.doctype} {record.name!r} does not exist")
 		elif record.disabled:
 			findings.append(f"mapped {record.doctype} {record.name!r} is disabled")
+		elif record.frozen_blocked:
+			findings.append(
+				f"mapped {record.doctype} {record.name!r} is frozen and the scheduler user lacks the frozen_accounts_modifier role"
+			)
 		elif record.is_group:
 			findings.append(
 				f"mapped {record.doctype} {record.name!r} is a group warehouse (cannot hold stock)"
@@ -248,7 +254,16 @@ def fingerprint(snapshot: SiteSnapshot) -> str:
 		"default_company": snapshot.default_company,
 		"company_currency": snapshot.company_currency,
 		"mapped": sorted(
-			[r.doctype, r.name, r.exists, r.disabled, r.company or "", str(r.has_company_account), r.is_group]
+			[
+				r.doctype,
+				r.name,
+				r.exists,
+				r.disabled,
+				r.company or "",
+				str(r.has_company_account),
+				r.is_group,
+				r.frozen_blocked,
+			]
 			for r in snapshot.mapped
 		),
 		"tax_sources": sorted(snapshot.tax_sources),

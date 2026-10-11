@@ -63,6 +63,10 @@ def _site():
 			"Tax Rule": [],
 			"POS Profile": [],
 			"POS Profile User": [],
+			# Template tax rows: "VAT 14%" has one; an empty template adds no tax row.
+			"Sales Taxes and Charges": [
+				{"parent": "VAT 14%", "parenttype": "Sales Taxes and Charges Template"}
+			],
 			"Mode of Payment Account": [
 				{"parent": "Cash", "company": "RT Co", "default_account": "Cash - RT"}
 			],
@@ -88,6 +92,7 @@ class _Frappe(types.ModuleType):
 		self.logger = lambda name=None: self._logger
 		self.writes, self.set_taxes_calls = [], []
 		self.session = types.SimpleNamespace(user="Administrator")
+		self.get_roles = lambda user=None: list(site.get("roles", ["System Manager", "Accounts Manager"]))
 		self.db = types.SimpleNamespace(
 			get_single_value=self._get_single_value,
 			get_value=self._get_value,
@@ -514,3 +519,51 @@ class TestItemTaxPredicates:
 		site = self._site(valid_from="2026-01-01")
 		snapshot = load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS)
 		assert any("Item VAT" in s for s in snapshot.tax_sources)
+
+
+class TestFrozenCustomer:
+	"""Codex PR #67: v15 validate_party_frozen_disabled throws for a frozen Customer unless the session
+	user has the frozen_accounts_modifier role (always, when that role is unset)."""
+
+	def _site(self, modifier, roles):
+		site = _site()
+		site["records"][("Customer", "Walk-in")]["is_frozen"] = 1
+		site["singles"][("Accounts Settings", "frozen_accounts_modifier")] = modifier
+		site["roles"] = roles
+		return site
+
+	def test_a_frozen_customer_without_the_modifier_role_is_read_as_blocked(self, load_glue):
+		snapshot = load_glue(_Frappe(self._site("Accounts Manager", ["System Manager"]))).read_snapshot(
+			_Settings(), _MAPS
+		)
+		(customer,) = [r for r in snapshot.mapped if r.doctype == "Customer"]
+		assert customer.frozen_blocked is True
+
+	def test_a_frozen_customer_with_no_modifier_role_configured_is_blocked(self, load_glue):
+		snapshot = load_glue(_Frappe(self._site(None, ["System Manager"]))).read_snapshot(_Settings(), _MAPS)
+		(customer,) = [r for r in snapshot.mapped if r.doctype == "Customer"]
+		assert customer.frozen_blocked is True
+
+	def test_a_frozen_customer_with_the_modifier_role_is_usable(self, load_glue):
+		snapshot = load_glue(_Frappe(self._site("Accounts Manager", ["Accounts Manager"]))).read_snapshot(
+			_Settings(), _MAPS
+		)
+		(customer,) = [r for r in snapshot.mapped if r.doctype == "Customer"]
+		assert customer.frozen_blocked is False
+
+
+class TestEmptyTemplates:
+	"""Codex PR #67: an empty Sales Taxes and Charges Template adds no tax row; it must not pause."""
+
+	def test_a_tax_rule_with_an_empty_template_is_not_reported(self, load_glue):
+		site = _site()
+		site["singles"][("Accounts Settings", "add_taxes_from_taxes_and_charges_template")] = 1
+		site["tax_rule_templates"] = {"Walk-in": "Empty Tax"}
+		assert load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS).tax_sources == ()
+
+	def test_a_pos_profile_with_an_empty_template_is_not_reported(self, load_glue):
+		site = _site()
+		site["lists"]["POS Profile"] = [
+			{"name": "Main POS", "disabled": 0, "company": "RT Co", "taxes_and_charges": "Empty Tax"}
+		]
+		assert load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS).tax_sources == ()

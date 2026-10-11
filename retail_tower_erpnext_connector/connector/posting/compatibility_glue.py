@@ -173,13 +173,41 @@ def _mapped_records(maps: Mapping[str, Mapping], company: str | None) -> tuple[M
 	)
 
 
+# Extra fields read per mapped doctype, besides its enabled/disabled flag.
+_EXTRA_FIELDS = {"Warehouse": ["company", "is_group"], "Customer": ["is_frozen"]}
+
+
 def _read_record(doctype: str, name: str, company: str | None) -> MappedRecord:
-	flag = _FLAGS[doctype][0]
-	fields = [flag, "company", "is_group"] if doctype == "Warehouse" else [flag]
-	record = _record_for(doctype, name, frappe.db.get_value(doctype, name, fields, as_dict=True))
+	fields = [_FLAGS[doctype][0], *_EXTRA_FIELDS.get(doctype, [])]
+	row = frappe.db.get_value(doctype, name, fields, as_dict=True)
+	record = _record_for(doctype, name, row)
 	if doctype == "Mode of Payment" and record.exists:
 		record = dataclasses.replace(record, has_company_account=_has_company_account(name, company))
+	if doctype == "Customer" and record.exists:
+		record = dataclasses.replace(record, frozen_blocked=_frozen_blocked(row))
 	return record
+
+
+def _frozen_blocked(row) -> bool:
+	"""ERPNext v15 ``validate_party_frozen_disabled``: a frozen Customer throws unless the session user
+	has the ``frozen_accounts_modifier`` role (always, when that role is not configured)."""
+	if not int(row.get("is_frozen") or 0):
+		return False
+	modifier = frappe.db.get_single_value("Accounts Settings", "frozen_accounts_modifier")
+	return modifier not in frappe.get_roles()
+
+
+def _has_tax_rows(template: str | None) -> bool:
+	"""An empty Sales Taxes and Charges Template adds no tax row (Codex PR #67)."""
+	if not template:
+		return False
+	return bool(
+		frappe.get_all(
+			"Sales Taxes and Charges",
+			filters={"parent": template, "parenttype": "Sales Taxes and Charges Template"},
+			pluck="parent",
+		)
+	)
 
 
 def _has_company_account(mode_of_payment: str, company: str | None) -> bool:
@@ -311,7 +339,7 @@ def _tax_rules(company: str, contexts: list[_CustomerContext]) -> list[str]:
 			customer_group=context.customer_group,
 			tax_category=context.tax_category,
 		)
-		if template:
+		if _has_tax_rows(template):
 			found.append(
 				f"Tax Rule template {template!r} applies to mapped Customer {context.customer!r} "
 				"(Accounts Settings add_taxes_from_taxes_and_charges_template)"
@@ -336,15 +364,19 @@ def _pos_profiles(company: str) -> list[str]:
 	enabled = frappe.get_all(
 		"POS Profile",
 		filters={"disabled": 0, "company": company, "taxes_and_charges": ["is", "set"]},
-		pluck="name",
+		fields=["name", "taxes_and_charges"],
 	)
+	profiles = {
+		row["name"]: row["taxes_and_charges"] for row in (*enabled, *_user_default_pos_profiles(company))
+	}
 	return [
 		f"POS Profile {name!r} taxes_and_charges (paid sales)"
-		for name in sorted({*enabled, *_user_default_pos_profiles(company)})
+		for name, template in sorted(profiles.items())
+		if _has_tax_rows(template)
 	]
 
 
-def _user_default_pos_profiles(company: str) -> list[str]:
+def _user_default_pos_profiles(company: str) -> list[dict]:
 	users = sorted({"Administrator", frappe.session.user})
 	parents = frappe.get_all(
 		"POS Profile User", filters={"user": ["in", users], "default": 1}, pluck="parent"
@@ -354,7 +386,7 @@ def _user_default_pos_profiles(company: str) -> list[str]:
 	return frappe.get_all(
 		"POS Profile",
 		filters={"name": ["in", parents], "company": company, "taxes_and_charges": ["is", "set"]},
-		pluck="name",
+		fields=["name", "taxes_and_charges"],
 	)
 
 

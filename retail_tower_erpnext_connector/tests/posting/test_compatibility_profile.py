@@ -281,3 +281,17 @@ class TestGroupWarehouse:
 			return cp.evaluate(_snapshot(mapped=(record,))).fingerprint
 
 		assert _snap(True) != _snap(False)
+
+
+class TestFrozenCustomerFinding:
+	def test_a_blocked_frozen_customer_is_critical(self):
+		mapped = (cp.MappedRecord("Customer", "Walk-in", exists=True, disabled=False, frozen_blocked=True),)
+		critical = _critical(mapped=mapped)
+		assert len(critical) == 1 and "frozen" in critical[0] and "Walk-in" in critical[0]
+
+	def test_the_frozen_state_is_part_of_the_fingerprint(self):
+		def _fp(blocked):
+			record = cp.MappedRecord("Customer", "C", exists=True, disabled=False, frozen_blocked=blocked)
+			return cp.evaluate(_snapshot(mapped=(record,))).fingerprint
+
+		assert _fp(True) != _fp(False)
