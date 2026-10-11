@@ -37,7 +37,6 @@ from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provena
 from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
 from .representation_check import (
-    PREFIX,
     ExpectedInvoice,
     RepresentationMismatch,
     check_representation,
@@ -239,16 +238,29 @@ def _replay_expected(work_item: PostingWorkItem, maps: _Maps, company: str | Non
     return expected_from_payload(payload, company=company, exempt=exempt)
 
 
-def _replay_mismatch(
-    work_item: PostingWorkItem, snapshot: InvoiceSnapshot, maps: _Maps, company: str | None
-) -> str | None:
-    """RT-331 identity + RT-378 representation of an existing invoice; a failed rebuild fails closed."""
+class _CannotVerify(Exception):
+    """The existing invoice cannot be verified now (unreadable, or a config gap such as a unit map
+    entry removed since the sale or no site default company). Not a mismatch: retried (RT-378)."""
+
+
+def _existing_mismatch(work_item: PostingWorkItem, document_ref: ErpnextDocumentRef, maps: _Maps) -> str | None:
+    """RT-331 identity first (from the work item alone), then the RT-378 representation.
+
+    Returns the mismatch reason, or ``None`` when the document matches. Raises :class:`_CannotVerify`
+    when the invoice cannot be read or the expected representation cannot be rebuilt.
+    """
+    try:
+        snapshot = _invoice_snapshot(document_ref)
+        company = _expected_company()
+    except Exception as exc:
+        raise _CannotVerify(str(exc)) from exc
+    identity = check_existing(work_item, snapshot)
+    if identity is not None:
+        return identity
     try:
         expected = _replay_expected(work_item, maps, company)
-    except RepresentationMismatch as exc:
-        return str(exc)
-    except Exception as exc:  # e.g. a unit map changed since the sale: the document cannot be verified.
-        return f"{PREFIX} the expected representation cannot be rebuilt: {exc}"
+    except Exception as exc:  # incl. RepresentationMismatch for a blank default company
+        raise _CannotVerify(f"expected representation cannot be rebuilt: {exc}") from exc
     return check_existing(work_item, snapshot, expected=expected)
 
 
@@ -269,15 +281,16 @@ def _ack_existing(
     Backend-Core re-offers it — never a blind ``posted``. A work item without a frozen resolution
     (older Backend-Core) echoes ``posted`` exactly as before.
     RT-378: the verification also covers the persisted representation (Item, qty, UOM, rate, amount,
-    list price, no discount or margin, currency, customer, company, no tax row, grand total).
+    list price, no discount or margin, currency, customer, company, no tax row, grand total). When the
+    expected representation cannot be rebuilt (a config gap), the document cannot be verified: that is
+    ``failed_transient`` like an unreadable invoice, so DP2's retry budget ends it as repairable and a
+    re-offer after the config fix verifies it. ``reconciliation_required`` is only for a real mismatch.
     """
     if work_item.resolution_version is not None:
         try:
-            snapshot = _invoice_snapshot(document_ref)
-            company = _expected_company()
-        except Exception as exc:  # the read failed: retry later, never assume the document matches.
+            mismatch = _existing_mismatch(work_item, document_ref, maps)
+        except _CannotVerify as exc:  # retry later, never assume the document matches.
             return _ack_verify_transient(client, work_item, correlation_id, exc)
-        mismatch = _replay_mismatch(work_item, snapshot, maps, company)
         if mismatch is not None:
             return _ack_reconciliation(client, work_item, document_ref, correlation_id, mismatch)
     return _ack_posted(client, work_item, document_ref, correlation_id, signal)

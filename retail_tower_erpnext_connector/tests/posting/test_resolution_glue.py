@@ -110,7 +110,7 @@ class _Existing:
 class _Frappe(types.ModuleType):
 	"""``invoice`` is what the EXISTING Sales Invoice holds: docstatus + item rows."""
 
-	def __init__(self, *, docstatus=1, items=(), unreadable=False, missing=False):
+	def __init__(self, *, docstatus=1, items=(), unreadable=False, missing=False, company="RT Company"):
 		super().__init__("frappe")
 		self.ValidationError = type("ValidationError", (Exception,), {})
 		self.DoesNotExistError = type("DoesNotExistError", (self.ValidationError,), {})
@@ -125,7 +125,7 @@ class _Frappe(types.ModuleType):
 		self.items = [{**_HONOURED_ROW, **row} for row in items]
 		self.db = types.SimpleNamespace(
 			get_value=self._get_value,
-			get_single_value=lambda doctype, field: "RT Company",  # RT-378 site default company
+			get_single_value=lambda doctype, field: company,  # RT-378 site default company
 			savepoint=lambda name: None,
 			rollback=lambda save_point=None: None,
 		)
@@ -429,9 +429,7 @@ class TestReplayRepresentation:
 		outcome, _client = _post(glue, _work_item(), _Store(existing=_EXISTING))
 		assert outcome == "reconciliation_required"
 
-	def test_an_expected_representation_that_cannot_be_rebuilt_fails_closed(self, load_glue):
-		fake = _Frappe(items=[{"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A}])
-		glue = load_glue(fake)
+	def _replay_without_unit_map(self, glue, items):
 		client = _Client()
 		outcome = glue.post_work_item(
 			_work_item(),
@@ -443,8 +441,29 @@ class TestReplayRepresentation:
 			tenders=TenderModeMap({"cash": "Cash"}),
 			correlation_id="rt378-test",
 		)
+		return outcome, client
+
+	def test_an_expected_representation_that_cannot_be_rebuilt_fails_closed(self, load_glue):
+		# Review finding 1: "cannot verify" is not a mismatch. Never posted (fail closed), but retryable:
+		# DP2's retry budget ends it as repairable, and a re-offer after the config fix verifies it.
+		row = {"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A}
+		outcome, client = self._replay_without_unit_map(load_glue(_Frappe(items=[row])), [row])
+		assert outcome == "failed_transient"
+		assert client.acks[0]["ack"] == {"outcome": "failed_transient", "resolutionVersion": 2}
+		assert client.acks[0]["key"] == f"{_REF}:failed_transient:9"
+
+	def test_an_identity_mismatch_is_still_reconciliation_when_the_rebuild_fails(self, load_glue):
+		# RT-331 identity is checked from the work item alone, before any rebuild.
+		row = {"item_code": "ITEM-OTHER", "warehouse": "Frozen WH", "rt_line_ref": _A}
+		outcome, _client = self._replay_without_unit_map(load_glue(_Frappe(items=[row])), [row])
 		assert outcome == "reconciliation_required"
-		assert client.acks[0]["ack"]["reason"]["message"].startswith("representation:")
+
+	@pytest.mark.parametrize("company", [None, ""])
+	def test_a_replay_without_a_site_default_company_is_transient(self, load_glue, company):
+		fake = _Frappe(items=[{"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A}], company=company)
+		outcome, client = _post(load_glue(fake), _work_item(), _Store(existing=_EXISTING))
+		assert outcome == "failed_transient"
+		assert client.acks[0]["ack"]["outcome"] == "failed_transient"
 
 	def test_a_tender_map_change_does_not_affect_the_replay(self, load_glue):
 		fake = _Frappe(items=[{"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A}])
