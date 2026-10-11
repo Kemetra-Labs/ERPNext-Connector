@@ -18,6 +18,11 @@ document payload the connector will submit. It:
     stock-moving document. ERPNext writes the Stock Ledger Entries inside the SAME submit, so the
     existing SI idempotency (Posting Log + ``unique_rt_si_provenance``) is also the stock
     exactly-once guarantee. No Delivery Note.
+  - suppresses ERPNext repricing (RT-377, Pricing 657/658, RT-283 D6): ``ignore_pricing_rule = 1`` on
+    the document, and each line's ``price_list_rate`` equal to its ``rate``. RT-376 proved an enabled
+    selling Pricing Rule otherwise rewrote 9.50 to 9.00 on submit, and that without ``price_list_rate``
+    ERPNext fills it from its own price list and records an invented discount or margin. Per document
+    only: the connector never changes Pricing Rules or Selling Settings (the site may serve ERP sales).
   - sets ``disable_rounded_total = 1`` (RT-80): the site default rounds a fractional total to the
     whole unit (10.49 EGP -> AR 10.00 + 0.49 Round Off), so AR would no longer equal ``posTotal``.
     The reversal builder composes on this one, so credit notes inherit it.
@@ -88,6 +93,8 @@ def build_sales_invoice(
             "qty": line.quantity,
             "uom": uom_for(line.unit),
             "rate": line.unit_price,
+            # RT-377 / D6: the list price IS the Retail Tower price, so ERPNext derives no discount.
+            "price_list_rate": line.unit_price,
             "amount": line.line_amount,
             "warehouse": warehouse["name"],
             "currency": line.currency_code,
@@ -115,6 +122,8 @@ def build_sales_invoice(
         # RT-80: post the exact POS total. ERPNext otherwise applies the site default
         # (Global Defaults disable_rounded_total=0) and rounds 10.49 to 10.00 + Round Off.
         "disable_rounded_total": 1,
+        # RT-377 / Pricing 657: ERPNext Pricing Rules must not alter a finalized Retail Tower sale.
+        "ignore_pricing_rule": 1,
         "items": items,
     }
 
