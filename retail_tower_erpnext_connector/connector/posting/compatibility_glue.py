@@ -90,6 +90,7 @@ def read_snapshot(settings, maps: Mapping[str, Mapping]) -> SiteSnapshot:
 	"""⏳ BENCH-VALIDATION. Read what the profile checks; reads only."""
 	company = frappe.db.get_single_value("Global Defaults", "default_company") or None
 	currency = settings.get("posting_currency") or None
+	pos = _pos_profile_templates(company) if company else {}
 	return SiteSnapshot(
 		frappe_version=getattr(frappe, "__version__", None),
 		erpnext_version=_erpnext_version(),
@@ -103,10 +104,11 @@ def read_snapshot(settings, maps: Mapping[str, Mapping]) -> SiteSnapshot:
 		default_company=company,
 		company_currency=frappe.db.get_value("Company", company, "default_currency") if company else None,
 		mapped=_mapped_records(maps, company),
-		tax_sources=_tax_sources(company, set((maps.get("customer") or {}).values())),
+		tax_sources=_tax_sources(company, set((maps.get("customer") or {}).values()), pos),
 		validate_selling_price=_flag("Selling Settings", "validate_selling_price"),
 		selling_pricing_rules=int(frappe.db.count("Pricing Rule", {"selling": 1, "disable": 0}) or 0),
 		unsupported=_unsupported(),
+		blockers=_disabled_pos_templates(pos),
 		default_tax_templates=_default_templates(company) if company else (),
 	)
 
@@ -258,15 +260,17 @@ def _customer_contexts(customers: set[str]) -> list[_CustomerContext]:
 	return contexts
 
 
-def _tax_sources(company: str | None, customers: set[str]) -> tuple[str, ...]:
+def _tax_sources(company: str | None, customers: set[str], pos: dict[str, str]) -> tuple[str, ...]:
 	"""Every source that would auto-apply a tax row to a Retail Tower invoice (D4)."""
 	if not company:
 		return ()
-	contexts = _customer_contexts(customers)
+	# Address lookups only when a tax flag needs the customers' derived categories (re-check trivial).
+	needs_contexts = any(_accounts_flag(field) for field in _ACCOUNTS_FLAGS)
+	contexts = _customer_contexts(customers) if needs_contexts else []
 	return (
 		*_item_tax_templates(company, contexts),
 		*_tax_rules(company, contexts),
-		*_pos_profiles(company),
+		*_pos_profiles(pos),
 	)
 
 
@@ -350,30 +354,49 @@ def _tax_rules(company: str, contexts: list[_CustomerContext]) -> list[str]:
 def _tax_category(customer: str, customer_category: str | None) -> str:
 	"""The tax category ERPNext v15 derives on insert (``party._get_party_details``): the default
 	billing (or, per Accounts Settings, shipping) Address's category overrides the Customer's."""
-	from erpnext.accounts.party import get_address_tax_category
+	from erpnext.accounts.party import get_address_tax_category, get_party_shipping_address
 	from frappe.contacts.doctype.address.address import get_default_address
 
+	# As v15 set_address_details does for a payload with no addresses: the default billing Address, and
+	# get_party_shipping_address (address_type Shipping or is_shipping_address). get_default_address's
+	# third argument is only a sort key, so it could return a billing address (re-check N1).
 	billing = get_default_address("Customer", customer)
-	shipping = get_default_address("Customer", customer, "is_shipping_address")
+	shipping = get_party_shipping_address("Customer", customer)
 	return get_address_tax_category(customer_category, billing, shipping)
 
 
-def _pos_profiles(company: str) -> list[str]:
-	"""POS Profiles ``get_pos_profile`` can pick for a paid sale: any enabled one of the company, and
-	the scheduler user's default one whatever its disabled flag (that query has no disabled filter)."""
+def _pos_profile_templates(company: str) -> dict[str, str]:
+	"""``{POS Profile: taxes template}`` for the profiles ``get_pos_profile`` can pick for a paid sale:
+	any enabled one of the company, and the scheduler user's default one whatever its disabled flag
+	(that query has no disabled filter)."""
 	enabled = frappe.get_all(
 		"POS Profile",
 		filters={"disabled": 0, "company": company, "taxes_and_charges": ["is", "set"]},
 		fields=["name", "taxes_and_charges"],
 	)
-	profiles = {
-		row["name"]: row["taxes_and_charges"] for row in (*enabled, *_user_default_pos_profiles(company))
-	}
+	return {row["name"]: row["taxes_and_charges"] for row in (*enabled, *_user_default_pos_profiles(company))}
+
+
+def _template_disabled(template: str) -> bool:
+	return bool(int(frappe.db.get_value("Sales Taxes and Charges Template", template, "disabled") or 0))
+
+
+def _pos_profiles(pos: dict[str, str]) -> list[str]:
+	"""Profiles whose (enabled) template has tax rows: the template's taxes would be added."""
 	return [
 		f"POS Profile {name!r} taxes_and_charges (paid sales)"
-		for name, template in sorted(profiles.items())
-		if _has_tax_rows(template)
+		for name, template in sorted(pos.items())
+		if not _template_disabled(template) and _has_tax_rows(template)
 	]
+
+
+def _disabled_pos_templates(pos: dict[str, str]) -> tuple[str, ...]:
+	"""v15 ``validate_enabled_taxes_and_charges`` throws "is disabled" on every paid sale (re-check)."""
+	return tuple(
+		f"POS Profile {name!r} taxes template {template!r} is disabled: ERPNext would reject every paid sale"
+		for name, template in sorted(pos.items())
+		if _template_disabled(template)
+	)
 
 
 def _user_default_pos_profiles(company: str) -> list[dict]:

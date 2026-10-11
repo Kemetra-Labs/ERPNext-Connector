@@ -295,3 +295,12 @@ class TestFrozenCustomerFinding:
 			return cp.evaluate(_snapshot(mapped=(record,))).fingerprint
 
 		assert _fp(True) != _fp(False)
+
+
+class TestBlockers:
+	def test_a_blocker_is_critical_verbatim(self):
+		message = "POS Profile 'Main POS' taxes template 'Old Tax' is disabled"
+		assert _critical(blockers=(message,)) == (message,)
+
+	def test_blockers_are_part_of_the_fingerprint(self):
+		assert cp.evaluate(_snapshot(blockers=("x",))).fingerprint != cp.evaluate(_snapshot()).fingerprint

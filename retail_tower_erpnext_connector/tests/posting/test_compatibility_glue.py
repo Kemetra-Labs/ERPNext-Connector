@@ -76,7 +76,8 @@ def _site():
 		"tax_rule_templates": {},
 		# Address tax categories and each customer's default (billing, shipping) addresses.
 		"address_categories": {},
-		"default_addresses": {},
+		# Each customer's Address rows (name, address_type, is_primary_address, is_shipping_address).
+		"addresses": {},
 		# Accounts Settings fields this ERPNext v15 minor has (the template flag only from 15.67).
 		"accounts_fields": {"add_taxes_from_item_tax_template", "add_taxes_from_taxes_and_charges_template"},
 		"precision": 2,
@@ -90,7 +91,7 @@ class _Frappe(types.ModuleType):
 		self._site, self.unreadable = site, unreadable
 		self._logger = _Logger()
 		self.logger = lambda name=None: self._logger
-		self.writes, self.set_taxes_calls = [], []
+		self.writes, self.set_taxes_calls, self.address_calls = [], [], 0
 		self.session = types.SimpleNamespace(user="Administrator")
 		self.get_roles = lambda user=None: list(site.get("roles", ["System Manager", "Accounts Manager"]))
 		self.db = types.SimpleNamespace(
@@ -186,15 +187,12 @@ def load_glue():
 		meta.get_field_precision = lambda df, doc=None, currency=None: fake._site["precision"]
 		party = types.ModuleType("erpnext.accounts.party")
 		party.set_taxes = lambda *args, **kwargs: _set_taxes(fake, *args, **kwargs)
-		party.get_address_tax_category = (
-			lambda tax_category=None, billing_address=None, shipping_address=None: (
-				fake._site["address_categories"].get(billing_address) or tax_category or ""
-			)
-		)
+		party.get_address_tax_category = lambda *args: _address_tax_category(fake, *args)
+		party.get_party_shipping_address = lambda doctype, name: _party_shipping_address(fake, name)
 		address = types.ModuleType("frappe.contacts.doctype.address.address")
-		address.get_default_address = lambda doctype, name, sort_key="is_primary_address": fake._site[
-			"default_addresses"
-		].get((name, sort_key))
+		address.get_default_address = lambda doctype, name, sort_key="is_primary_address": _default_address(
+			fake, name, sort_key
+		)
 		sys.modules.update(
 			{
 				"frappe": fake,
@@ -217,6 +215,33 @@ def load_glue():
 		namespace.pop(name, None)
 		if value is not _MISSING:
 			namespace[name] = value
+
+
+def _address_tax_category(fake, tax_category=None, billing_address=None, shipping_address=None):
+	"""ERPNext v15 get_address_tax_category: the address chosen by Accounts Settings wins."""
+	fake.address_calls += 1
+	mode = fake._site["singles"].get(("Accounts Settings", "determine_address_tax_category_from"))
+	chosen = shipping_address if mode == "Shipping Address" else billing_address
+	return fake._site["address_categories"].get(chosen) or tax_category or ""
+
+
+def _default_address(fake, customer, sort_key):
+	"""Frappe v15 get_default_address: the third argument is only a SORT key (any address may come back)."""
+	fake.address_calls += 1
+	rows = sorted(fake._site["addresses"].get(customer, []), key=lambda r: r.get(sort_key, 0), reverse=True)
+	return rows[0]["name"] if rows else None
+
+
+def _party_shipping_address(fake, customer):
+	"""ERPNext v15 get_party_shipping_address: address_type Shipping or is_shipping_address, else ""."""
+	fake.address_calls += 1
+	rows = [
+		r
+		for r in fake._site["addresses"].get(customer, [])
+		if r.get("address_type") == "Shipping" or r.get("is_shipping_address")
+	]
+	rows.sort(key=lambda r: r.get("is_shipping_address", 0), reverse=True)
+	return rows[0]["name"] if rows else ""
 
 
 def _set_taxes(fake, *args, **kwargs):
@@ -420,7 +445,16 @@ class TestDeepReviewRound:
 	def test_the_tax_category_comes_from_the_default_billing_address_as_erpnext_derives_it(self, load_glue):
 		# Finding 1: customer without a category, billing address "VAT Registered", a matching rule.
 		site = self._flag_on(_site())
-		site["default_addresses"] = {("Walk-in", "is_primary_address"): "Walk-in-Billing"}
+		site["addresses"] = {
+			"Walk-in": [
+				{
+					"name": "Walk-in-Billing",
+					"address_type": "Billing",
+					"is_primary_address": 1,
+					"is_shipping_address": 0,
+				}
+			]
+		}
 		site["address_categories"] = {"Walk-in-Billing": "VAT Registered"}
 		site["tax_rule_templates"] = {"Walk-in": ("VAT 14%", "VAT Registered")}
 		fake = _Frappe(site)
@@ -506,7 +540,16 @@ class TestItemTaxPredicates:
 
 	def test_a_row_for_the_customers_derived_category_is_reported(self, load_glue):
 		site = self._site(tax_category="VAT Registered")
-		site["default_addresses"] = {("Walk-in", "is_primary_address"): "Walk-in-Billing"}
+		site["addresses"] = {
+			"Walk-in": [
+				{
+					"name": "Walk-in-Billing",
+					"address_type": "Billing",
+					"is_primary_address": 1,
+					"is_shipping_address": 0,
+				}
+			]
+		}
 		site["address_categories"] = {"Walk-in-Billing": "VAT Registered"}
 		snapshot = load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS)
 		assert any("Item VAT" in s for s in snapshot.tax_sources)
@@ -567,3 +610,54 @@ class TestEmptyTemplates:
 			{"name": "Main POS", "disabled": 0, "company": "RT Co", "taxes_and_charges": "Empty Tax"}
 		]
 		assert load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS).tax_sources == ()
+
+
+class TestShippingModeCategory:
+	"""Re-check N1: in Shipping mode v15 uses get_party_shipping_address (address_type Shipping or
+	is_shipping_address), not get_default_address's sort key, which can return a billing address."""
+
+	def _site(self, addresses):
+		site = _site()
+		site["singles"][("Accounts Settings", "add_taxes_from_taxes_and_charges_template")] = 1
+		site["singles"][("Accounts Settings", "determine_address_tax_category_from")] = "Shipping Address"
+		site["records"][("Customer", "Walk-in")]["tax_category"] = "Retail"
+		site["addresses"] = {"Walk-in": addresses}
+		site["address_categories"] = {"Walk-in-Billing": "VAT Registered", "Walk-in-Ship": "Export"}
+		return site
+
+	def test_a_customer_with_only_a_billing_address_takes_the_customer_category(self, load_glue):
+		fake = _Frappe(
+			self._site([{"name": "Walk-in-Billing", "address_type": "Billing", "is_primary_address": 1}])
+		)
+		load_glue(fake).read_snapshot(_Settings(), _MAPS)
+		assert fake.set_taxes_calls[0]["tax_category"] == "Retail"
+
+	def test_a_lone_shipping_type_address_is_picked(self, load_glue):
+		addresses = [{"name": "Walk-in-Ship", "address_type": "Shipping", "is_shipping_address": 0}]
+		fake = _Frappe(self._site(addresses))
+		load_glue(fake).read_snapshot(_Settings(), _MAPS)
+		assert fake.set_taxes_calls[0]["tax_category"] == "Export"
+
+
+class TestDisabledPosTemplate:
+	def test_a_pos_profile_with_a_disabled_taxes_template_is_critical(self, load_glue):
+		# Re-check trivial: v15 validate_enabled_taxes_and_charges throws "is disabled" on every paid sale.
+		site = _site()
+		site["lists"]["POS Profile"] = [
+			{"name": "Main POS", "disabled": 0, "company": "RT Co", "taxes_and_charges": "Old Tax"}
+		]
+		site["records"][("Sales Taxes and Charges Template", "Old Tax")] = {"disabled": 1}
+		fake = _Frappe(site)
+		glue = load_glue(fake)
+		snapshot = glue.read_snapshot(_Settings(), _MAPS)
+		assert any("Old Tax" in b and "disabled" in b for b in snapshot.blockers)
+		assert glue.run_preflight(_Settings(), _MAPS) is False
+
+
+class TestLazyCustomerContexts:
+	def test_no_address_lookups_when_no_tax_flag_needs_them(self, load_glue):
+		site = _site()
+		site["singles"][("Accounts Settings", "add_taxes_from_item_tax_template")] = 0
+		fake = _Frappe(site)
+		load_glue(fake).read_snapshot(_Settings(), _MAPS)
+		assert fake.address_calls == 0

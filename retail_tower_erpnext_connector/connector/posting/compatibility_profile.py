@@ -102,6 +102,8 @@ class SiteSnapshot:
 	selling_pricing_rules: int
 	# Checks this ERPNext minor cannot support (critical, with their own message).
 	unsupported: tuple[str, ...] = ()
+	# Settings ERPNext would reject on every sale (critical, with their own message).
+	blockers: tuple[str, ...] = ()
 	# Default Sales Taxes and Charges Templates: visibility only, v15 does not apply them on insert.
 	default_tax_templates: tuple[str, ...] = ()
 
@@ -135,6 +137,7 @@ def evaluate(snapshot: SiteSnapshot) -> ProfileResult:
 	"""Critical findings, warnings and the drift fingerprint for ``snapshot``."""
 	critical = (
 		*snapshot.unsupported,
+		*snapshot.blockers,
 		*_version_findings(snapshot),
 		*_custom_field_findings(snapshot),
 		*_currency_findings(snapshot),
@@ -270,6 +273,7 @@ def fingerprint(snapshot: SiteSnapshot) -> str:
 		"validate_selling_price": snapshot.validate_selling_price,
 		"selling_pricing_rules": snapshot.selling_pricing_rules,
 		"unsupported": sorted(snapshot.unsupported),
+		"blockers": sorted(snapshot.blockers),
 		"default_tax_templates": sorted(snapshot.default_tax_templates),
 	}
 	payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
