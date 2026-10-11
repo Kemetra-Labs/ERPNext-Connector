@@ -40,13 +40,25 @@ _NAME = "ACC-SINV-2026-37800"
 
 
 class _Logger:
+	"""Records ``(level, record)``: RT-409 asserts the level, so the levels are not aliased."""
+
 	def __init__(self):
 		self.records = []
 
 	def info(self, record):
-		self.records.append(record)
+		self.records.append(("info", record))
 
-	warning = error = info
+	def warning(self, record):
+		self.records.append(("warning", record))
+
+	def error(self, record):
+		self.records.append(("error", record))
+
+
+def _signal(fake, event):
+	"""The one ``(level, record)`` logged for ``event``."""
+	(found,) = [(level, record) for level, record in fake._logger.records if record["event"] == event]
+	return found
 
 
 def _erp_view(payload):
@@ -280,7 +292,7 @@ class TestBeforeSubmit:
 		ack = client.acks[0]
 		assert ack["key"] == f"{_REF}:permanently_rejected:v2"
 		assert ack["ack"]["reason"]["category"] == "validation"
-		assert ack["ack"]["reason"]["message"].startswith("representation:")
+		assert ack["ack"]["reason"]["message"].startswith("RepresentationMismatch: representation:")
 		assert store.writes == []
 
 	def test_a_repriced_cash_sale_is_a_representation_mismatch_not_settlement_drift(self, load_glue):
@@ -292,7 +304,7 @@ class TestBeforeSubmit:
 		assert fake.payloads[0]["is_pos"] == 1
 		assert fake.events == ["savepoint", "insert", "rollback"]
 		assert client.acks[0]["ack"]["reason"]["category"] == "validation"
-		assert client.acks[0]["ack"]["reason"]["message"].startswith("representation:")
+		assert client.acks[0]["ack"]["reason"]["message"].startswith("RepresentationMismatch: representation:")
 		assert store.writes == []
 
 	def test_the_sale_carries_the_site_default_company_explicitly(self, load_glue):
@@ -365,3 +377,69 @@ class TestAfterSubmit:
 		assert outcome == "failed_transient"
 		assert client.acks[0]["ack"] == {"outcome": "failed_transient", "resolutionVersion": 2}
 		assert len(store.writes) == 1  # a re-offer goes through the replay guard and verifies again
+
+
+def _raise_on_insert(exc):
+	def _raise(doc):
+		raise exc
+
+	return _raise
+
+
+class TestRejectionReasonAttribution:
+	"""RT-409 (AD-POSTING-001 D-7): every rejection reason names the check that failed and is logged at
+	ERROR, the level Frappe v15 keeps outside the dev server, with the text sent on the wire."""
+
+	def test_an_unclassified_error_is_prefixed_with_its_class(self, load_glue):
+		fake = _Frappe(on_insert=_raise_on_insert(NameError("name 'flt' is not defined")))
+		outcome, client, store = _post(load_glue(fake))
+		assert outcome == "permanently_rejected"
+		assert client.acks[0]["ack"]["reason"] == {"category": "other", "message": "NameError: name 'flt' is not defined"}
+		assert "rollback" in fake.events and store.writes == []
+
+	def test_a_frappe_validation_error_is_prefixed_with_its_class(self, load_glue):
+		fake = _Frappe()
+		fake.on_insert = _raise_on_insert(fake.ValidationError("Server Scripts are disabled"))
+		outcome, client, _store = _post(load_glue(fake))
+		assert outcome == "permanently_rejected"
+		assert client.acks[0]["ack"]["reason"] == {
+			"category": "validation",
+			"message": "ValidationError: Server Scripts are disabled",
+		}
+
+	def test_a_config_rejection_before_insert_is_prefixed_too(self, load_glue):
+		fake = _Frappe(company=None)
+		_outcome, client, _store = _post(load_glue(fake))
+		assert client.acks[0]["ack"]["reason"]["message"].startswith("SiteCompanyNotConfigured: ")
+
+	def test_rejected_is_logged_at_error_with_the_wire_reason(self, load_glue):
+		fake = _Frappe(on_insert=_reprice)
+		_outcome, client, _store = _post(load_glue(fake))
+		level, record = _signal(fake, "posting.rejected")
+		assert level == "error"
+		assert record["category"] == "validation"
+		assert record["reason_message"] == client.acks[0]["ack"]["reason"]["message"]
+		assert record["reason_message"].startswith("RepresentationMismatch: representation:")
+
+	def test_reconciliation_required_is_logged_at_error_with_the_wire_reason(self, load_glue):
+		fake = _Frappe(on_submit=_reprice)
+		_outcome, client, _store = _post(load_glue(fake))
+		level, record = _signal(fake, "posting.reconciliation_required")
+		assert level == "error"
+		assert record["category"] == "validation"
+		assert record["reason_message"] == client.acks[0]["ack"]["reason"]["message"]
+		assert record["document_ref"] == _NAME
+
+	def test_the_posted_signal_keeps_its_level(self, load_glue):
+		fake = _Frappe()
+		_post(load_glue(fake))
+		assert _signal(fake, "posting.posted")[0] == "info"
+
+	def test_a_credential_in_the_error_never_reaches_the_wire_or_the_log(self, load_glue):
+		fake = _Frappe()
+		fake.on_insert = _raise_on_insert(fake.ValidationError("bad settings dp2_token=abc123 pwd=hunter2"))
+		_outcome, client, _store = _post(load_glue(fake))
+		_level, record = _signal(fake, "posting.rejected")
+		for text in (client.acks[0]["ack"]["reason"]["message"], record["reason_message"]):
+			assert "abc123" not in text and "hunter2" not in text
+			assert text.startswith("ValidationError: bad settings")

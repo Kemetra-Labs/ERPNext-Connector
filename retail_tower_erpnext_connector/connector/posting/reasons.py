@@ -63,10 +63,13 @@ _CATEGORY_BY_KIND: dict[FailureKind, str] = {
 # Patterns whose VALUE is redacted from outgoing messages (token-like / credential-bearing).
 # Covers `key=value`, `key: value`, and quoted/JSON forms (`"key": "value"`) since frappe
 # often serializes exceptions as dicts/JSON (F-008), plus sk- and sk_ token prefixes.
+# RT-409: a credential key matches as the END of an identifier (`dp2_token` — the Connector Settings
+# field holding the Backend-Core token — `access_token`, `client_secret`); `\b` alone never matched
+# after `_`. `token_count` is not a credential key: the key must be followed by the separator.
 _SECRET_PATTERNS = (
     re.compile(r"(?i)\bBearer\s+\S+"),
     re.compile(
-        r"""(?i)["']?\b(token|password|secret|api[_-]?key|authorization)\b["']?"""
+        r"""(?i)["']?\b\w*?(token|password|passwd|pwd|secret|api[_-]?key|authorization)["']?"""
         r"""\s*[=:]\s*["']?[^\s"',}]+["']?"""
     ),
     re.compile(r"\bsk[-_][A-Za-z0-9_\-]{6,}"),
@@ -87,13 +90,17 @@ _EMPTY_REASON = "(no detail)"
 # Block-level tags become a space (so "a<br>b" stays two words); every other tag is dropped.
 _BLOCK_TAG_RE = re.compile(r"(?i)<\s*/?\s*(br|p|div|li|ul|ol|tr|td|th|h[1-6])\b[^>]*>")
 _ANY_TAG_RE = re.compile(r"<[^>]*>")
+# After unescaping, only tag-shaped text is stripped, so "qty 1 < 2 > 0" keeps its comparison.
+_DECODED_TAG_RE = re.compile(r"<\s*/?\s*[A-Za-z][^<>]*>")
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
 def plain_bounded_message(message: str) -> str:
     """Plain-text, secret-scrubbed, whitespace-collapsed message within the ack length bounds."""
     text = _ANY_TAG_RE.sub("", _BLOCK_TAG_RE.sub(" ", message))
-    text = _WHITESPACE_RE.sub(" ", html.unescape(text)).strip()
+    # RT-409: entity-encoded markup (`&lt;b&gt;`) becomes a tag only once unescaped — strip it again.
+    text = _DECODED_TAG_RE.sub("", _BLOCK_TAG_RE.sub(" ", html.unescape(text)))
+    text = _WHITESPACE_RE.sub(" ", text).strip()
     text = scrub_message(text)
     if not text:
         return _EMPTY_REASON
