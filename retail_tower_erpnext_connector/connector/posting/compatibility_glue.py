@@ -377,25 +377,33 @@ def _pos_profile_templates(company: str) -> dict[str, str]:
 	return {row["name"]: row["taxes_and_charges"] for row in (*enabled, *_user_default_pos_profiles(company))}
 
 
-def _template_disabled(template: str) -> bool:
-	return bool(int(frappe.db.get_value("Sales Taxes and Charges Template", template, "disabled") or 0))
+def _template_problem(template: str) -> str | None:
+	"""Why ERPNext v15 would reject every paid sale taking ``template``, or ``None`` when it is usable.
+
+	A deleted template fails link validation; a disabled one fails ``validate_enabled_taxes_and_charges``.
+	"""
+	disabled = frappe.db.get_value("Sales Taxes and Charges Template", template, "disabled")
+	if disabled is None:
+		return "does not exist"
+	return "is disabled" if int(disabled or 0) else None
 
 
 def _pos_profiles(pos: dict[str, str]) -> list[str]:
-	"""Profiles whose (enabled) template has tax rows: the template's taxes would be added."""
+	"""Profiles whose usable template has tax rows: the template's taxes would be added."""
 	return [
 		f"POS Profile {name!r} taxes_and_charges (paid sales)"
 		for name, template in sorted(pos.items())
-		if not _template_disabled(template) and _has_tax_rows(template)
+		if _template_problem(template) is None and _has_tax_rows(template)
 	]
 
 
 def _disabled_pos_templates(pos: dict[str, str]) -> tuple[str, ...]:
-	"""v15 ``validate_enabled_taxes_and_charges`` throws "is disabled" on every paid sale (re-check)."""
+	"""A POS Profile whose taxes template is disabled or deleted: ERPNext rejects every paid sale."""
+	problems = {name: (template, _template_problem(template)) for name, template in pos.items()}
 	return tuple(
-		f"POS Profile {name!r} taxes template {template!r} is disabled: ERPNext would reject every paid sale"
-		for name, template in sorted(pos.items())
-		if _template_disabled(template)
+		f"POS Profile {name!r} taxes template {template!r} {problem}: ERPNext would reject every paid sale"
+		for name, (template, problem) in sorted(problems.items())
+		if problem
 	)
 
 

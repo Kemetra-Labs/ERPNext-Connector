@@ -54,6 +54,8 @@ def _site():
 			("Warehouse", "Stores - RT"): {"disabled": 0, "company": "RT Co"},
 			("Customer", "Walk-in"): {"disabled": 0, "customer_group": "All", "tax_category": None},
 			("Mode of Payment", "Cash"): {"enabled": 1},
+			("Sales Taxes and Charges Template", "VAT 14%"): {"disabled": 0},
+			("Sales Taxes and Charges Template", "Empty Tax"): {"disabled": 0},
 		},
 		"lists": {
 			"Custom Field": [{"name": n} for n in _CUSTOM_FIELDS],
@@ -661,3 +663,17 @@ class TestLazyCustomerContexts:
 		fake = _Frappe(site)
 		load_glue(fake).read_snapshot(_Settings(), _MAPS)
 		assert fake.address_calls == 0
+
+
+class TestMissingPosTemplate:
+	def test_a_pos_profile_pointing_at_a_deleted_template_is_critical(self, load_glue):
+		# Final check: v15 link validation rejects every paid sale whose taxes_and_charges is missing.
+		site = _site()
+		site["lists"]["POS Profile"] = [
+			{"name": "Main POS", "disabled": 0, "company": "RT Co", "taxes_and_charges": "Deleted Tax"}
+		]
+		fake = _Frappe(site)
+		glue = load_glue(fake)
+		snapshot = glue.read_snapshot(_Settings(), _MAPS)
+		assert any("Deleted Tax" in b and "does not exist" in b for b in snapshot.blockers)
+		assert glue.run_preflight(_Settings(), _MAPS) is False
