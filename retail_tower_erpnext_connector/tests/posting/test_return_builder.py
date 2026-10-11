@@ -108,6 +108,7 @@ class TestReturnedLinesOnly:
 				"qty": "-1",
 				"uom": "Nos",
 				"rate": "100.00",
+				"price_list_rate": "100.00",  # RT-377 / D6: positive, equal to the rate
 				"amount": "-100.00",
 				"warehouse": "Main - RT",
 				"currency": "EGP",
@@ -223,3 +224,15 @@ class TestKindGuard:
 		)
 		with pytest.raises(ValueError, match="return"):
 			_build(void)
+
+
+class TestRepricingProtection:
+	"""RT-377: a return composes on the forward builder, so it carries both protections; the rate and
+	price_list_rate stay positive while qty and amount are negated."""
+
+	def test_return_carries_ignore_pricing_rule_and_positive_price_list_rate(self):
+		doc = _build(_return())
+		assert doc["ignore_pricing_rule"] == 1
+		for item in doc["items"]:
+			assert item["price_list_rate"] == item["rate"]
+			assert not item["price_list_rate"].startswith("-")

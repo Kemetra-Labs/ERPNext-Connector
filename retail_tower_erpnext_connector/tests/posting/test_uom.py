@@ -137,6 +137,23 @@ class TestMoneyConformance:
         with pytest.raises(u.MoneyConformanceError):
             u.assert_money_conformance(doc)
 
+    def test_rejects_float_price_list_rate(self):
+        # RT-377: price_list_rate is money too (exact-decimal string, never float — FR-009).
+        doc = {
+            "currency": "EGP",
+            "items": [{"rate": "10.00", "amount": "10.00", "qty": "1", "price_list_rate": 10.0}],
+        }
+        with pytest.raises(u.MoneyConformanceError):
+            u.assert_money_conformance(doc)
+
+    def test_rejects_non_decimal_price_list_rate(self):
+        doc = {
+            "currency": "EGP",
+            "items": [{"rate": "10.00", "amount": "10.00", "qty": "1", "price_list_rate": "10.12345"}],
+        }
+        with pytest.raises(u.MoneyConformanceError):
+            u.assert_money_conformance(doc)
+
     def test_conforms_to_real_builder_output(self):
         # T072: the conformance check passes over an actual build_sales_invoice output —
         # it asserts, it does not re-build (no second money path).

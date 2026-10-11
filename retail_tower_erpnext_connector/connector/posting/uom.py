@@ -126,10 +126,11 @@ def assert_money_conformance(doc: Mapping[str, object]) -> None:
 
     items = doc.get("items") or []
     for idx, item in enumerate(items):  # type: ignore[assignment]
-        # rate/amount → DecimalAmount (≤4 fractional); qty → quantity (≤6 fractional). Both
-        # must be exact-decimal STRINGS, never float (FR-009).
+        # rate/price_list_rate/amount → DecimalAmount (≤4 fractional); qty → quantity (≤6
+        # fractional). All must be exact-decimal STRINGS, never float (FR-009).
         for field, pattern in (
             ("rate", _DECIMAL_RE),
+            ("price_list_rate", _DECIMAL_RE),
             ("amount", _DECIMAL_RE),
             ("qty", _QUANTITY_RE),
         ):

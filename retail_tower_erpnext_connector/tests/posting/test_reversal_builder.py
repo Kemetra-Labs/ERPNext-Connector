@@ -567,3 +567,20 @@ class TestReversalOwnTimestamp:
 		raised = pt.raise_to_original(stamp, datetime.date(2026, 6, 1), datetime.timedelta(hours=13))
 		assert (raised.posting_date, raised.posting_time) == ("2026-06-01", "13:00:00.000000")
 		assert "raised_to_original" in raised.adjustments
+
+
+class TestRepricingProtection:
+	"""RT-377: refund and void credit notes inherit ``ignore_pricing_rule`` and a positive
+	``price_list_rate`` equal to the rate from the forward builder."""
+
+	def test_refund_credit_note_carries_both_protections(self):
+		doc = _build()  # the default fixture is reversalKind=refund
+		assert doc["ignore_pricing_rule"] == 1
+		assert all(i["price_list_rate"] == i["rate"] for i in doc["items"])
+
+	def test_void_credit_note_keeps_price_list_rate_positive(self):
+		doc = _build(_void_work_item())
+		assert doc["ignore_pricing_rule"] == 1
+		for item in doc["items"]:
+			assert item["price_list_rate"] == item["rate"]
+			assert not item["price_list_rate"].startswith("-")

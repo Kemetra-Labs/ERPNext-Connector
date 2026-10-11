@@ -505,3 +505,63 @@ class TestLineRef:
             _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
         )
         assert "rt_line_ref" not in doc["items"][0]
+
+
+class TestRepricingProtection:
+    """RT-377 / RT-283 design A, decisions 657 + D6 (evidence RT-376).
+
+    ERPNext must not reprice a Retail Tower sale. With no flag, an enabled selling Pricing Rule
+    rewrote 9.50 to 9.00 on submit; with only the flag, ERPNext still filled ``price_list_rate``
+    from its own price list and recorded an invented discount or margin. The builder therefore sends
+    both: the per-document ``ignore_pricing_rule`` and ``price_list_rate`` equal to the line rate.
+    """
+
+    def test_sets_ignore_pricing_rule_on_the_document(self):
+        doc = b.build_sales_invoice(
+            _work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
+        assert doc["ignore_pricing_rule"] == 1
+
+    def test_sends_price_list_rate_equal_to_rate_on_every_line(self):
+        line_b = {
+            "lineName": "Item B",
+            "unitPrice": "11.25",
+            "currencyCode": "EGP",
+            "quantity": "3",
+            "lineAmount": "33.75",
+            "taxAmount": "0.00",
+            "unit": "each",
+            "erpnextItemRef": {"doctype": "Item", "name": "ITEM-B"},
+        }
+        item = _work_item()
+        wire_lines = [
+            {
+                "lineName": "Item A",
+                "unitPrice": "100.00",
+                "currencyCode": "EGP",
+                "quantity": "2",
+                "lineAmount": "200.00",
+                "taxAmount": "30.00",
+                "unit": "each",
+                "erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
+            },
+            line_b,
+        ]
+        sale = {
+            "saleRef": item.sale.sale_ref,
+            "storeId": item.sale.store_id,
+            "currencyCode": "EGP",
+            "posTotal": "263.75",
+            "occurredAt": "2026-06-01T10:00:00Z",
+            "businessDate": "2026-06-01",
+            "sourceSystem": "pos-pulse",
+            "externalId": "POS-9001",
+            "lines": wire_lines,
+        }
+        doc = b.build_sales_invoice(
+            _work_item(sale=sale), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+        )
+        assert [(i["rate"], i["price_list_rate"]) for i in doc["items"]] == [
+            ("100.00", "100.00"),
+            ("11.25", "11.25"),
+        ]
