@@ -110,9 +110,11 @@ class _Existing:
 class _Frappe(types.ModuleType):
 	"""``invoice`` is what the EXISTING Sales Invoice holds: docstatus + item rows."""
 
-	def __init__(self, *, docstatus=1, items=(), unreadable=False):
+	def __init__(self, *, docstatus=1, items=(), unreadable=False, missing=False):
 		super().__init__("frappe")
 		self.ValidationError = type("ValidationError", (Exception,), {})
+		self.DoesNotExistError = type("DoesNotExistError", (self.ValidationError,), {})
+		self.missing = missing
 		self.exceptions = types.SimpleNamespace(
 			UniqueValidationError=type("UniqueValidationError", (self.ValidationError,), {})
 		)
@@ -145,6 +147,8 @@ class _Frappe(types.ModuleType):
 		if name is not None:  # read back an existing invoice from the database
 			assert payload == "Sales Invoice"
 			self._read(name)
+			if self.missing:
+				raise self.DoesNotExistError(f"Sales Invoice {name} not found")
 			return _Existing(self.docstatus, [dict(row) for row in self.items])
 		self.payloads.append(payload)
 		return _Invoice(payload, self)
@@ -498,3 +502,12 @@ def _tendered_work_item():
 			"sale": wire_sale,
 		}
 	)
+
+
+class TestMissingExistingInvoice:
+	def test_a_missing_existing_invoice_acks_reconciliation_required_as_before(self, load_glue):
+		# RT-331 read docstatus 0 for a missing document; get_doc raises instead (RT-378). Same outcome.
+		glue = load_glue(_Frappe(missing=True))
+		outcome, client = _post(glue, _work_item(), _Store(existing=_EXISTING))
+		assert outcome == "reconciliation_required"
+		assert "not submitted" in client.acks[0]["ack"]["reason"]["message"]

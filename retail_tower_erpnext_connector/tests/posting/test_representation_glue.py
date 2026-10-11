@@ -67,16 +67,18 @@ def _erp_view(payload, company):
 		}
 		for i in payload["items"]
 	]
+	grand = sum(i["amount"] for i in items)
+	paid = sum(float(p["amount"]) for p in payload.get("payments") or [])
 	return {
 		"docstatus": 0,
 		"currency": payload["currency"],
 		"customer": payload["customer"],
 		"company": company,
-		"grand_total": sum(i["amount"] for i in items),
-		"paid_amount": 0.0,
+		"grand_total": grand,
+		"paid_amount": paid,
 		"change_amount": 0.0,
 		"write_off_amount": 0.0,
-		"outstanding_amount": sum(i["amount"] for i in items),
+		"outstanding_amount": grand - paid,
 		"taxes": [],
 		"items": items,
 	}
@@ -185,7 +187,7 @@ def load_glue():
 			namespace[name] = value
 
 
-def _work_item(*, version=2):
+def _work_item(*, version=2, tenders=None):
 	wire = {
 		"workItemRef": _REF,
 		"kind": "sale_post",
@@ -219,6 +221,8 @@ def _work_item(*, version=2):
 	}
 	if version is not None:
 		wire["resolutionVersion"] = version
+	if tenders is not None:
+		wire["sale"]["tenders"] = tenders
 	return c.PostingWorkItem.from_wire(wire)
 
 
@@ -275,6 +279,23 @@ class TestBeforeSubmit:
 		assert ack["ack"]["reason"]["category"] == "validation"
 		assert ack["ack"]["reason"]["message"].startswith("representation:")
 		assert store.writes == []
+
+	def test_a_repriced_cash_sale_is_a_representation_mismatch_not_settlement_drift(self, load_glue):
+		# The pilot's main path: a paid (is_pos) sale repriced 9.50 -> 9.00 on insert (RT-376).
+		fake = _Frappe(on_insert=_reprice)
+		paid = _work_item(tenders=[{"method": "cash", "amount": "19.00"}])
+		outcome, client, store = _post(load_glue(fake), paid)
+		assert outcome == "permanently_rejected"
+		assert fake.payloads[0]["is_pos"] == 1
+		assert fake.events == ["savepoint", "insert", "rollback"]
+		assert client.acks[0]["ack"]["reason"]["category"] == "validation"
+		assert client.acks[0]["ack"]["reason"]["message"].startswith("representation:")
+		assert store.writes == []
+
+	def test_an_honoured_cash_sale_posts(self, load_glue):
+		fake = _Frappe()
+		paid = _work_item(tenders=[{"method": "cash", "amount": "19.00"}])
+		assert _post(load_glue(fake), paid)[0] == "posted"
 
 	def test_no_site_default_company_fails_closed_before_insert(self, load_glue):
 		fake = _Frappe(company=None)

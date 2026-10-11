@@ -175,8 +175,18 @@ class _PaymentsNotCompared:
 
 
 def _invoice_snapshot(document_ref: ErpnextDocumentRef) -> InvoiceSnapshot:
-    """⏳ BENCH-VALIDATION. Read an existing Sales Invoice back from the database (RT-331 + RT-378)."""
-    doc = frappe.get_doc("Sales Invoice", document_ref.name)
+    """⏳ BENCH-VALIDATION. Read an existing Sales Invoice back from the database (RT-331 + RT-378).
+
+    A document that no longer exists reads as not submitted (docstatus 0), as the RT-331 read did,
+    so it acks ``reconciliation_required`` rather than being re-offered forever.
+    """
+    missing = getattr(frappe, "DoesNotExistError", None)
+    try:
+        doc = frappe.get_doc("Sales Invoice", document_ref.name)
+    except Exception as exc:
+        if missing is not None and isinstance(exc, missing):
+            return InvoiceSnapshot(docstatus=0, items=())
+        raise
     return InvoiceSnapshot(
         docstatus=int(doc.get("docstatus") or 0),
         items=tuple(
@@ -778,15 +788,17 @@ def _submit_atomically(doc_payload: dict, expected: ExpectedInvoice):
     try:
         sinv = frappe.get_doc(doc_payload)
         sinv.insert()
+        # RT-378 first: a repriced paid sale also fails to settle, and D1 requires the
+        # "representation:" reason for it, not the settlement one.
+        mismatch = check_representation(expected, persisted_from_doc(sinv))
+        if mismatch is not None:
+            raise RepresentationMismatch(mismatch)
         if doc_payload.get("payments"):
             # RT-78: verify ERPNext's computed totals settle the invoice exactly before submitting.
             assert_settled(
                 {field: sinv.get(field) for field in SETTLED_FIELDS},
                 expected_total=payments_total(doc_payload["payments"]),
             )
-        mismatch = check_representation(expected, persisted_from_doc(sinv))
-        if mismatch is not None:
-            raise RepresentationMismatch(mismatch)
         sinv.submit()
     except BaseException:
         frappe.db.rollback(save_point=_SUBMIT_SAVEPOINT)

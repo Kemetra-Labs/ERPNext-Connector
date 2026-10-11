@@ -89,6 +89,7 @@ class _Frappe(types.ModuleType):
 		self.logger = lambda name=None: self._logger
 		self.events, self.payloads = [], []
 		self.after_insert, self.after_submit = after_insert or {}, after_submit or {}
+		self.posted_row = {}  # RT-378 replay: overrides on the already-posted return's row
 		self._rows = [
 			{"name": "row-a", "item_code": "ITEM-A", "qty": 3.0, "idx": 1, "warehouse": "Stores - A",
 				"rt_line_ref": _A if line_refs else None, "uom": "Box", "conversion_factor": 12.0},
@@ -119,7 +120,10 @@ class _Frappe(types.ModuleType):
 			return [{f: r[f] for f in kwargs["fields"] if f in r} for r in self._rows]
 		return []  # Items (no batch/serial) and the original's payments (tender-unknown sale)
 
-	def get_doc(self, payload):
+	def get_doc(self, payload, name=None):
+		if name is not None:  # RT-378 replay: the already-posted return read back from the database
+			assert (payload, name) == ("Sales Invoice", _POSTED_RETURN.name)
+			return _posted_return_doc(**self.posted_row)
 		self.payloads.append(payload)
 		return _Invoice(payload, self)
 
@@ -133,11 +137,11 @@ class _Client:
 
 
 class _Store:
-	def __init__(self):
-		self.writes = []
+	def __init__(self, existing=None):
+		self.writes, self.existing = [], existing
 
 	def get_document_ref(self, key):
-		return None
+		return self.existing
 
 	def record_posted(self, key, ref):
 		self.writes.append((key, ref))
@@ -173,7 +177,7 @@ def _line(ref, item, qty, amount):
 		"lineAmount": amount, "unit": "each", "erpnextItemRef": {"doctype": "Item", "name": item}}
 
 
-def _return(refund=(("cash", "100.00"),), tax=None):
+def _return(refund=(("cash", "100.00"),), tax=None, version=None):
 	ref = {"sourceSystem": "pos-pulse", "externalId": "POS-9001", "reversalKind": "return",
 		"recordedAt": "2026-06-05T09:30:00Z", "businessDate": "2026-06-05",
 		"returnLines": [{"lineRef": _A, "quantity": "1", "lineAmount": "100.00", "taxAmount": tax}]}
@@ -183,6 +187,7 @@ def _return(refund=(("cash", "100.00"),), tax=None):
 		"workItemRef": "88888888-8888-4888-8888-888888888888", "kind": "reversal", "sourceSystem": "pos-pulse",
 		"externalId": "POS-9001", "payloadHash": "e" * 64, "businessDate": "2026-06-01", "itemCursor": "c-16",
 		"reversalOf": ref,
+		**({"resolutionVersion": version} if version is not None else {}),
 		"sale": {"saleRef": "22222222-2222-4222-8222-222222222222", "storeId": _STORE, "currencyCode": "EGP",
 			"posTotal": "400.00", "occurredAt": "2026-06-01T10:00:00Z", "businessDate": "2026-06-01",
 			"sourceSystem": "pos-pulse", "externalId": "POS-9001",
@@ -190,8 +195,8 @@ def _return(refund=(("cash", "100.00"),), tax=None):
 	})
 
 
-def _post(glue, work_item, *, tender_map=None):
-	client, store = _Client(), _Store()
+def _post(glue, work_item, *, tender_map=None, store=None):
+	client, store = _Client(), store or _Store()
 	outcome = glue.post_work_item(
 		work_item,
 		client=client,
@@ -288,3 +293,37 @@ class TestReturnRepresentation:
 		assert client.acks[0]["documentRef"] == {"doctype": "Sales Invoice", "name": "ACC-SINV-2026-00101"}
 		assert client.acks[0]["reason"]["message"].startswith("representation:")
 		assert len(store.writes) == 1 and "rollback" not in fake.events
+
+
+_POSTED_RETURN = c.ErpnextDocumentRef(doctype="Sales Invoice", name="ACC-SINV-2026-00101")
+
+
+def _posted_return_doc(**row_overrides):
+	"""The return as ERPNext holds it: the ORIGINAL row's UOM (Box) and warehouse, and the ORIGINAL
+	invoice's customer, none of which the current maps ("Nos", "Map WH", "Walk-in") would give."""
+	row = {"item_code": "ITEM-A", "qty": -1.0, "uom": "Box", "rate": 100.0, "amount": -100.0,
+		"warehouse": "Stores - A", "rt_line_ref": _A, "price_list_rate": 100.0, "discount_percentage": 0.0,
+		"discount_amount": 0.0, "margin_type": "", "margin_rate_or_amount": 0.0, **row_overrides}
+	return {"docstatus": 1, "currency": "EGP", "customer": "Original Customer", "company": "RT Company",
+		"grand_total": row["amount"], "taxes": [], "items": [row]}
+
+
+class TestReturnReplay:
+	"""RT-378: a return replay rebuilds the expected representation through the reversal builders."""
+
+	def test_an_honoured_return_replay_acks_posted(self, load_glue):
+		fake = _Frappe()
+		outcome, client, _store = _post(
+			load_glue(fake), _return(version=3), store=_Store(existing=_POSTED_RETURN)
+		)
+		assert outcome == "posted", client.acks
+		assert fake.payloads == []  # never a second document
+
+	def test_a_repriced_return_replay_acks_reconciliation_required(self, load_glue):
+		fake = _Frappe()
+		fake.posted_row = {"rate": 90.0, "amount": -90.0, "price_list_rate": 90.0}
+		outcome, client, _store = _post(
+			load_glue(fake), _return(version=3), store=_Store(existing=_POSTED_RETURN)
+		)
+		assert outcome == "reconciliation_required"
+		assert client.acks[0]["reason"]["message"].startswith("representation:")

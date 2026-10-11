@@ -142,6 +142,9 @@ class TestLineMismatch:
 	def test_a_missing_commercial_value_is_a_mismatch(self, field):
 		assert _check(_with_line(field, None)) is not None
 
+	def test_a_non_numeric_persisted_number_is_a_mismatch(self):
+		assert _check(_with_line("qty", "two")) is not None
+
 	def test_price_list_rate_must_equal_the_rate_sent(self):
 		# ERPNext kept the rate but filled the list price from its own price list.
 		assert _check(_with_line("price_list_rate", 12.0)) is not None
