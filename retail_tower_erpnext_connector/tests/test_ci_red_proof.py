@@ -1,5 +1,5 @@
-# RT-381 temporary: proves the CI job turns red on a failing test. Reverted in the next commit.
+# RT-381 temporary: proves the CI test step turns red on a failing test. Removed in the next commit.
 
 
 def test_ci_red_proof():
-    assert False, "RT-381 deliberate failure"
+    raise AssertionError("RT-381 deliberate failure")
