@@ -26,6 +26,7 @@ idempotency-store DocType is the deferred [GATED] T020). It RECEIVES an
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timezone
 
 import frappe
@@ -225,8 +226,12 @@ def _replay_company(work_item: PostingWorkItem) -> str | None:
 def _replay_expected(work_item: PostingWorkItem, company: str | None) -> ExpectedInvoice:
     """Rebuild the payload with the pure builders and take its representation (RT-378, B.3).
 
-    No current map is consulted (:class:`_NotCompared`): every field it would feed is exempt.
+    No current map is consulted (:class:`_NotCompared`): every field it would feed is exempt. The
+    sale's tenders are dropped too: payments are never compared, and a sale posted before RT-78 may
+    carry tenders that do not sum to its lines (``TenderMismatch`` would make it unverifiable). A
+    return keeps its refund tenders, which its builder requires.
     """
+    work_item = dataclasses.replace(work_item, sale=dataclasses.replace(work_item.sale, tenders=()))
     if work_item.kind == "reversal":
         stand_in = _NotCompared()
         payload = _build_reversal(

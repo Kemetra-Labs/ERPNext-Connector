@@ -511,7 +511,16 @@ class TestReplayRepresentation:
 		assert outcome == "posted"
 
 
-def _tendered_work_item():
+class TestReplayIgnoresPayments:
+	def test_a_pre_rt78_sale_whose_tenders_differ_from_its_lines_is_still_verified(self, load_glue):
+		# Codex PR #66: before RT-78 tenders were ignored (unpaid invoice), so a tender total that differs
+		# from the lines must not make the replay rebuild fail: payments are never compared.
+		fake = _Frappe(items=[{"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A}])
+		outcome, client = _post(load_glue(fake), _tendered_work_item("90.00"), _Store(existing=_EXISTING))
+		assert outcome == "posted", client.acks
+
+
+def _tendered_work_item(tender_amount="100.00"):
 	item = _work_item()
 	wire_sale = {
 		"saleRef": item.sale.sale_ref,
@@ -523,7 +532,7 @@ def _tendered_work_item():
 		"sourceSystem": "pos-pulse",
 		"externalId": "POS-18101",
 		"warehouseRef": {"doctype": "Warehouse", "name": "Frozen WH"},
-		"tenders": [{"method": "cash", "amount": "100.00"}],
+		"tenders": [{"method": "cash", "amount": tender_amount}],
 		"lines": [
 			{
 				"lineRef": _A,
