@@ -15,7 +15,7 @@ Sales Invoice and must never let ERPNext silently reprice it (decisions 656–65
 
 1. suppress ERPNext repricing (657, Planning Gate 1);
 2. detect an incompatible ERPNext site before a sale depends on it (665–674);
-3. prove that what ERPNext persisted is exactly what Retail Tower sent (675–687)?
+3. prove that the commercial fields ERPNext persisted are exactly the ones Retail Tower sent (675–687)?
 
 ## Current state (`origin/main` `de445c5`)
 
@@ -40,9 +40,15 @@ ERP-native sales. The flag alone is not trusted as proof; B verifies the outcome
 ### B — Representation verification (675–687) → RT-378
 
 A pure, frappe-free `posting/representation_check.py` compares the ERP document against the payload.
-Per line it checks Item, qty, UOM, rate, amount, currency and warehouse exactly. At document level it requires
-no tax rows that Retail Tower did not send, and grand total equal to the sum of line amounts while tax is
-deferred.
+It covers every commercial field the Connector sends:
+
+- **Per line** (Sales Invoice Item): Item, qty, UOM, rate, amount and warehouse, exactly.
+- **Per document** (Sales Invoice): currency (ERPNext v15 holds currency on the parent, not on Sales
+  Invoice Item), customer, and company (the expected company for the store; today the site default).
+  It also requires no tax rows that Retail Tower did not send, and grand total equal to the sum of line
+  amounts while tax is deferred.
+
+Posting date and time are already governed by RT-49 and are out of this check's scope.
 
 1. **Before submit**: after `insert()`, inside the existing `_submit_atomically` savepoint. A mismatch rolls
    back (nothing persists) and fails closed.
