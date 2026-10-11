@@ -483,3 +483,34 @@ class TestGroupWarehouseRead:
 		snapshot = load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS)
 		(warehouse,) = [r for r in snapshot.mapped if r.doctype == "Warehouse"]
 		assert warehouse.is_group is True
+
+
+class TestItemTaxPredicates:
+	"""Codex PR #67: v15 _get_item_tax_template selects a row only for the invoice's derived tax
+	category, and only once valid_from has passed. Evaluated for the mapped customers, as of today."""
+
+	def _site(self, **row):
+		site = _site()
+		site["lists"]["Item Tax Template"] = [{"name": "Item VAT", "disabled": 0, "company": "RT Co"}]
+		site["lists"]["Item Tax"] = [{"item_tax_template": "Item VAT", "parenttype": "Item", **row}]
+		return site
+
+	def test_a_row_for_a_category_no_mapped_customer_has_is_not_reported(self, load_glue):
+		site = self._site(tax_category="Export")
+		assert load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS).tax_sources == ()
+
+	def test_a_row_for_the_customers_derived_category_is_reported(self, load_glue):
+		site = self._site(tax_category="VAT Registered")
+		site["default_addresses"] = {("Walk-in", "is_primary_address"): "Walk-in-Billing"}
+		site["address_categories"] = {"Walk-in-Billing": "VAT Registered"}
+		snapshot = load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS)
+		assert any("Item VAT" in s for s in snapshot.tax_sources)
+
+	def test_a_row_not_yet_valid_is_not_reported(self, load_glue):
+		site = self._site(valid_from="2027-01-01")
+		assert load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS).tax_sources == ()
+
+	def test_a_row_already_valid_is_reported(self, load_glue):
+		site = self._site(valid_from="2026-01-01")
+		snapshot = load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS)
+		assert any("Item VAT" in s for s in snapshot.tax_sources)

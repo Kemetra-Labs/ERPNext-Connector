@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 import frappe
 
@@ -206,13 +207,37 @@ def _record_for(doctype: str, name: str, row) -> MappedRecord:
 	)
 
 
+@dataclass(frozen=True)
+class _CustomerContext:
+	"""What ERPNext v15 derives for a mapped Customer on insert (``party._get_party_details``)."""
+
+	customer: str
+	customer_group: str | None
+	tax_category: str
+
+
+def _customer_contexts(customers: set[str]) -> list[_CustomerContext]:
+	contexts = []
+	for customer in sorted(customers):
+		party = (
+			frappe.db.get_value("Customer", customer, ["customer_group", "tax_category"], as_dict=True) or {}
+		)
+		contexts.append(
+			_CustomerContext(
+				customer, party.get("customer_group"), _tax_category(customer, party.get("tax_category"))
+			)
+		)
+	return contexts
+
+
 def _tax_sources(company: str | None, customers: set[str]) -> tuple[str, ...]:
 	"""Every source that would auto-apply a tax row to a Retail Tower invoice (D4)."""
 	if not company:
 		return ()
+	contexts = _customer_contexts(customers)
 	return (
-		*_item_tax_templates(company),
-		*_tax_rules(company, customers),
+		*_item_tax_templates(company, contexts),
+		*_tax_rules(company, contexts),
 		*_pos_profiles(company),
 	)
 
@@ -228,7 +253,13 @@ def _default_templates(company: str) -> tuple[str, ...]:
 	)
 
 
-def _item_tax_templates(company: str) -> list[str]:
+def _item_tax_templates(company: str, contexts: list[_CustomerContext]) -> list[str]:
+	"""Item Tax assignments ERPNext v15 ``_get_item_tax_template`` can select today (Codex PR #67).
+
+	A row is selected only for the invoice's derived tax category (``cstr`` equality, so a blank row
+	category matches a blank customer category) and once ``valid_from`` has passed. The net-rate range
+	depends on each line's rate, unknown before pulling, so it is treated as applicable.
+	"""
 	if not _accounts_flag("add_taxes_from_item_tax_template"):
 		return []
 	templates = frappe.get_all("Item Tax Template", filters={"disabled": 0, "company": company}, pluck="name")
@@ -237,16 +268,29 @@ def _item_tax_templates(company: str) -> list[str]:
 	rows = frappe.get_all(
 		"Item Tax",
 		filters={"item_tax_template": ["in", templates], "parenttype": ["in", ["Item", "Item Group"]]},
-		fields=["item_tax_template"],
+		fields=["item_tax_template", "tax_category", "valid_from"],
 	)
-	assigned = sorted({row["item_tax_template"] for row in rows})
+	categories = {context.tax_category for context in contexts}
+	today = frappe.utils.nowdate()
+	assigned = sorted(
+		{
+			row["item_tax_template"]
+			for row in rows
+			if (row.get("tax_category") or "") in categories and _valid_by(row.get("valid_from"), today)
+		}
+	)
 	return [
 		f"Item Tax Template {name!r} on items (Accounts Settings add_taxes_from_item_tax_template)"
 		for name in assigned
 	]
 
 
-def _tax_rules(company: str, customers: set[str]) -> list[str]:
+def _valid_by(valid_from, today: str) -> bool:
+	"""``valid_from`` (a date or ISO string, or unset) has been reached by ``today`` (ISO)."""
+	return not valid_from or str(valid_from) <= today
+
+
+def _tax_rules(company: str, contexts: list[_CustomerContext]) -> list[str]:
 	"""Tax Rule templates ERPNext itself would set for a mapped Customer today (Codex PR #67).
 
 	``party.set_taxes`` runs ERPNext's ``get_tax_template`` (customer, group, tax category, dates,
@@ -258,21 +302,18 @@ def _tax_rules(company: str, customers: set[str]) -> list[str]:
 
 	today = frappe.utils.nowdate()
 	found = []
-	for customer in sorted(customers):
-		party = (
-			frappe.db.get_value("Customer", customer, ["customer_group", "tax_category"], as_dict=True) or {}
-		)
+	for context in contexts:
 		template = set_taxes(
-			customer,
+			context.customer,
 			"Customer",
 			today,
 			company,
-			customer_group=party.get("customer_group"),
-			tax_category=_tax_category(customer, party.get("tax_category")),
+			customer_group=context.customer_group,
+			tax_category=context.tax_category,
 		)
 		if template:
 			found.append(
-				f"Tax Rule template {template!r} applies to mapped Customer {customer!r} "
+				f"Tax Rule template {template!r} applies to mapped Customer {context.customer!r} "
 				"(Accounts Settings add_taxes_from_taxes_and_charges_template)"
 			)
 	return found
