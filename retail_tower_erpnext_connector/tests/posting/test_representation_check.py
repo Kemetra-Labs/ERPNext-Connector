@@ -62,21 +62,20 @@ def _doc(*, sign=1):
 		"grand_total": sign * 29.49,
 		"taxes": [],
 		"items": [
-			_row("ITEM-A", sign * 2.0, "Nos", 9.5, sign * 19.0),
-			_row("ITEM-B", sign * 1.0, "Kg", 10.49, sign * 10.49),
+			_row("ITEM-A", "Nos", qty=sign * 2.0, rate=9.5, amount=sign * 19.0),
+			_row("ITEM-B", "Kg", qty=sign * 1.0, rate=10.49, amount=sign * 10.49),
 		],
 	}
 
 
-def _row(item_code, qty, uom, rate, amount):
+def _row(item_code, uom, **numbers):
+	"""``numbers`` are the row's ``qty``, ``rate`` and ``amount``; the list price is the rate."""
 	return {
 		"item_code": item_code,
-		"qty": qty,
 		"uom": uom,
-		"rate": rate,
-		"amount": amount,
+		**numbers,
 		"warehouse": "Store WH",
-		"price_list_rate": rate,
+		"price_list_rate": numbers["rate"],
 		"discount_percentage": 0.0,
 		"discount_amount": 0.0,
 		"margin_type": "",
@@ -156,7 +155,7 @@ class TestLineMismatch:
 
 	def test_an_extra_erp_row_is_a_mismatch(self):
 		doc = _doc()
-		doc["items"].append(_row("FREE-ITEM", 1.0, "Nos", 0.0, 0.0))
+		doc["items"].append(_row("FREE-ITEM", "Nos", qty=1.0, rate=0.0, amount=0.0))
 		doc["grand_total"] = 29.49
 		reason = _check(doc)
 		assert reason is not None and "row" in reason

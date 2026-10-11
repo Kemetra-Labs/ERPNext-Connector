@@ -162,16 +162,21 @@ class _Maps:
     customers: StoreCustomerMap
 
 
-class _PaymentsNotCompared:
-    """Tender map stand-in for a replay rebuild (RT-378).
+class _NotCompared:
+    """A map stand-in for a field a replay rebuild does not compare (RT-378).
 
-    Payments are not part of the representation check, so a tender map changed since the sale must
-    not turn a replay into a failure.
+    Payments are never part of the representation check, and a return's UOM and customer come from
+    the original invoice (``replay_exemptions``): a map changed since the sale must not turn a
+    matching replay into a failure. It echoes its input so the pure builders still run.
     """
 
     @staticmethod
-    def resolve(method: str) -> None:
-        return None
+    def resolve(value: str) -> str:
+        return value
+
+    @staticmethod
+    def for_store(value: str) -> str:
+        return value
 
 
 def _invoice_snapshot(document_ref: ErpnextDocumentRef) -> InvoiceSnapshot:
@@ -211,24 +216,27 @@ def _replay_expected(work_item: PostingWorkItem, maps: _Maps, company: str | Non
 
     The fields a rebuild cannot know are exempt (:func:`representation_check.replay_exemptions`).
     """
+    exempt = replay_exemptions(work_item)
+    uom_map = _NotCompared() if "uom" in exempt else maps.uom_map
+    customers = _NotCompared() if "customer" in exempt else maps.customers
     if work_item.kind == "reversal":
         payload = _build_reversal(
             work_item,
             None,
-            uom_map=maps.uom_map,
+            uom_map=uom_map,
             warehouses=maps.warehouses,
-            customers=maps.customers,
-            tenders=_PaymentsNotCompared(),
+            customers=customers,
+            tenders=_NotCompared(),
         )
     else:
         payload = build_sales_invoice(
             work_item,
-            uom_for=maps.uom_map.resolve,
+            uom_for=uom_map.resolve,
             warehouse_for=_warehouse_for(work_item, maps.warehouses),
-            customer_for=maps.customers.for_store,
-            mode_of_payment_for=_PaymentsNotCompared.resolve,
+            customer_for=customers.for_store,
+            mode_of_payment_for=_NotCompared.resolve,
         )
-    return expected_from_payload(payload, company=company, exempt=replay_exemptions(work_item))
+    return expected_from_payload(payload, company=company, exempt=exempt)
 
 
 def _replay_mismatch(

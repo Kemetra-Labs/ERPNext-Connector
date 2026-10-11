@@ -195,15 +195,15 @@ def _return(refund=(("cash", "100.00"),), tax=None, version=None):
 	})
 
 
-def _post(glue, work_item, *, tender_map=None, store=None):
+def _post(glue, work_item, *, tender_map=None, store=None, uom_map=None, customer_map=None):
 	client, store = _Client(), store or _Store()
 	outcome = glue.post_work_item(
 		work_item,
 		client=client,
 		store=store,
-		uom_map=UomMap({"each": "Nos"}),
+		uom_map=UomMap({"each": "Nos"} if uom_map is None else uom_map),
 		warehouses=PreResolvedWarehouse({_STORE: {"doctype": "Warehouse", "name": "Map WH"}}),
-		customers=StoreCustomerMap({_STORE: "Walk-in"}),
+		customers=StoreCustomerMap({_STORE: "Walk-in"} if customer_map is None else customer_map),
 		tenders=TenderModeMap({"cash": "Cash"} if tender_map is None else tender_map),
 		correlation_id="rt16-test",
 	)
@@ -327,3 +327,16 @@ class TestReturnReplay:
 		)
 		assert outcome == "reconciliation_required"
 		assert client.acks[0]["reason"]["message"].startswith("representation:")
+
+	def test_a_return_replay_does_not_resolve_its_exempt_uom_and_customer(self, load_glue):
+		# CodeRabbit PR #66: the return takes UOM and customer from the original invoice, so a unit or
+		# store mapping removed since then must not turn a matching replay into reconciliation_required.
+		fake = _Frappe()
+		outcome, client, _store = _post(
+			load_glue(fake),
+			_return(version=3),
+			store=_Store(existing=_POSTED_RETURN),
+			uom_map={},
+			customer_map={},
+		)
+		assert outcome == "posted", client.acks

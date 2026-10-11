@@ -30,6 +30,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from itertools import chain
 
 from .contracts import PostingWorkItem
 
@@ -179,15 +180,23 @@ def _line_mismatch(line: ExpectedLine, row: Mapping[str, object]) -> str | None:
 
 
 def _sent_values_mismatch(line: ExpectedLine, row: Mapping[str, object]) -> str | None:
-	for field in _LINE_TEXT_FIELDS:
-		want = getattr(line, field)
-		if want is not None and _text(row.get(field)) != want:
-			return f"{field} {row.get(field)!r} is not the sent {want!r}"
-	for field in _LINE_NUMBER_FIELDS:
-		want = getattr(line, field)
-		if _number(row.get(field)) != _number(want):
-			return f"{field} {row.get(field)!r} is not the sent {want}"
-	return None
+	"""The first sent text or number ERPNext does not hold (lazy: stops at the first mismatch)."""
+	text = (_text_mismatch(field, getattr(line, field), row) for field in _LINE_TEXT_FIELDS)
+	numbers = (_number_mismatch(field, getattr(line, field), row) for field in _LINE_NUMBER_FIELDS)
+	return next(filter(None, chain(text, numbers)), None)
+
+
+def _text_mismatch(field: str, want: str | None, row: Mapping[str, object]) -> str | None:
+	"""``want=None`` is an exempt field."""
+	if want is None or _text(row.get(field)) == want:
+		return None
+	return f"{field} {row.get(field)!r} is not the sent {want!r}"
+
+
+def _number_mismatch(field: str, want: str, row: Mapping[str, object]) -> str | None:
+	if _number(row.get(field)) == _number(want):
+		return None
+	return f"{field} {row.get(field)!r} is not the sent {want}"
 
 
 def _adjustment_mismatch(line: ExpectedLine, row: Mapping[str, object]) -> str | None:
