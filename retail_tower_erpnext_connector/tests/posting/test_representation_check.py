@@ -105,6 +105,14 @@ class TestMatchingDocument:
 	def test_a_reversal_with_negative_qty_and_amount_and_positive_rate_passes(self):
 		assert _check(_doc(sign=-1), _payload(sign=-1)) is None
 
+	def test_a_mirrored_rounded_void_passes_because_rounding_is_not_in_grand_total(self):
+		# Codex PR #66: a void of a pre-RT-80 sale mirrors disable_rounded_total=0. ERPNext v15 keeps
+		# grand_total = net_total (unrounded) without taxes; the rounding lives only in rounded_total /
+		# rounding_adjustment (taxes_and_totals.calculate_totals / set_rounded_total), which are not compared.
+		doc = _doc(sign=-1)
+		doc.update(rounded_total=-29.0, rounding_adjustment=0.49)
+		assert _check(doc, _payload(sign=-1)) is None
+
 	def test_unset_discount_and_margin_fields_count_as_zero(self):
 		doc = _doc()
 		for field in ("discount_percentage", "discount_amount", "margin_type", "margin_rate_or_amount"):
