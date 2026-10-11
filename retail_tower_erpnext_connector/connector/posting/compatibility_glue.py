@@ -19,7 +19,9 @@ Tax sources (D4), per ERPNext v15 source (``accounts_controller.set_taxes_and_ch
 * a default Sales Taxes and Charges Template of the company (listed by the ratified scope);
 * an Item Tax Template assigned to an Item or Item Group, while Accounts Settings
   ``add_taxes_from_item_tax_template`` is on (the v15 default);
-* a Sales Tax Rule, while ``add_taxes_from_taxes_and_charges_template`` is on;
+* a Sales Tax Rule that ERPNext's own evaluation (``party.set_taxes`` → ``get_tax_template``:
+  customer, group, dates, disabled template...) applies to a mapped Customer, while
+  ``add_taxes_from_taxes_and_charges_template`` is on;
 * a POS Profile of the company with ``taxes_and_charges`` (paid ``is_pos`` sales take it).
 """
 
@@ -87,7 +89,7 @@ def read_snapshot(settings, maps: Mapping[str, Mapping]) -> SiteSnapshot:
 		default_company=company,
 		company_currency=frappe.db.get_value("Company", company, "default_currency") if company else None,
 		mapped=_mapped_records(maps, company),
-		tax_sources=_tax_sources(company),
+		tax_sources=_tax_sources(company, set((maps.get("customer") or {}).values())),
 		validate_selling_price=_flag("Selling Settings", "validate_selling_price"),
 		selling_pricing_rules=int(frappe.db.count("Pricing Rule", {"selling": 1, "disable": 0}) or 0),
 	)
@@ -164,14 +166,14 @@ def _record_for(doctype: str, name: str, row) -> MappedRecord:
 	)
 
 
-def _tax_sources(company: str | None) -> tuple[str, ...]:
+def _tax_sources(company: str | None, customers: set[str]) -> tuple[str, ...]:
 	"""Every source that would auto-apply a tax row to a Retail Tower invoice (D4)."""
 	if not company:
 		return ()
 	return (
 		*_default_templates(company),
 		*_item_tax_templates(company),
-		*_tax_rules(company),
+		*_tax_rules(company, customers),
 		*_pos_profiles(company),
 	)
 
@@ -203,15 +205,37 @@ def _item_tax_templates(company: str) -> list[str]:
 	]
 
 
-def _tax_rules(company: str) -> list[str]:
+def _tax_rules(company: str, customers: set[str]) -> list[str]:
+	"""Tax Rule templates ERPNext itself would set for a mapped Customer today (Codex PR #67).
+
+	``party.set_taxes`` runs ERPNext's ``get_tax_template`` (customer, group, tax category, dates,
+	disabled templates), so an expired rule or one restricted to another customer is not reported.
+	"""
 	if not _flag("Accounts Settings", "add_taxes_from_taxes_and_charges_template"):
 		return []
-	rules = frappe.get_all("Tax Rule", filters={"tax_type": "Sales"}, fields=["name", "company"])
-	return [
-		f"Sales Tax Rule {rule['name']!r} (Accounts Settings add_taxes_from_taxes_and_charges_template)"
-		for rule in rules
-		if rule.get("company") in (None, "", company)
-	]
+	from erpnext.accounts.party import set_taxes
+
+	today = frappe.utils.nowdate()
+	found = []
+	for customer in sorted(customers):
+		# The group and tax category, as ERPNext's own _get_party_details passes them.
+		party = (
+			frappe.db.get_value("Customer", customer, ["customer_group", "tax_category"], as_dict=True) or {}
+		)
+		template = set_taxes(
+			customer,
+			"Customer",
+			today,
+			company,
+			customer_group=party.get("customer_group"),
+			tax_category=party.get("tax_category"),
+		)
+		if template:
+			found.append(
+				f"Tax Rule template {template!r} applies to mapped Customer {customer!r} "
+				"(Accounts Settings add_taxes_from_taxes_and_charges_template)"
+			)
+	return found
 
 
 def _pos_profiles(company: str) -> list[str]:

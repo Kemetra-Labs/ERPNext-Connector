@@ -67,6 +67,8 @@ def _site():
 			],
 		},
 		"pricing_rules": 0,
+		# ERPNext's own Tax Rule evaluation (party.set_taxes): customer -> template it would apply.
+		"tax_rule_templates": {},
 		"precision": 2,
 	}
 
@@ -86,7 +88,9 @@ class _Frappe(types.ModuleType):
 			set_single_value=self._set_single_value,
 			set_value=lambda *a, **k: pytest.fail("the profile must never write to ERPNext (668)"),
 		)
-		self.utils = types.SimpleNamespace(now_datetime=lambda: "2026-10-11 20:00:00", cint=int)
+		self.utils = types.SimpleNamespace(
+			now_datetime=lambda: "2026-10-11 20:00:00", nowdate=lambda: "2026-10-11", cint=int
+		)
 
 	def _get_single_value(self, doctype, field):
 		if self.unreadable:
@@ -145,19 +149,35 @@ _MAPS = {
 @pytest.fixture
 def load_glue():
 	pkg = importlib.import_module(_PKG)
-	names = ("frappe", "frappe.model", "frappe.model.meta", "erpnext", _GLUE)
+	names = (
+		"frappe",
+		"frappe.model",
+		"frappe.model.meta",
+		"erpnext",
+		"erpnext.accounts",
+		"erpnext.accounts.party",
+		_GLUE,
+	)
 	saved = [(sys.modules, n, sys.modules.get(n, _MISSING)) for n in names]
 	saved.append((vars(pkg), "compatibility_glue", vars(pkg).get("compatibility_glue", _MISSING)))
 
 	def _load(fake):
 		meta = types.ModuleType("frappe.model.meta")
 		meta.get_field_precision = lambda df, doc=None, currency=None: fake._site["precision"]
+		party = types.ModuleType("erpnext.accounts.party")
+		party.set_taxes = lambda customer, party_type, posting_date, company, **kw: (
+			fake._site["tax_rule_templates"].get(customer)
+			if party_type == "Customer" and company == "RT Co"
+			else None
+		)
 		sys.modules.update(
 			{
 				"frappe": fake,
 				"frappe.model": types.ModuleType("frappe.model"),
 				"frappe.model.meta": meta,
 				"erpnext": types.SimpleNamespace(__version__="15.38.1"),
+				"erpnext.accounts": types.ModuleType("erpnext.accounts"),
+				"erpnext.accounts.party": party,
 			}
 		)
 		sys.modules.pop(_GLUE, None)
@@ -231,12 +251,24 @@ class TestTaxSources:
 		site["lists"]["Item Tax"] = [{"item_tax_template": "Item VAT", "parenttype": "Item"}]
 		assert load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS).tax_sources == ()
 
-	def test_a_sales_tax_rule_is_reported_while_template_taxes_are_added(self, load_glue):
+	def test_a_tax_rule_that_applies_to_a_mapped_customer_is_reported(self, load_glue):
+		# Codex PR #67: ERPNext's own get_tax_template (via party.set_taxes) decides applicability.
 		site = _site()
 		site["singles"][("Accounts Settings", "add_taxes_from_taxes_and_charges_template")] = 1
-		site["lists"]["Tax Rule"] = [{"name": "Rule-1", "tax_type": "Sales", "company": "RT Co"}]
+		site["tax_rule_templates"] = {"Walk-in": "VAT 14%"}
 		snapshot = load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS)
-		assert any("Rule-1" in s for s in snapshot.tax_sources)
+		assert any("VAT 14%" in s and "Walk-in" in s for s in snapshot.tax_sources)
+
+	def test_a_tax_rule_that_applies_to_no_mapped_customer_is_not_reported(self, load_glue):
+		site = _site()
+		site["singles"][("Accounts Settings", "add_taxes_from_taxes_and_charges_template")] = 1
+		site["tax_rule_templates"] = {"Some Other Customer": "VAT 14%"}  # restricted / expired elsewhere
+		assert load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS).tax_sources == ()
+
+	def test_a_tax_rule_is_not_reported_while_template_taxes_are_not_added(self, load_glue):
+		site = _site()
+		site["tax_rule_templates"] = {"Walk-in": "VAT 14%"}
+		assert load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS).tax_sources == ()
 
 	def test_a_pos_profile_with_taxes_is_reported(self, load_glue):
 		site = _site()
