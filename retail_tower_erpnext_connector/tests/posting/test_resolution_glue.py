@@ -475,10 +475,10 @@ class TestReplayRepresentation:
 		outcome, _client = self._replay_without_unit_map(load_glue(_Frappe(items=[row])))
 		assert outcome == "posted"
 
-	def test_an_identity_mismatch_is_still_reconciliation_when_the_rebuild_fails(self, load_glue):
-		# RT-331 identity is checked from the work item alone, before any rebuild (blank company).
+	def test_an_identity_mismatch_is_reconciliation_required(self, load_glue):
+		# RT-331 identity is checked from the work item alone, before any rebuild.
 		row = {"item_code": "ITEM-OTHER", "warehouse": "Frozen WH", "rt_line_ref": _A}
-		outcome, _client = _post(load_glue(_Frappe(items=[row], company="")), _work_item(), _Store(existing=_EXISTING))
+		outcome, _client = _post(load_glue(_Frappe(items=[row])), _work_item(), _Store(existing=_EXISTING))
 		assert outcome == "reconciliation_required"
 
 	def test_a_persisted_uom_other_than_todays_map_still_posts(self, load_glue):
@@ -486,12 +486,13 @@ class TestReplayRepresentation:
 		outcome, _client = _post(load_glue(_Frappe(items=[row])), _work_item(), _Store(existing=_EXISTING))
 		assert outcome == "posted"
 
-	@pytest.mark.parametrize("company", [None, ""])
-	def test_a_replay_without_a_site_default_company_is_transient(self, load_glue, company):
+	@pytest.mark.parametrize("company", [None, "", "New Default Co"])
+	def test_a_sale_replay_does_not_depend_on_todays_site_default_company(self, load_glue, company):
+		# Codex PR #66: the sale's company was checked at insert; a site default that is blank or has
+		# changed since must not read as document drift on replay (the existing invoice is on RT Company).
 		fake = _Frappe(items=[{"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A}], company=company)
-		outcome, client = _post(load_glue(fake), _work_item(), _Store(existing=_EXISTING))
-		assert outcome == "failed_transient"
-		assert client.acks[0]["ack"]["outcome"] == "failed_transient"
+		outcome, _client = _post(load_glue(fake), _work_item(), _Store(existing=_EXISTING))
+		assert outcome == "posted"
 
 	def test_a_tender_map_change_does_not_affect_the_replay(self, load_glue):
 		fake = _Frappe(items=[{"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A}])

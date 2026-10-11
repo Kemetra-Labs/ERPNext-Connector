@@ -294,9 +294,20 @@ class TestReplayExemptions:
 	today's maps may differ from the ones the invoice was posted with, so a replay never compares them
 	(the insert-time check did). Same for every kind."""
 
-	@pytest.mark.parametrize("kind", [None, "void", "refund", "return"])
-	def test_a_replay_exempts_warehouse_uom_and_customer(self, kind):
+	@pytest.mark.parametrize("kind", ["void", "refund", "return"])
+	def test_a_credit_note_replay_exempts_warehouse_uom_and_customer(self, kind):
+		# Its company is the ORIGINAL invoice's, which cannot change after submit: still compared.
 		assert replay_exemptions(_work_item(kind)) == frozenset({"warehouse", "uom", "customer"})
+
+	def test_a_sale_replay_also_exempts_the_company(self):
+		# Codex PR #66: the expected company is today's site default, not a frozen value, so a changed
+		# default must not read as document drift. The insert-time check verified it.
+		assert replay_exemptions(_work_item()) == frozenset({"warehouse", "uom", "customer", "company"})
+
+	def test_an_exempt_company_needs_none_in_the_payload(self):
+		payload = {**_payload(), "company": None}
+		doc = {**_doc(), "company": "Any Co"}
+		assert _check(doc, payload, exempt=frozenset({"company"})) is None
 
 
 class TestPricingFlagSplit:

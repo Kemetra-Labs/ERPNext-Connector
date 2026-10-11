@@ -212,10 +212,11 @@ def _sale_company() -> str:
 
 
 def _replay_company(work_item: PostingWorkItem) -> str | None:
-    """⏳ BENCH-VALIDATION. The company an EXISTING invoice must be on: a sale's is the site default,
-    a credit note's is its original invoice's (``None`` when unknown: the replay cannot be verified)."""
+    """⏳ BENCH-VALIDATION. The company an EXISTING credit note must be on: its original invoice's
+    (``None`` when unknown: the replay cannot be verified). A sale's company is exempt on replay
+    (``replay_exemptions``): today's site default is not a frozen value."""
     if work_item.kind != "reversal":
-        return _site_company()
+        return None
     original = _resolve_original_invoice(work_item)
     return frappe.db.get_value("Sales Invoice", original, "company") if original else None
 

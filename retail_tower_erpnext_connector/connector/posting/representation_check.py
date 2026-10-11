@@ -44,7 +44,7 @@ from .contracts import PostingWorkItem
 PREFIX = "representation:"
 
 # Expected fields a caller may exempt (they are then not compared). Commercial values never are.
-EXEMPTABLE = frozenset({"warehouse", "uom", "customer"})
+EXEMPTABLE = frozenset({"warehouse", "uom", "customer", "company"})
 
 # Line fields that must be present and equal to what was sent.
 _LINE_TEXT_FIELDS = ("item_code", "uom", "warehouse")
@@ -71,11 +71,11 @@ class ExpectedLine:
 
 @dataclass(frozen=True)
 class ExpectedInvoice:
-	"""The commercial representation Retail Tower sent. ``customer=None`` = exempt."""
+	"""The commercial representation Retail Tower sent. ``customer`` / ``company`` ``None`` = exempt."""
 
 	currency: str
 	customer: str | None
-	company: str
+	company: str | None
 	lines: tuple[ExpectedLine, ...]
 
 
@@ -102,13 +102,13 @@ def expected_from_payload(payload: Mapping[str, object], *, exempt: frozenset[st
 	unknown = exempt - EXEMPTABLE
 	if unknown:
 		raise ValueError(f"cannot exempt {sorted(unknown)} from the representation check")
-	company = payload.get("company")
-	if not company:
+	company = None if "company" in exempt else payload.get("company")
+	if not company and "company" not in exempt:
 		raise RepresentationMismatch(f"{PREFIX} the expected company (site default) is not configured")
 	return ExpectedInvoice(
 		currency=str(payload["currency"]),
 		customer=None if "customer" in exempt else str(payload["customer"]),
-		company=str(company),
+		company=str(company) if company else None,
 		lines=tuple(_expected_line(item, exempt) for item in payload["items"]),
 	)
 
@@ -143,14 +143,17 @@ def _row_values(row) -> dict[str, object]:
 
 
 def replay_exemptions(work_item: PostingWorkItem) -> frozenset[str]:
-	"""The fields a replay does not compare against the rebuilt payload (every kind).
+	"""The fields a replay does not compare against the rebuilt payload.
 
 	The warehouse is RT-331's frozen-warehouse check (a void or return takes the original rows'
-	warehouses). The frozen resolution carries no UOM or customer, and today's maps may differ from
-	the ones the invoice was posted with (a return also takes them from the original invoice), so a
-	replay relies on the insert-time check for them.
+	warehouses). The frozen resolution carries no UOM, customer or company, and today's maps and site
+	default may differ from the ones the invoice was posted with, so a replay relies on the
+	insert-time check for them. A credit note is still held to its ORIGINAL invoice's company, which
+	cannot change after submit.
 	"""
-	return frozenset({"warehouse", "uom", "customer"})
+	if work_item.kind == "reversal":
+		return frozenset({"warehouse", "uom", "customer"})
+	return frozenset({"warehouse", "uom", "customer", "company"})
 
 
 def check_representation(
