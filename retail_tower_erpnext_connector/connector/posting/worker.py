@@ -22,7 +22,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .contracts import OutcomeAckRequest, RejectionReason
+from .contracts import OutcomeAckRequest
+from .reasons import FailureKind, to_rejection_reason
 from .transport import AckConflict, AckNotFound, PostingFeedClient
 
 # Operational: a page that processed but contained ≥1 contract-violating item. Raised AFTER all
@@ -101,10 +102,10 @@ def process_page(
     # 2. Ack each invalid item as a terminal per-item rejection — no substitution, no resolution.
     rejected_refs: list[str] = []
     for bad in page.invalid:
-        reason = RejectionReason(
-            category="validation",  # closed 012 set; no `missing_erpnext_item_ref` wire category
-            message=f"{bad.error_kind}: {bad.message}",
-        )
+        # Closed 012 set: `validation` (no `missing_erpnext_item_ref` wire category). RT-409: the parse
+        # error echoes raw feed values, so the message is scrubbed and bounded like every other reason;
+        # an over-long one would be refused (400) and stall the page.
+        reason = to_rejection_reason(FailureKind.VALIDATION, message=f"{bad.error_kind}: {bad.message}")
         # RT-333: echo (and key on) the item's resolution version when it is still readable, so
         # Backend-Core can fence a rejection of a superseded version like any other attempt.
         version = _raw_resolution_version(bad.raw)

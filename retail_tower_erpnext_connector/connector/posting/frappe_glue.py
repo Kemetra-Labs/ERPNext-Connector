@@ -371,13 +371,12 @@ def _ack_reconciliation(
     mismatch: str,
 ) -> str:
     """An ERP document exists but does not match: ``reconciliation_required``, never cancelled or amended."""
+    # Bounded + scrubbed like every other reason (RT-48: 1..1000 chars).
+    reason = to_rejection_reason(FailureKind.VALIDATION, message=mismatch)
     client.ack_outcome(
         work_item.work_item_ref,
         OutcomeAckRequest.reconciliation_required(
-            document_ref,
-            # Bounded + scrubbed like every other reason (RT-48: 1..1000 chars).
-            to_rejection_reason(FailureKind.VALIDATION, message=mismatch),
-            resolution_version=work_item.resolution_version,
+            document_ref, reason, resolution_version=work_item.resolution_version
         ),
         idempotency_key=_ack_key(work_item, "reconciliation_required"),
     )
@@ -385,8 +384,10 @@ def _ack_reconciliation(
         "posting.reconciliation_required",
         work_item,
         correlation_id,
+        level="error",  # Frappe v15 drops INFO outside the dev server (RT-409)
         document_ref=document_ref.name,
-        detail=scrub_message(mismatch),  # a rebuild failure embeds exception text (Gate G4)
+        category=reason.category,
+        reason_message=reason.message,  # the same scrubbed, bounded text sent on the wire (Gate G4)
     )
     return "reconciliation_required"
 
@@ -515,15 +516,15 @@ def post_work_item(
             mode_of_payment_for=tenders.resolve,
         )
     except UnmappedUnit as exc:
-        return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, _exception_message(exc))
     except _SALE_BUILD_VALIDATION_ERRORS as exc:
         # UnmappedStore (F-009): a store with no configured Customer fails closed → validation,
         # exactly like an unresolved warehouse — never fabricate a customer (Principle VI).
         # RT-78: an unmapped tender method (D5) or a tender total that differs from the lines
         # (amendment 4a) is the same — the connector never guesses a mode or forces a match.
-        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
     except Exception as exc:  # any other build error is non-retryable — never let it escape.
-        return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
 
     _log_stamp_adjustments(stamp, work_item, correlation_id)
 
@@ -556,7 +557,7 @@ def post_work_item(
         # SiteCompanyNotConfigured is a plain config rejection (no default company), before insert.
         # _submit_atomically already rolled the insert back; nothing was submitted. Caught BEFORE the
         # dup-provenance clause, whose fallback catches Exception on a frappe missing those names.
-        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
     except _dup_provenance_exceptions() as exc:
         # GATE G5 / F-002 — the crash-window recovery. The `unique_rt_si_provenance` index rejected
         # a SECOND submit of an already-posted sale (a crash between the FIRST submit and
@@ -570,7 +571,7 @@ def post_work_item(
         if existing is None:
             # Dup index fired but no SI found under our provenance — genuinely unexpected; do not
             # fabricate success. Treat as a non-retryable error (never a silent partial).
-            return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+            return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
         document_ref = existing
         try:
             store.record_posted(key, document_ref)  # back-fill the missing Posting Log row
@@ -579,10 +580,10 @@ def post_work_item(
         return _ack_existing(client, work_item, document_ref, correlation_id, "posting.recovered")
     except frappe.ValidationError as exc:  # type: ignore[attr-defined]
         # T051 — validation failure → permanently_rejected / validation.
-        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
     except Exception as exc:  # any OTHER error is non-retryable (F-005), not transient.
         # Decision table row 9: an unclassified non-retryable error → permanently_rejected / other.
-        return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
 
     # Record the posting, then ack. A concurrent double-record (another worker recorded a
     # different ref for this key first) is resolved by echoing the recorded ref.
@@ -679,7 +680,7 @@ def _post_reversal(
             work_item, stamp, uom_map=uom_map, warehouses=warehouses, customers=customers, tenders=tenders
         )
     except UnmappedUnit as exc:
-        return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, _exception_message(exc))
     except (
         MoneyConformanceError,
         UnresolvedWarehouse,
@@ -692,9 +693,9 @@ def _post_reversal(
     ) as exc:
         # RT-16: a return without refundTenders, or priced other than unitPrice x qty, is rejected
         # like an unmapped store — never posted as an outstanding credit note or at a guessed amount.
-        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
     except Exception as exc:  # any other build error is non-retryable — never let it escape.
-        return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
 
     # Resolve the original SI for `return_against`. The pure builder cannot do this lookup (no DB
     # hit there), so it is applied here, on the bench leg, before insert. A reversal work-item with
@@ -736,7 +737,7 @@ def _post_reversal(
         stamp = raise_to_original(stamp, original_date, original_time)
         doc_payload = apply_stamp(doc_payload, stamp)
     except Exception as exc:  # a read failure must not escape the terminal-outcome invariant.
-        return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
     _log_stamp_adjustments(stamp, work_item, correlation_id)
 
     # RT-48 / RT-47 D5 — a full void mirrors the original's update_stock (a legacy update_stock=0
@@ -751,9 +752,9 @@ def _post_reversal(
         try:
             doc_payload = _link_to_original(kind, doc_payload, _read_original_invoice(original_name))
         except ReturnLineMismatch as exc:
-            return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+            return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
         except Exception as exc:  # a read failure must not escape the terminal-outcome invariant.
-            return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+            return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
 
     rejected = _guard_tracked_items(doc_payload, work_item, client, correlation_id)
     if rejected is not None:
@@ -780,14 +781,14 @@ def _post_reversal(
         # RT-378 / D1 — ERPNext holds a value Retail Tower did not send ("representation: ...").
         # _submit_atomically already rolled the insert back; nothing was submitted. Caught BEFORE the
         # dup-provenance clause, whose fallback catches Exception on a frappe missing those names.
-        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
     except _dup_provenance_exceptions() as exc:
         # Crash-window recovery, keyed on the reversal's work_item_ref provenance (#28 re-key): a
         # re-offer whose second submit hits the unique index resolves to the already-posted
         # reversing doc (via _find_posted_invoice, which reads the same provenance_id discriminator).
         recovered = _find_posted_invoice(work_item)
         if recovered is None:
-            return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+            return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
         document_ref = recovered
         try:
             store.record_posted(key, document_ref)
@@ -795,9 +796,9 @@ def _post_reversal(
             document_ref = conflict.existing
         return _ack_existing(client, work_item, document_ref, correlation_id, "posting.recovered")
     except frappe.ValidationError as exc:  # type: ignore[attr-defined]
-        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
     except Exception as exc:  # any OTHER error is non-retryable (F-005), not transient.
-        return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
 
     try:
         store.record_posted(key, document_ref)
@@ -828,7 +829,7 @@ def _recover_or_reject_unsupported(
     """
     existing = _find_posted_invoice(work_item)
     if existing is None:
-        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
     document_ref = existing
     try:
         store.record_posted(key, document_ref)
@@ -905,9 +906,9 @@ def _guard_tracked_items(
     try:
         assert_no_tracked_items(doc_payload, _read_item_tracking(doc_payload))
     except UnsupportedTrackedItem as exc:
-        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
     except Exception as exc:
-        return _reject(client, work_item, correlation_id, FailureKind.OTHER, str(exc))
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
     return None
 
 
@@ -1070,13 +1071,35 @@ def _reject(
         OutcomeAckRequest.permanently_rejected(reason, resolution_version=work_item.resolution_version),
         idempotency_key=_ack_key(work_item, "permanently_rejected"),
     )
-    _log_signal("posting.rejected", work_item, correlation_id, category=reason.category)
+    _log_signal(
+        "posting.rejected",
+        work_item,
+        correlation_id,
+        level="error",  # Frappe v15 drops INFO outside the dev server (RT-409 / AD-POSTING-001 D-7)
+        category=reason.category,
+        reason_message=reason.message,  # the same scrubbed, bounded text sent on the wire
+    )
     return "permanently_rejected"
 
 
-def _log_signal(event: str, work_item: PostingWorkItem, correlation_id: str, **fields) -> None:
-    """T090 — structured log carrying the DP2 request_id correlation; never logs secrets/payload."""
-    frappe.logger("retail_tower_posting").info(
+def _exception_message(exc: BaseException) -> str:
+    """A rejection message that names the check that failed: ``"<ExceptionClass>: <text>"``.
+
+    RT-409 / AD-POSTING-001 D-7: a bare ``str(exc)`` hid which check raised (RT-380 run 3:
+    ``ServerScriptNotEnabled`` was unattributable). Literal messages are not passed through this.
+    """
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _log_signal(
+    event: str, work_item: PostingWorkItem, correlation_id: str, *, level: str = "info", **fields
+) -> None:
+    """T090 — structured log carrying the DP2 request_id correlation; never logs secrets/payload.
+
+    ``level="error"`` is for the signals an operator must see on a production bench, where Frappe
+    v15 sets ``frappe.logger()`` to ERROR (the RT-49 convention).
+    """
+    getattr(frappe.logger("retail_tower_posting"), level)(
         {
             "event": event,
             "work_item_ref": work_item.work_item_ref,

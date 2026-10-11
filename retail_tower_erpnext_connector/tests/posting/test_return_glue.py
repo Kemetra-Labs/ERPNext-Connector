@@ -17,6 +17,7 @@ Cases:
     and nothing is inserted.
 """
 
+import dataclasses
 import datetime
 import importlib
 import sys
@@ -43,13 +44,25 @@ _ORIGINAL = "ACC-SINV-2026-00100"
 
 
 class _Logger:
+	"""Records ``(level, record)``: RT-409 asserts the level, so the levels are not aliased."""
+
 	def __init__(self):
 		self.records = []
 
 	def info(self, record):
-		self.records.append(record)
+		self.records.append(("info", record))
 
-	warning = error = info
+	def warning(self, record):
+		self.records.append(("warning", record))
+
+	def error(self, record):
+		self.records.append(("error", record))
+
+
+def _signal(fake, event):
+	"""The one ``(level, record)`` logged for ``event``."""
+	(found,) = [(level, record) for level, record in fake._logger.records if record["event"] == event]
+	return found
 
 
 class _Invoice:
@@ -280,7 +293,7 @@ class TestReturnRepresentation:
 		assert outcome == "permanently_rejected"
 		assert fake.events == ["savepoint", "insert", "rollback"]
 		assert client.acks[0]["reason"]["category"] == "validation"
-		assert client.acks[0]["reason"]["message"].startswith("representation:")
+		assert client.acks[0]["reason"]["message"].startswith("RepresentationMismatch: representation:")
 		assert store.writes == []
 
 	def test_an_erp_derived_discount_after_insert_rolls_back(self, load_glue):
@@ -374,3 +387,40 @@ class TestReturnCompany:
 			load_glue(fake), _return(version=3), store=_Store(existing=_POSTED_RETURN)
 		)
 		assert outcome == "failed_transient"
+
+
+class TestReversalRejectionReasonAttribution:
+	"""RT-409 (AD-POSTING-001 D-7): the reversal leg names the failing check and logs it at ERROR."""
+
+	def test_an_unclassified_error_is_prefixed_with_its_class(self, load_glue, monkeypatch):
+		def _raise(self):
+			raise NameError("name 'flt' is not defined")
+
+		monkeypatch.setattr(_Invoice, "insert", _raise)
+		fake = _Frappe()
+		outcome, client, store = _post(load_glue(fake), _return())
+		assert outcome == "permanently_rejected"
+		assert client.acks[0]["reason"] == {"category": "other", "message": "NameError: name 'flt' is not defined"}
+		assert "rollback" in fake.events and store.writes == []
+
+	def test_a_build_rejection_is_prefixed_and_logged_at_error(self, load_glue):
+		fake = _Frappe()
+		_outcome, client, _store = _post(load_glue(fake), _return(), tender_map={})
+		message = client.acks[0]["reason"]["message"]
+		assert message.startswith("UnmappedTender: ")
+		level, record = _signal(fake, "posting.rejected")
+		assert level == "error"
+		assert record["category"] == "validation" and record["reason_message"] == message
+
+	def test_a_literal_reason_is_not_prefixed(self, load_glue):
+		fake = _Frappe()
+		_outcome, client, _store = _post(load_glue(fake), dataclasses.replace(_return(), reversal_of=None))
+		assert client.acks[0]["reason"]["message"] == "reversal work-item carries no reversalOf (return_against unresolvable)"
+
+	def test_reconciliation_required_is_logged_at_error_with_the_wire_reason(self, load_glue):
+		fake = _Frappe(after_submit={"items": _repriced_row(), "grand_total": -90.0})
+		_outcome, client, _store = _post(load_glue(fake), _return())
+		level, record = _signal(fake, "posting.reconciliation_required")
+		assert level == "error"
+		assert record["category"] == "validation"
+		assert record["reason_message"] == client.acks[0]["reason"]["message"]

@@ -8,6 +8,8 @@ Maps connector-internal failure kinds onto the 012 CLOSED RejectionReason.catego
 code (FR-007). Failure messages carry no secrets (Principle V / Gate G4). No frappe.
 """
 
+import time
+
 import pytest
 
 from retail_tower_erpnext_connector.connector.posting import contracts as c
@@ -116,3 +118,41 @@ class TestReasonMessageBounds:
     def test_secrets_are_still_redacted_after_normalisation(self):
         reason = r.to_rejection_reason(r.FailureKind.OTHER, message="<p>token=abc123secret</p>")
         assert "abc123secret" not in reason.message
+
+
+class TestScrubberHardening:
+    """RT-409 (Gate G4): the gaps probed at Connector ``3d03ea0``."""
+
+    @pytest.mark.parametrize(
+        "dirty, secret",
+        [
+            ("dp2_token=abc123", "abc123"),  # the Connector Settings field holding the Backend-Core token
+            ("access_token: xyz", "xyz"),
+            ("client_secret=s3cr3t", "s3cr3t"),
+            ("pwd=hunter2", "hunter2"),
+            ("passwd=hunter2", "hunter2"),
+            ('{"dp2_token": "abc123"}', "abc123"),
+            ("DP2_TOKEN: abc123", "abc123"),
+            ("x-auth-token: abc123", "abc123"),
+        ],
+    )
+    def test_a_credential_key_ending_an_identifier_is_redacted(self, dirty, secret):
+        clean = r.scrub_message(dirty)
+        assert secret not in clean
+        assert "[redacted]" in clean
+
+    def test_an_identifier_that_only_contains_a_key_word_is_kept(self):
+        assert r.scrub_message("token_count: 5") == "token_count: 5"
+
+    def test_entity_encoded_markup_is_stripped_after_unescaping(self):
+        assert r.plain_bounded_message("&lt;b&gt;x&lt;/b&gt;") == "x"
+
+    def test_an_unescaped_comparison_is_not_mistaken_for_a_tag(self):
+        assert r.plain_bounded_message("qty 1 &lt; 2 &gt; 0") == "qty 1 < 2 > 0"
+
+    @pytest.mark.parametrize("dirty", ["a-" * 20000, "x_" * 20000, "_token" * 8000])
+    def test_long_messages_scrub_in_linear_time(self, dirty):
+        # Scrubbing runs before the 1000-char bound; a quadratic key pattern stalled for ~1 min here.
+        start = time.monotonic()
+        r.plain_bounded_message(dirty)
+        assert time.monotonic() - start < 1.0

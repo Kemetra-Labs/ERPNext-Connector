@@ -275,3 +275,74 @@ class TestIsolatedRejectionCarriesTheVersion:
         wire, key = _reject_isolated(item)
         assert "resolutionVersion" not in wire
         assert key == "wi-B:permanently_rejected"
+
+
+class _Response:
+    def __init__(self, status: int, body: dict | None = None):
+        self.status, self.headers, self.body = status, {}, body or {}
+
+
+class _BackendCoreAck:
+    """A transport that enforces Backend-Core's ack contract: ``reason.message`` is 1..1000 chars.
+
+    Anything else is answered 400, which ``PostingFeedClient._interpret_ack`` raises as RuntimeError.
+    """
+
+    def __init__(self, page: dict):
+        self.page, self.posted = page, []
+
+    def get(self, path, *, params, headers):
+        return self.page
+
+    def post(self, path, *, json, headers):
+        self.posted.append(json)
+        message = json.get("reason", {}).get("message", "")
+        if not 1 <= len(message) <= 1000:
+            return _Response(400, {"code": "validation_failed"})
+        return _Response(201)
+
+
+def _malformed_with(value: str) -> dict:
+    """A malformed item whose parse error echoes ``value`` verbatim (``got {value!r}``)."""
+    item = _good_item("B")
+    item["sale"]["tenders"] = [{"method": value, "amount": "100.00"}]
+    return item
+
+
+class TestInvalidItemReasonIsBounded:
+    """RT-409 scope 3: the isolated-item reason goes through the same scrub + bound as every reason."""
+
+    def test_a_400_on_an_isolated_item_ack_escapes_the_page(self):
+        # The path the issue asked to verify: Backend-Core's 400 is a RuntimeError the loop does not
+        # catch, so the poller never saves the cursor and re-pulls the page every tick.
+        page = {"items": [_bad_item("B")], "cursor": "page-1", "next_page_token": None}
+
+        class Refusing(_BackendCoreAck):
+            def post(self, path, *, json, headers):
+                return _Response(400)
+
+        client = t.PostingFeedClient(Refusing(page), correlation_id="r")
+        with pytest.raises(RuntimeError, match="unexpected ack status 400"):
+            w.process_page(client, client, since=None, post_valid=lambda wi: None)
+
+    def test_an_over_long_parse_error_no_longer_stalls_the_page(self):
+        page = {"items": [_malformed_with("x" * 5000), _good_item("C")], "cursor": "page-1", "next_page_token": None}
+        transport = _BackendCoreAck(page)
+        client = t.PostingFeedClient(transport, correlation_id="r")
+        posted = []
+        result = w.process_page(client, client, since=None, post_valid=lambda wi: posted.append(wi.external_id))
+        assert result.cursor == "page-1" and result.rejected_refs == ("wi-B",)
+        assert posted == ["C"]
+        (ack,) = transport.posted
+        assert ack["reason"]["category"] == "validation"
+        assert 1 <= len(ack["reason"]["message"]) <= 1000
+        assert ack["reason"]["message"].startswith("malformed_work_item: SaleTender.method")
+
+    def test_a_credential_echoed_by_the_parse_error_is_scrubbed(self):
+        wire, _key = _reject_isolated(_malformed_with("dp2_token=abc123"))
+        assert "abc123" not in wire["reason"]["message"]
+        assert "[redacted]" in wire["reason"]["message"]
+
+    def test_markup_echoed_by_the_parse_error_is_plain_text(self):
+        wire, _key = _reject_isolated(_malformed_with("<b>cash</b>"))
+        assert "<" not in wire["reason"]["message"]
