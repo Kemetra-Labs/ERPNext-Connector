@@ -474,3 +474,12 @@ class TestDeepReviewRound:
 		assert glue.run_preflight(_Settings(), _MAPS) is False
 		assert fake.writes[-1][1]["compatibility_status"] == "CRITICAL"
 		assert "compatibility.failed" in _events(fake)
+
+
+class TestGroupWarehouseRead:
+	def test_a_group_warehouse_is_read_as_such(self, load_glue):
+		site = _site()
+		site["records"][("Warehouse", "Stores - RT")]["is_group"] = 1
+		snapshot = load_glue(_Frappe(site)).read_snapshot(_Settings(), _MAPS)
+		(warehouse,) = [r for r in snapshot.mapped if r.doctype == "Warehouse"]
+		assert warehouse.is_group is True

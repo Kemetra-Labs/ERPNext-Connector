@@ -259,3 +259,25 @@ class TestReviewRound:
 	)
 	def test_the_new_fields_are_part_of_the_fingerprint(self, field, value):
 		assert cp.evaluate(_snapshot(**{field: value})).fingerprint != cp.evaluate(_snapshot()).fingerprint
+
+
+class TestGroupWarehouse:
+	"""Codex PR #67: ERPNext rejects a group warehouse on a stock-moving invoice; pause instead (D2)."""
+
+	def test_a_mapped_group_warehouse_is_critical(self):
+		mapped = (
+			cp.MappedRecord(
+				"Warehouse", "All Stores", exists=True, disabled=False, company="RT Co", is_group=True
+			),
+		)
+		critical = _critical(mapped=mapped)
+		assert len(critical) == 1 and "All Stores" in critical[0] and "group" in critical[0]
+
+	def test_the_group_flag_is_part_of_the_fingerprint(self):
+		def _snap(is_group):
+			record = cp.MappedRecord(
+				"Warehouse", "W", exists=True, disabled=False, company="RT Co", is_group=is_group
+			)
+			return cp.evaluate(_snapshot(mapped=(record,))).fingerprint
+
+		assert _snap(True) != _snap(False)

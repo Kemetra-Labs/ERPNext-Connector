@@ -174,7 +174,7 @@ def _mapped_records(maps: Mapping[str, Mapping], company: str | None) -> tuple[M
 
 def _read_record(doctype: str, name: str, company: str | None) -> MappedRecord:
 	flag = _FLAGS[doctype][0]
-	fields = [flag, "company"] if doctype == "Warehouse" else [flag]
+	fields = [flag, "company", "is_group"] if doctype == "Warehouse" else [flag]
 	record = _record_for(doctype, name, frappe.db.get_value(doctype, name, fields, as_dict=True))
 	if doctype == "Mode of Payment" and record.exists:
 		record = dataclasses.replace(record, has_company_account=_has_company_account(name, company))
@@ -202,6 +202,7 @@ def _record_for(doctype: str, name: str, row) -> MappedRecord:
 		exists=True,
 		disabled=(not value) if enabled_flag else value,
 		company=row.get("company"),
+		is_group=bool(int(row.get("is_group") or 0)),
 	)
 
 

@@ -18,7 +18,7 @@ fingerprint. It is composed with the Gate G5 index guard (``index_guard``), neve
   Warehouse belonging to another company (comment 11556);
 * a mapped UOM, Warehouse, Customer or Mode of Payment that is missing or disabled, or a mapped Mode of
   Payment without an account for ``default_company`` (ERPNext v15 ``get_bank_cash_account`` would
-  throw for every tender sale);
+  throw for every tender sale), or a mapped group Warehouse (ERPNext rejects it on the invoice);
 * a tax source that would auto-apply a tax row to a Retail Tower invoice (D4);
 * a check this ERPNext minor cannot support (e.g. v15 < 15.67 has no Accounts Settings
   ``add_taxes_from_taxes_and_charges_template``), with an explicit message.
@@ -79,6 +79,8 @@ class MappedRecord:
 	company: str | None = None
 	# Mode of Payment only: has a Mode of Payment Account for default_company (None = not applicable).
 	has_company_account: bool | None = None
+	# Warehouse only: a group warehouse cannot hold stock (ERPNext rejects it on the invoice).
+	is_group: bool = False
 
 
 @dataclass(frozen=True)
@@ -200,6 +202,10 @@ def _mapped_findings(snapshot: SiteSnapshot) -> list[str]:
 			findings.append(f"mapped {record.doctype} {record.name!r} does not exist")
 		elif record.disabled:
 			findings.append(f"mapped {record.doctype} {record.name!r} is disabled")
+		elif record.is_group:
+			findings.append(
+				f"mapped {record.doctype} {record.name!r} is a group warehouse (cannot hold stock)"
+			)
 		elif record.has_company_account is False:
 			findings.append(f"mapped {record.doctype} {record.name!r} has no account for the default company")
 	return findings
@@ -242,7 +248,7 @@ def fingerprint(snapshot: SiteSnapshot) -> str:
 		"default_company": snapshot.default_company,
 		"company_currency": snapshot.company_currency,
 		"mapped": sorted(
-			[r.doctype, r.name, r.exists, r.disabled, r.company or "", str(r.has_company_account)]
+			[r.doctype, r.name, r.exists, r.disabled, r.company or "", str(r.has_company_account), r.is_group]
 			for r in snapshot.mapped
 		),
 		"tax_sources": sorted(snapshot.tax_sources),
