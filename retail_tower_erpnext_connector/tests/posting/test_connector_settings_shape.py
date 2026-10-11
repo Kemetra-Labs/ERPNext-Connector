@@ -141,3 +141,37 @@ class TestTenderModeMap:
         # test_foundation's FR-005 scan rejects DocType names resembling business data.
         hints = ("item", "stock", "price", "sales", "invoice", "warehouse", "bin")
         assert not [h for h in hints if h in row["name"].lower()]
+
+
+class TestCompatibilityProfileFields:
+    """RT-379 schema change: the posting currency the profile checks, and the read-only status (D3)."""
+
+    def test_posting_currency_is_an_operator_link_to_currency(self, fields_by_name: dict[str, dict]):
+        f = fields_by_name["posting_currency"]
+        assert f["fieldtype"] == "Link" and f["options"] == "Currency"
+        assert not f.get("read_only")
+
+    @pytest.mark.parametrize(
+        ("fieldname", "fieldtype"),
+        [
+            ("compatibility_status", "Data"),
+            ("compatibility_checked_at", "Datetime"),
+            ("compatibility_fingerprint", "Data"),
+            ("compatibility_report", "Small Text"),
+        ],
+    )
+    def test_status_fields_are_read_only(self, fields_by_name: dict[str, dict], fieldname, fieldtype):
+        f = fields_by_name[fieldname]
+        assert f["fieldtype"] == fieldtype and f.get("read_only") == 1
+
+    def test_every_new_field_is_in_the_field_order(self, doctype: dict):
+        new = {
+            "compatibility_section",
+            "posting_currency",
+            "compatibility_status",
+            "compatibility_checked_at",
+            "compatibility_fingerprint",
+            "compatibility_report",
+        }
+        assert new <= set(doctype["field_order"])
+        assert {f["fieldname"] for f in doctype["fields"]} == set(doctype["field_order"])
