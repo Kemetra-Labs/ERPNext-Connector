@@ -27,7 +27,9 @@ def _payload(*, sign=1):
 	return {
 		"doctype": "Sales Invoice",
 		"customer": "Walk-in",
+		"company": _COMPANY,  # RT-378 finding 2: set explicitly by the builder
 		"currency": "EGP",
+		"ignore_pricing_rule": 1,
 		"items": [
 			{
 				"item_code": "ITEM-A",
@@ -59,6 +61,7 @@ def _doc(*, sign=1):
 		"currency": "EGP",
 		"customer": "Walk-in",
 		"company": _COMPANY,
+		"ignore_pricing_rule": 1,
 		"grand_total": sign * 29.49,
 		"taxes": [],
 		"items": [
@@ -83,9 +86,9 @@ def _row(item_code, uom, **numbers):
 	}
 
 
-def _check(doc, payload=None, *, company=_COMPANY, exempt=frozenset()):
-	expected = expected_from_payload(payload or _payload(), company=company, exempt=exempt)
-	return check_representation(expected, persisted_from_doc(doc))
+def _check(doc, payload=None, *, exempt=frozenset(), legacy_allowed=False):
+	expected = expected_from_payload(payload or _payload(), exempt=exempt)
+	return check_representation(expected, persisted_from_doc(doc), legacy_allowed=legacy_allowed)
 
 
 def _with_line(field, value, line=0):
@@ -211,9 +214,11 @@ class TestDocumentMismatch:
 		doc["grand_total"] = None
 		assert _check(doc) is not None
 
-	def test_the_expected_company_is_required(self):
+	@pytest.mark.parametrize("company", [None, ""])
+	def test_the_payload_must_carry_a_company(self, company):
+		payload = {**_payload(), "company": company}
 		with pytest.raises(RepresentationMismatch, match=r"^representation:"):
-			expected_from_payload(_payload(), company=None)
+			expected_from_payload(payload)
 
 
 class TestExemptions:
@@ -227,7 +232,7 @@ class TestExemptions:
 
 	def test_an_unknown_exemption_is_refused(self):
 		with pytest.raises(ValueError):
-			expected_from_payload(_payload(), company=_COMPANY, exempt=frozenset({"rate"}))
+			expected_from_payload(_payload(), exempt=frozenset({"rate"}))
 
 
 class TestMismatchException:
@@ -285,14 +290,46 @@ def _work_item(reversal_kind=None):
 
 
 class TestReplayExemptions:
-	"""On replay RT-331 owns the warehouse; a return takes UOM and customer from the original invoice."""
+	"""On replay RT-331 owns the warehouse. The frozen resolution carries no UOM or customer, and
+	today's maps may differ from the ones the invoice was posted with, so a replay never compares them
+	(the insert-time check did). Same for every kind."""
 
-	def test_a_sale_is_held_to_everything_but_the_warehouse(self):
-		assert replay_exemptions(_work_item()) == frozenset({"warehouse"})
+	@pytest.mark.parametrize("kind", [None, "void", "refund", "return"])
+	def test_a_replay_exempts_warehouse_uom_and_customer(self, kind):
+		assert replay_exemptions(_work_item(kind)) == frozenset({"warehouse", "uom", "customer"})
 
-	@pytest.mark.parametrize("kind", ["void", "refund"])
-	def test_a_void_or_refund_is_held_to_its_mapped_uom_and_customer(self, kind):
-		assert replay_exemptions(_work_item(kind)) == frozenset({"warehouse"})
 
-	def test_a_return_takes_uom_and_customer_from_the_original(self):
-		assert replay_exemptions(_work_item("return")) == frozenset({"warehouse", "uom", "customer"})
+class TestPricingFlagSplit:
+	"""RT-378 finding 3: ``ignore_pricing_rule`` separates RT-377+ invoices (1) from older ones (0)."""
+
+	def test_a_fresh_invoice_without_the_flag_is_a_mismatch(self):
+		doc = {**_doc(), "ignore_pricing_rule": 0}
+		reason = _check(doc)
+		assert reason is not None and "ignore_pricing_rule" in reason
+
+	def _old_invoice(self):
+		"""A pre-RT-377 invoice: ERPNext filled its own list price and the difference as a discount,
+		and its company was ERPNext's default (the builder set none)."""
+		doc = {**_doc(), "ignore_pricing_rule": 0, "company": "ERPNext Default Co"}
+		doc["items"][0].update(price_list_rate=10.0, discount_amount=0.5, margin_type="Amount")
+		return doc
+
+	def test_an_old_invoice_on_replay_skips_list_price_discount_margin_and_company(self):
+		assert _check(self._old_invoice(), legacy_allowed=True) is None
+
+	def test_an_old_invoice_on_replay_is_still_held_to_the_rate_it_was_sent(self):
+		doc = self._old_invoice()
+		doc["items"][0].update(rate=9.0, amount=18.0)
+		doc["grand_total"] = 28.49
+		assert _check(doc, legacy_allowed=True) is not None
+
+	@pytest.mark.parametrize(
+		("field", "value"), [("currency", "USD"), ("taxes", [{"tax_amount": 1.0}]), ("grand_total", 1.0)]
+	)
+	def test_an_old_invoice_on_replay_is_still_held_to_currency_tax_and_total(self, field, value):
+		doc = {**self._old_invoice(), field: value}
+		assert _check(doc, legacy_allowed=True) is not None
+
+	def test_a_new_invoice_on_replay_gets_the_full_field_set(self):
+		doc = _with_line("discount_amount", 0.5)
+		assert _check(doc, legacy_allowed=True) is not None

@@ -74,7 +74,7 @@ class _Invoice:
 
 	def get(self, field):
 		# RT-378: ERPNext holds the payload as sent, on the site default company, plus computed totals.
-		return {**self.payload, "company": "RT Company", **self.values}.get(field)
+		return {"company": "RT Company", **self.payload, **self.values}.get(field)
 
 	def reload(self):
 		pass  # RT-378 read-back after submit: the database holds what insert computed

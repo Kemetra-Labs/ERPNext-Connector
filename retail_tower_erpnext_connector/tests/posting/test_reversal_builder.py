@@ -584,3 +584,8 @@ class TestRepricingProtection:
 		for item in doc["items"]:
 			assert item["price_list_rate"] == item["rate"]
 			assert not item["price_list_rate"].startswith("-")
+
+
+class TestExplicitCompany:
+	def test_the_credit_note_carries_the_given_company(self):
+		assert _build(company="RT Co")["company"] == "RT Co"

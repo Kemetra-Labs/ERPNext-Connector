@@ -73,7 +73,7 @@ class _Invoice:
 
 	def get(self, field):
 		# RT-378: ERPNext holds the payload as sent, on the site default company, plus computed totals.
-		return {**self.payload, "company": "RT Company", **self.values}.get(field)
+		return {"company": "RT Company", **self.payload, **self.values}.get(field)
 
 	def reload(self):
 		pass  # RT-378 read-back after submit: the database holds what insert computed
@@ -112,7 +112,10 @@ class _Frappe(types.ModuleType):
 		assert filters == _ORIGINAL
 		if fields == ["posting_date", "posting_time"]:
 			return {"posting_date": datetime.date(2026, 6, 1), "posting_time": datetime.timedelta(hours=10)}
-		return {"update_stock": 1, "disable_rounded_total": 1, "is_pos": 0, "customer": "Original Customer"}
+		if fields == "company":
+			return "Original Co"  # RT-378: a reversal replay is held to the original's company
+		return {"update_stock": 1, "disable_rounded_total": 1, "is_pos": 0, "customer": "Original Customer",
+			"company": "Original Co"}
 
 	def get_all(self, doctype, **kwargs):
 		if doctype == "Sales Invoice Item":

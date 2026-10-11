@@ -56,11 +56,25 @@ class _Frappe(types.ModuleType):
 		self._posted_name = posted_name
 
 	def _get_value(self, doctype, filters, field, **_):
+		if field == "company":  # RT-378: the original invoice's company, read for a replay
+			return "RT Company"
 		self.lookups.append((doctype, dict(filters), field))
+		if filters.get("rt_external_id") == "POS-9001":
+			return "ACC-SINV-2026-00001"  # the ORIGINAL sale's invoice (a replay reads its company)
 		return self._posted_name
 
-	def get_doc(self, *_args, **_kwargs):
-		pytest.fail("a refund must never build or submit a Sales Invoice")
+	def get_doc(self, doctype, name=None):
+		if name is None:
+			pytest.fail("a refund must never build or submit a Sales Invoice")
+		return _legacy_refund_invoice()  # RT-378: an existing invoice is read back to verify it
+
+
+def _legacy_refund_invoice():
+	"""The legacy (pre-RT-71, pre-RT-377) refund credit note as ERPNext holds it."""
+	row = {"item_code": "ITEM-A", "qty": -2.0, "uom": "Nos", "rate": 100.0, "amount": -200.0,
+		"warehouse": "Stores - A", "price_list_rate": 100.0}
+	return {"docstatus": 1, "currency": "EGP", "customer": "Walk-in", "company": "RT Company",
+		"ignore_pricing_rule": 0, "grand_total": -200.0, "taxes": [], "items": [row]}
 
 
 class _Client:
@@ -179,8 +193,8 @@ class TestRefundContainmentInGlue:
 		assert ack["ack"]["outcome"] == "posted"
 		assert ack["ack"]["documentRef"]["name"] == "ACC-SINV-2026-00028"
 		assert [ref.name for _key, ref in store.writes] == ["ACC-SINV-2026-00028"]  # back-filled
-		# The lookup used the reversal's own provenance (work_item_ref), never the sale's id.
-		(_doctype, filters, _field), = fake.lookups
+		# The recovery lookup used the reversal's own provenance (work_item_ref), never the sale's id.
+		_doctype, filters, _field = fake.lookups[0]
 		assert filters["rt_external_id"] == "44444444-4444-4444-8444-444444444444"
 		assert filters["docstatus"] == 1
 
@@ -191,4 +205,5 @@ class TestRefundContainmentInGlue:
 		store = _Store(recorded=ErpnextDocumentRef(doctype="Sales Invoice", name="ACC-SINV-2026-00028"))
 		assert _post(glue, store, client) == "posted"
 		assert client.acks[0]["ack"]["documentRef"]["name"] == "ACC-SINV-2026-00028"
-		assert fake.lookups == []  # the replay guard answered first
+		# The replay guard answered first: no recovery lookup by the reversal's own provenance.
+		assert all(f["rt_external_id"] != "44444444-4444-4444-8444-444444444444" for _d, f, _x in fake.lookups)

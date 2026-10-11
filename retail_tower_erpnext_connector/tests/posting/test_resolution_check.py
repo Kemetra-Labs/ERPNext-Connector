@@ -17,6 +17,7 @@ from retail_tower_erpnext_connector.connector.posting.resolution_check import (
 	InvoiceLine,
 	InvoiceSnapshot,
 	check_existing,
+	check_replayed_representation,
 )
 
 _A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -263,12 +264,13 @@ def _expected(rate="10.00"):
 	payload = {
 		"currency": "EGP",
 		"customer": "Walk-in",
+		"company": "RT Co",
 		"items": [{"item_code": "ITEM-A", **line}, {"item_code": "ITEM-B", **line}],
 	}
-	return expected_from_payload(payload, company="RT Co", exempt=frozenset({"warehouse"}))
+	return expected_from_payload(payload, exempt=frozenset({"warehouse"}))
 
 
-def _persisted(rate=10.0):
+def _persisted(rate=10.0, flag=1):
 	row = {
 		"qty": 1.0,
 		"uom": "Nos",
@@ -286,6 +288,7 @@ def _persisted(rate=10.0):
 			"currency": "EGP",
 			"customer": "Walk-in",
 			"company": "RT Co",
+			"ignore_pricing_rule": flag,
 			"grand_total": 20.0,
 			"taxes": [],
 			"items": [{"item_code": "ITEM-A", **row}, {"item_code": "ITEM-B", **row}],
@@ -321,6 +324,17 @@ class TestRepresentationOnReplay:
 
 	def test_without_an_expected_representation_only_the_identity_is_checked(self):
 		assert check_existing(_item(), _represented(_persisted(rate=9.0))) is None
+
+	def test_an_old_invoice_is_checked_with_the_reduced_field_set(self):
+		# RT-378 finding 3: pre-RT-377 (ignore_pricing_rule 0) is not held to list price / discount.
+		old = _persisted(flag=0)
+		assert check_existing(_item(), _represented(old), expected=_expected()) is None
+
+	def test_the_representation_alone_can_be_checked_for_an_unversioned_replay(self):
+		# Unversioned work items skip the RT-331 identity checks but not the representation.
+		assert check_replayed_representation(_represented(_persisted()), _expected()) is None
+		reason = check_replayed_representation(_represented(_persisted(rate=9.0)), _expected())
+		assert reason is not None and reason.startswith("representation:")
 
 	def test_an_expected_representation_without_a_persisted_one_is_a_mismatch(self):
 		reason = check_existing(_item(), _represented(None), expected=_expected())

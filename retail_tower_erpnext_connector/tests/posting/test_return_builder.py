@@ -236,3 +236,9 @@ class TestRepricingProtection:
 		for item in doc["items"]:
 			assert item["price_list_rate"] == item["rate"]
 			assert not item["price_list_rate"].startswith("-")
+
+
+class TestExplicitCompany:
+	def test_the_return_carries_the_given_company(self):
+		# RT-378 finding 2: the glue then replaces it with the ORIGINAL invoice's company when linking.
+		assert _build(_return(), company="RT Co")["company"] == "RT Co"

@@ -66,7 +66,7 @@ class _Invoice:
 
 	def get(self, field):
 		# RT-378: ERPNext holds the payload as sent, on the site default company, plus computed totals.
-		return {**self.payload, "company": "RT Company", **self.values}.get(field)
+		return {"company": "RT Company", **self.payload, **self.values}.get(field)
 
 	def reload(self):
 		self._fake.events.append("reload")
@@ -90,6 +90,8 @@ class _Frappe(types.ModuleType):
 		self.events, self.payloads = [], []
 		self.after_insert, self.after_submit = after_insert or {}, after_submit or {}
 		self.posted_row = {}  # RT-378 replay: overrides on the already-posted return's row
+		self.original_company = "Original Co"
+		self.posted_company = "Original Co"  # RT-378 replay: the already-posted return's company
 		self._rows = [
 			{"name": "row-a", "item_code": "ITEM-A", "qty": 3.0, "idx": 1, "warehouse": "Stores - A",
 				"rt_line_ref": _A if line_refs else None, "uom": "Box", "conversion_factor": 12.0},
@@ -112,7 +114,10 @@ class _Frappe(types.ModuleType):
 		assert filters == _ORIGINAL
 		if fields == ["posting_date", "posting_time"]:
 			return {"posting_date": datetime.date(2026, 6, 1), "posting_time": datetime.timedelta(hours=10)}
-		return {"update_stock": 1, "disable_rounded_total": 1, "is_pos": 0, "customer": "Original Customer"}
+		if fields == "company":
+			return self.original_company  # RT-378: a return replay is held to the original's company
+		return {"update_stock": 1, "disable_rounded_total": 1, "is_pos": 0, "customer": "Original Customer",
+			"company": self.original_company}
 
 	def get_all(self, doctype, **kwargs):
 		if doctype == "Sales Invoice Item":
@@ -123,7 +128,7 @@ class _Frappe(types.ModuleType):
 	def get_doc(self, payload, name=None):
 		if name is not None:  # RT-378 replay: the already-posted return read back from the database
 			assert (payload, name) == ("Sales Invoice", _POSTED_RETURN.name)
-			return _posted_return_doc(**self.posted_row)
+			return {**_posted_return_doc(**self.posted_row), "company": self.posted_company}
 		self.payloads.append(payload)
 		return _Invoice(payload, self)
 
@@ -221,6 +226,7 @@ class TestReturnInGlue:
 			("ITEM-A", "-1", "-100.00", "row-a", "Stores - A", "Box")
 		]
 		assert payload["customer"] == "Original Customer"  # not the current store map's "Walk-in"
+		assert payload["company"] == "Original Co"  # RT-378: the original's, not the site default
 		# Greptile PR #51: the glue must READ the original row's conversion factor, not only copy it.
 		assert payload["items"][0]["conversion_factor"] == 12.0
 		assert payload["payments"] == [{"mode_of_payment": "Cash", "amount": "-100.00"}]
@@ -304,8 +310,8 @@ def _posted_return_doc(**row_overrides):
 	row = {"item_code": "ITEM-A", "qty": -1.0, "uom": "Box", "rate": 100.0, "amount": -100.0,
 		"warehouse": "Stores - A", "rt_line_ref": _A, "price_list_rate": 100.0, "discount_percentage": 0.0,
 		"discount_amount": 0.0, "margin_type": "", "margin_rate_or_amount": 0.0, **row_overrides}
-	return {"docstatus": 1, "currency": "EGP", "customer": "Original Customer", "company": "RT Company",
-		"grand_total": row["amount"], "taxes": [], "items": [row]}
+	return {"docstatus": 1, "currency": "EGP", "customer": "Original Customer", "company": "Original Co",
+		"ignore_pricing_rule": 1, "grand_total": row["amount"], "taxes": [], "items": [row]}
 
 
 class TestReturnReplay:
@@ -340,3 +346,31 @@ class TestReturnReplay:
 			customer_map={},
 		)
 		assert outcome == "posted", client.acks
+
+
+class TestReturnCompany:
+	"""RT-378 review finding 2: a credit note is held to the ORIGINAL invoice's company."""
+
+	def test_an_original_without_a_company_is_rejected_before_insert(self, load_glue):
+		fake = _Frappe()
+		fake.original_company = None
+		outcome, client, _store = _post(load_glue(fake), _return())
+		assert outcome == "permanently_rejected" and fake.payloads == []
+		assert client.acks[0]["reason"]["category"] == "validation"
+
+	def test_a_replayed_return_on_another_company_acks_reconciliation_required(self, load_glue):
+		fake = _Frappe()
+		fake.posted_company = "RT Company"  # the site default, not the original's company
+		outcome, client, _store = _post(
+			load_glue(fake), _return(version=3), store=_Store(existing=_POSTED_RETURN)
+		)
+		assert outcome == "reconciliation_required"
+		assert "company" in client.acks[0]["reason"]["message"]
+
+	def test_a_replayed_return_whose_original_has_no_company_cannot_be_verified(self, load_glue):
+		fake = _Frappe()
+		fake.original_company = None
+		outcome, _client, _store = _post(
+			load_glue(fake), _return(version=3), store=_Store(existing=_POSTED_RETURN)
+		)
+		assert outcome == "failed_transient"

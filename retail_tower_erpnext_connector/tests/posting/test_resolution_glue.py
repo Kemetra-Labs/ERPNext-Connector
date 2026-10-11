@@ -65,7 +65,7 @@ class _Invoice:
 
 	def get(self, field):
 		# RT-378: ERPNext holds the payload as sent, on the site default company, plus computed totals.
-		return {**self.payload, "company": "RT Company", **self.values}.get(field)
+		return {"company": "RT Company", **self.payload, **self.values}.get(field)
 
 	def reload(self):
 		pass  # RT-378 read-back after submit: the database holds what insert computed
@@ -91,13 +91,14 @@ _HONOURED_ROW = {
 class _Existing:
 	"""The EXISTING Sales Invoice as ``frappe.get_doc`` reads it back from the database."""
 
-	def __init__(self, docstatus, items):
+	def __init__(self, docstatus, items, flag=1):
 		grand = sum(row["amount"] for row in items)
 		self._fields = {
 			"docstatus": docstatus,
 			"currency": "EGP",
 			"customer": "Walk-in",
 			"company": "RT Company",
+			"ignore_pricing_rule": flag,  # RT-378: 0 = posted before RT-377
 			"grand_total": grand,
 			"taxes": [],
 			"items": items,
@@ -110,11 +111,11 @@ class _Existing:
 class _Frappe(types.ModuleType):
 	"""``invoice`` is what the EXISTING Sales Invoice holds: docstatus + item rows."""
 
-	def __init__(self, *, docstatus=1, items=(), unreadable=False, missing=False, company="RT Company"):
+	def __init__(self, *, docstatus=1, items=(), unreadable=False, missing=False, company="RT Company", flag=1):
 		super().__init__("frappe")
 		self.ValidationError = type("ValidationError", (Exception,), {})
 		self.DoesNotExistError = type("DoesNotExistError", (self.ValidationError,), {})
-		self.missing = missing
+		self.missing, self.flag = missing, flag
 		self.exceptions = types.SimpleNamespace(
 			UniqueValidationError=type("UniqueValidationError", (self.ValidationError,), {})
 		)
@@ -149,7 +150,7 @@ class _Frappe(types.ModuleType):
 			self._read(name)
 			if self.missing:
 				raise self.DoesNotExistError(f"Sales Invoice {name} not found")
-			return _Existing(self.docstatus, [dict(row) for row in self.items])
+			return _Existing(self.docstatus, [dict(row) for row in self.items], self.flag)
 		self.payloads.append(payload)
 		return _Invoice(payload, self)
 
@@ -304,13 +305,37 @@ class TestReplayVerification:
 		assert client.acks[0]["ack"] == {"outcome": "failed_transient", "resolutionVersion": 2}
 		assert client.acks[0]["key"] == f"{_REF}:failed_transient:9"
 
-	def test_a_legacy_work_item_echoes_posted_without_reading_the_invoice(self, load_glue):
-		fake = _Frappe(items=[{"item_code": "ITEM-OTHER", "warehouse": "X", "rt_line_ref": _A}])
+	def test_a_legacy_work_item_skips_the_identity_checks_but_not_the_representation(self, load_glue):
+		# RT-378 finding 3: an unversioned replay has no frozen resolution, so the RT-331 identity
+		# checks stay skipped (a warehouse other than any frozen one is fine) -- but it is read back.
+		fake = _Frappe(items=[{"item_code": "ITEM-A", "warehouse": "Some Old WH", "rt_line_ref": None}])
 		glue = load_glue(fake)
 		outcome, client = _post(glue, _work_item(version=None), _Store(existing=_EXISTING))
 		assert outcome == "posted"
-		assert fake.reads == []
+		assert fake.reads == [_EXISTING.name]
 		assert "resolutionVersion" not in client.acks[0]["ack"]
+
+	def test_a_legacy_work_item_whose_invoice_was_repriced_acks_reconciliation_required(self, load_glue):
+		row = {"item_code": "ITEM-A", "warehouse": "X", "rt_line_ref": _A, "rate": 90.0, "amount": 90.0}
+		fake = _Frappe(items=[row], flag=0)
+		outcome, client = _post(load_glue(fake), _work_item(version=None), _Store(existing=_EXISTING))
+		assert outcome == "reconciliation_required"
+		assert "resolutionVersion" not in client.acks[0]["ack"]
+		assert client.acks[0]["key"] == f"{_REF}:reconciliation_required"
+
+	def test_a_correct_pre_rt377_legacy_invoice_acks_posted(self, load_glue):
+		# ERPNext's own list price and an invented discount, but the rate Retail Tower sent (flag 0).
+		row = {"item_code": "ITEM-A", "warehouse": "X", "rt_line_ref": _A, "price_list_rate": 110.0,
+			"discount_amount": 10.0}
+		fake = _Frappe(items=[row], flag=0, company="ERPNext Default Co")
+		outcome, _client = _post(load_glue(fake), _work_item(version=None), _Store(existing=_EXISTING))
+		assert outcome == "posted"
+
+	def test_a_legacy_work_item_whose_invoice_is_unreadable_acks_failed_transient(self, load_glue):
+		fake = _Frappe(unreadable=True)
+		outcome, client = _post(load_glue(fake), _work_item(version=None), _Store(existing=_EXISTING))
+		assert outcome == "failed_transient"
+		assert client.acks[0]["ack"] == {"outcome": "failed_transient"}
 
 
 class TestReconciliationReasonIsBounded:
@@ -429,7 +454,7 @@ class TestReplayRepresentation:
 		outcome, _client = _post(glue, _work_item(), _Store(existing=_EXISTING))
 		assert outcome == "reconciliation_required"
 
-	def _replay_without_unit_map(self, glue, items):
+	def _replay_without_unit_map(self, glue):
 		client = _Client()
 		outcome = glue.post_work_item(
 			_work_item(),
@@ -443,20 +468,23 @@ class TestReplayRepresentation:
 		)
 		return outcome, client
 
-	def test_an_expected_representation_that_cannot_be_rebuilt_fails_closed(self, load_glue):
-		# Review finding 1: "cannot verify" is not a mismatch. Never posted (fail closed), but retryable:
-		# DP2's retry budget ends it as repairable, and a re-offer after the config fix verifies it.
+	def test_a_unit_map_change_since_the_sale_does_not_affect_the_replay(self, load_glue):
+		# Review trivial: the frozen resolution carries no UOM, so a replay never compares it against
+		# today's map (the insert-time check did). A matching invoice still acks posted.
 		row = {"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A}
-		outcome, client = self._replay_without_unit_map(load_glue(_Frappe(items=[row])), [row])
-		assert outcome == "failed_transient"
-		assert client.acks[0]["ack"] == {"outcome": "failed_transient", "resolutionVersion": 2}
-		assert client.acks[0]["key"] == f"{_REF}:failed_transient:9"
+		outcome, _client = self._replay_without_unit_map(load_glue(_Frappe(items=[row])))
+		assert outcome == "posted"
 
 	def test_an_identity_mismatch_is_still_reconciliation_when_the_rebuild_fails(self, load_glue):
-		# RT-331 identity is checked from the work item alone, before any rebuild.
+		# RT-331 identity is checked from the work item alone, before any rebuild (blank company).
 		row = {"item_code": "ITEM-OTHER", "warehouse": "Frozen WH", "rt_line_ref": _A}
-		outcome, _client = self._replay_without_unit_map(load_glue(_Frappe(items=[row])), [row])
+		outcome, _client = _post(load_glue(_Frappe(items=[row], company="")), _work_item(), _Store(existing=_EXISTING))
 		assert outcome == "reconciliation_required"
+
+	def test_a_persisted_uom_other_than_todays_map_still_posts(self, load_glue):
+		row = {"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A, "uom": "Box"}
+		outcome, _client = _post(load_glue(_Frappe(items=[row])), _work_item(), _Store(existing=_EXISTING))
+		assert outcome == "posted"
 
 	@pytest.mark.parametrize("company", [None, ""])
 	def test_a_replay_without_a_site_default_company_is_transient(self, load_glue, company):

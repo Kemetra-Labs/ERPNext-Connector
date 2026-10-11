@@ -49,7 +49,7 @@ class _Logger:
 	warning = error = info
 
 
-def _erp_view(payload, company):
+def _erp_view(payload):
 	"""What ERPNext would hold for ``payload`` when it honours it exactly (floats, like Frappe)."""
 	items = [
 		{
@@ -73,7 +73,8 @@ def _erp_view(payload, company):
 		"docstatus": 0,
 		"currency": payload["currency"],
 		"customer": payload["customer"],
-		"company": company,
+		"company": payload.get("company"),
+		"ignore_pricing_rule": payload.get("ignore_pricing_rule"),
 		"grand_total": grand,
 		"paid_amount": paid,
 		"change_amount": 0.0,
@@ -90,7 +91,7 @@ class _Invoice:
 		self.doc, self.db_row = {}, {}
 
 	def insert(self):
-		self.doc = _erp_view(self.payload, self._fake.company)
+		self.doc = _erp_view(self.payload)
 		self._fake.on_insert(self.doc)
 		self.db_row = copy.deepcopy(self.doc)
 		self._fake.events.append("insert")
@@ -291,6 +292,18 @@ class TestBeforeSubmit:
 		assert client.acks[0]["ack"]["reason"]["category"] == "validation"
 		assert client.acks[0]["ack"]["reason"]["message"].startswith("representation:")
 		assert store.writes == []
+
+	def test_the_sale_carries_the_site_default_company_explicitly(self, load_glue):
+		# Review finding 2: one source of truth with the check, never ERPNext's user-scoped default.
+		fake = _Frappe()
+		_post(load_glue(fake))
+		assert fake.payloads[0]["company"] == _COMPANY
+
+	def test_an_insert_that_drops_ignore_pricing_rule_is_rejected(self, load_glue):
+		fake = _Frappe(on_insert=lambda doc: doc.update(ignore_pricing_rule=0))
+		outcome, client, _store = _post(load_glue(fake))
+		assert outcome == "permanently_rejected"
+		assert "ignore_pricing_rule" in client.acks[0]["ack"]["reason"]["message"]
 
 	def test_an_honoured_cash_sale_posts(self, load_glue):
 		fake = _Frappe()

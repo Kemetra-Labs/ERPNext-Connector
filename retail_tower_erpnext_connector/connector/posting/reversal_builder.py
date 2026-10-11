@@ -104,6 +104,7 @@ def build_reversing_invoice(
 	warehouse_for: Callable[[str], dict],
 	customer_for: Callable[[str], str],
 	posting_stamp: PostingStamp | None = None,
+	company: str | None = None,
 ) -> dict:
 	"""Build the ERPNext return Sales-Invoice (credit note) payload for one ``reversal`` work-item.
 
@@ -138,6 +139,7 @@ def build_reversing_invoice(
 		warehouse_for=warehouse_for,
 		customer_for=customer_for,
 		mode_of_payment_for=_mode_from_original,
+		company=company,  # the glue replaces it with the original invoice's company (RT-378)
 	)
 
 	# A credit note IS a Sales Invoice with is_return=1.

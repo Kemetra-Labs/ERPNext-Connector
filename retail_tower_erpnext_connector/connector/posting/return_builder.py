@@ -93,6 +93,7 @@ def build_return_invoice(
 	resolvers: ReturnResolvers,
 	*,
 	posting_stamp: PostingStamp | None = None,
+	company: str | None = None,
 ) -> dict:
 	"""Build the return Sales-Invoice payload for one ``reversalKind: return`` work item.
 
@@ -111,6 +112,7 @@ def build_return_invoice(
 		warehouse_for=resolvers.warehouse_for,
 		customer_for=resolvers.customer_for,
 		mode_of_payment_for=resolvers.mode_of_payment_for,
+		company=company,  # the glue replaces it with the original invoice's company (RT-378)
 	)
 
 	doc["is_return"] = 1

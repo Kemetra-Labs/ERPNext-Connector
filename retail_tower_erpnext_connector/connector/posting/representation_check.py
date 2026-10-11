@@ -11,9 +11,16 @@ Retail Tower is the pricing authority (Pricing 656-659). ``ignore_pricing_rule``
   (``discount_percentage`` / ``discount_amount`` = 0) and no margin (empty ``margin_type``,
   ``margin_rate_or_amount`` = 0). An extra row (e.g. a free item) or a missing one is a mismatch.
 * **per document**: currency (ERPNext v15 holds it on the parent, not on Sales Invoice Item),
-  customer and company (the expected company for the store; today the site default); no tax row
-  (D4: Retail Tower sends none while Egyptian VAT is deferred); and ``grand_total`` equal to the sum
-  of the line amounts.
+  customer and company (set explicitly in the payload: the site default for a sale, the original
+  invoice's for a credit note); ``ignore_pricing_rule`` = 1 (RT-377); no tax row (D4: Retail Tower
+  sends none while Egyptian VAT is deferred); and ``grand_total`` equal to the sum of the line
+  amounts.
+
+**Old invoices on replay** (review finding 3): an invoice posted before RT-377 has
+``ignore_pricing_rule`` = 0 (the builder never set it and ERPNext's default is 0). With
+``legacy_allowed`` (replays only) such an invoice is held to the fields valid at any age (Item, qty,
+UOM, rate, amount, warehouse, currency, customer, no tax row, grand total) and NOT to list price,
+discount, margin or company, which Retail Tower did not send then. A fresh document must carry the flag.
 
 A return or void keeps ERPNext's sign convention (negative qty and amount, positive rate), so the
 payload and the document are compared as they are. Numbers compare as exact :class:`Decimal` built
@@ -79,28 +86,29 @@ class PersistedInvoice:
 	currency: object
 	customer: object
 	company: object
+	ignore_pricing_rule: object
 	grand_total: object
 	tax_rows: int
 	lines: tuple[Mapping[str, object], ...]
 
 
-def expected_from_payload(
-	payload: Mapping[str, object], *, company: str | None, exempt: frozenset[str] = frozenset()
-) -> ExpectedInvoice:
+def expected_from_payload(payload: Mapping[str, object], *, exempt: frozenset[str] = frozenset()) -> ExpectedInvoice:
 	"""The representation in a built Sales Invoice payload; ``exempt`` fields are not compared.
 
-	Raises :class:`RepresentationMismatch` when no expected company is known (fail closed) and
-	:class:`ValueError` for an exemption outside :data:`EXEMPTABLE`.
+	Raises :class:`RepresentationMismatch` when the payload carries no company (the site default is
+	not configured, or the original invoice has none: fail closed) and :class:`ValueError` for an
+	exemption outside :data:`EXEMPTABLE`.
 	"""
 	unknown = exempt - EXEMPTABLE
 	if unknown:
 		raise ValueError(f"cannot exempt {sorted(unknown)} from the representation check")
+	company = payload.get("company")
 	if not company:
 		raise RepresentationMismatch(f"{PREFIX} the expected company (site default) is not configured")
 	return ExpectedInvoice(
 		currency=str(payload["currency"]),
 		customer=None if "customer" in exempt else str(payload["customer"]),
-		company=company,
+		company=str(company),
 		lines=tuple(_expected_line(item, exempt) for item in payload["items"]),
 	)
 
@@ -122,6 +130,7 @@ def persisted_from_doc(doc) -> PersistedInvoice:
 		currency=doc.get("currency"),
 		customer=doc.get("customer"),
 		company=doc.get("company"),
+		ignore_pricing_rule=doc.get("ignore_pricing_rule"),
 		grand_total=doc.get("grand_total"),
 		tax_rows=len(doc.get("taxes") or ()),
 		lines=tuple(_row_values(row) for row in doc.get("items") or ()),
@@ -134,26 +143,35 @@ def _row_values(row) -> dict[str, object]:
 
 
 def replay_exemptions(work_item: PostingWorkItem) -> frozenset[str]:
-	"""The fields a replay does not compare against the rebuilt payload.
+	"""The fields a replay does not compare against the rebuilt payload (every kind).
 
 	The warehouse is RT-331's frozen-warehouse check (a void or return takes the original rows'
-	warehouses). A partial return also takes the original rows' UOM and the original invoice's
-	customer (``stock_policy.link_return_to_original``), which a rebuild cannot know.
+	warehouses). The frozen resolution carries no UOM or customer, and today's maps may differ from
+	the ones the invoice was posted with (a return also takes them from the original invoice), so a
+	replay relies on the insert-time check for them.
 	"""
-	reversal = work_item.reversal_of
-	if reversal is not None and reversal.reversal_kind == "return":
-		return frozenset({"warehouse", "uom", "customer"})
-	return frozenset({"warehouse"})
+	return frozenset({"warehouse", "uom", "customer"})
 
 
-def check_representation(expected: ExpectedInvoice, persisted: PersistedInvoice) -> str | None:
-	"""``None`` when ERPNext holds exactly ``expected``, else the first mismatch reason."""
-	reason = _document_mismatch(expected, persisted) or _lines_mismatch(expected.lines, persisted.lines)
+def check_representation(
+	expected: ExpectedInvoice, persisted: PersistedInvoice, *, legacy_allowed: bool = False
+) -> str | None:
+	"""``None`` when ERPNext holds exactly ``expected``, else the first mismatch reason.
+
+	``legacy_allowed`` (replays only): an invoice without ``ignore_pricing_rule`` predates RT-377 and is
+	held to the reduced field set. Otherwise a document without the flag is a mismatch.
+	"""
+	full = _number(persisted.ignore_pricing_rule or 0) == 1
+	if not full and not legacy_allowed:
+		return f"{PREFIX} document ignore_pricing_rule {persisted.ignore_pricing_rule!r} is not set (RT-377)"
+	reason = _document_mismatch(expected, persisted, full) or _lines_mismatch(
+		expected.lines, persisted.lines, full
+	)
 	return f"{PREFIX} {reason}" if reason else None
 
 
-def _document_mismatch(expected: ExpectedInvoice, persisted: PersistedInvoice) -> str | None:
-	for field in ("currency", "customer", "company"):
+def _document_mismatch(expected: ExpectedInvoice, persisted: PersistedInvoice, full: bool) -> str | None:
+	for field in ("currency", "customer", "company") if full else ("currency", "customer"):
 		want = getattr(expected, field)
 		if want is not None and _text(getattr(persisted, field)) != want:
 			return f"document {field} {getattr(persisted, field)!r} is not the sent {want!r}"
@@ -165,18 +183,24 @@ def _document_mismatch(expected: ExpectedInvoice, persisted: PersistedInvoice) -
 	return None
 
 
-def _lines_mismatch(expected: Sequence[ExpectedLine], rows: Sequence[Mapping[str, object]]) -> str | None:
+def _lines_mismatch(
+	expected: Sequence[ExpectedLine], rows: Sequence[Mapping[str, object]], full: bool
+) -> str | None:
 	if len(rows) != len(expected):
 		return f"ERPNext holds {len(rows)} item row(s); Retail Tower sent {len(expected)} line(s)"
 	for pos, (line, row) in enumerate(zip(expected, rows, strict=True), start=1):
-		reason = _line_mismatch(line, row)
+		reason = _line_mismatch(line, row, full)
 		if reason:
 			return f"line {pos} {reason}"
 	return None
 
 
-def _line_mismatch(line: ExpectedLine, row: Mapping[str, object]) -> str | None:
-	return _sent_values_mismatch(line, row) or _adjustment_mismatch(line, row)
+def _line_mismatch(line: ExpectedLine, row: Mapping[str, object], full: bool) -> str | None:
+	"""``full`` = RT-377+ invoice: also no ERP-derived list price, discount or margin."""
+	sent = _sent_values_mismatch(line, row)
+	if sent or not full:
+		return sent
+	return _adjustment_mismatch(line, row)
 
 
 def _sent_values_mismatch(line: ExpectedLine, row: Mapping[str, object]) -> str | None:

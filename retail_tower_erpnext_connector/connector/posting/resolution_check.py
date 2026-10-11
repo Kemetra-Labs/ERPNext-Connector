@@ -73,11 +73,16 @@ def check_existing(
 
 
 def _representation_mismatch(invoice: InvoiceSnapshot, expected: ExpectedInvoice | None) -> str | None:
-	if expected is None:
-		return None
+	return None if expected is None else check_replayed_representation(invoice, expected)
+
+
+def check_replayed_representation(invoice: InvoiceSnapshot, expected: ExpectedInvoice) -> str | None:
+	"""RT-378: the representation of an EXISTING invoice alone (an unversioned replay has no frozen
+	resolution, so the identity checks above are skipped for it). An invoice posted before RT-377
+	(``ignore_pricing_rule`` 0) is held to the reduced field set (``legacy_allowed``)."""
 	if invoice.representation is None:
 		return f"{PREFIX} the existing document's representation was not read"
-	return check_representation(expected, invoice.representation)
+	return check_representation(expected, invoice.representation, legacy_allowed=True)
 
 
 def _warehouse_mismatch(work_item: PostingWorkItem, invoice: InvoiceSnapshot) -> str | None:
