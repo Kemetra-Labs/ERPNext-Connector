@@ -1,6 +1,6 @@
 # Decision: ERPNext Pricing Representation Protection, Compatibility Profile & Post-Posting Verification
 
-**Jira**: RT-283 (Planning) | **Status**: 🟢 OWNER-RATIFIED (D1–D5, 2026-10-11) — ⏳ NOT IMPLEMENTED
+**Jira**: RT-283 (Planning) | **Status**: 🟢 OWNER-RATIFIED (D1–D6, 2026-10-11) — ⏳ NOT IMPLEMENTED
 **Source decisions**: Retail Tower Pricing & Store Overrides baseline (Confluence RETAIL page 23855106),
 decisions 649–687 — §R ERPNext boundary, §S ERPNext Compatibility Profile, §T Post-posting verification.
 **Follow-ups**: RT-376 (F1) · RT-377 (F2) · RT-378 (F3) · RT-379 (F4) · RT-380 (F5)
@@ -23,7 +23,7 @@ Sales Invoice and must never let ERPNext silently reprice it (decisions 656–65
 |---|---|---|
 | 650–654: explicit Item / UOM / qty / rate / amount | Sent | `posting/builder.py` |
 | 657: `ignore_pricing_rule`-equivalent | **Missing.** The flag is never set. Return and reversal builders compose on `build_sales_invoice`, so none of them set it. | `builder.py`, `return_builder.py`, `reversal_builder.py` |
-| 659: no ERP repricing | **Not proven.** ERPNext fills in missing item details on insert, so a matching selling Pricing Rule or price-list discount can rewrite `rate`, and `amount` is recomputed. Runtime proof is RT-376. | `frappe_glue._submit_atomically` |
+| 659: no ERP repricing | **Violated (RT-376, runtime-proven).** An enabled selling Pricing Rule silently repriced 9.50 → 9.00 on submit; per-document `ignore_pricing_rule=1` kept 9.50. ERPNext also fills `price_list_rate` from its own price list and records the difference as a line discount or margin. | `frappe_glue._submit_atomically` |
 | 665–674: Compatibility Profile | **Partial.** Only the Gate G5 index guard pauses posting. The version is declared, not enforced. | `index_guard.py`, `version-pin-upgrade-policy.md` |
 | 675–683: post-posting verification | **Mostly missing.** RT-78 `assert_settled` checks totals on paid invoices only. RT-331 `check_existing` checks docstatus, warehouse and item identity only on replay/recovery. | `tender.py`, `resolution_check.py` |
 | 684–687: no auto-cancel; idempotency; durable backlog; fail closed | Hold | G5 indexes, Posting Log, savepoint rollback, `reconciliation_required` |
@@ -35,14 +35,20 @@ Sales Invoice and must never let ERPNext silently reprice it (decisions 656–65
 Every Connector-built Sales Invoice carries `ignore_pricing_rule = 1`. It is set in `build_sales_invoice`, so
 sale, return and reversal all inherit it. The flag is **per document**. The Connector never disables Pricing
 Rules or edits Selling Settings or any other global ERP configuration (668/669): the site may also serve
-ERP-native sales. The flag alone is not trusted as proof; B verifies the outcome.
+ERP-native sales.
+
+Every item line also carries **`price_list_rate` = `rate`** (D6). With only the flag, ERPNext fills
+`price_list_rate` from its own price list and records the difference as an invented line discount (price
+below list) or margin (price above list), which violates 655/658. RT-376 showed `price_list_rate = rate` gives
+zero discount and no margin. The flag and the field are not trusted as proof; B verifies the outcome.
 
 ### B — Representation verification (675–687) → RT-378
 
 A pure, frappe-free `posting/representation_check.py` compares the ERP document against the payload.
 It covers every commercial field the Connector sends:
 
-- **Per line** (Sales Invoice Item): Item, qty, UOM, rate, amount and warehouse, exactly.
+- **Per line** (Sales Invoice Item): Item, qty, UOM, rate, amount and warehouse, exactly; plus
+  `price_list_rate` = rate, `discount_percentage` = 0, `discount_amount` = 0 and no margin (D6).
 - **Per document** (Sales Invoice): currency (ERPNext v15 holds currency on the parent, not on Sales
   Invoice Item), customer, and company (the expected company for the store; today the site default).
   It also requires no tax rows that Retail Tower did not send, and grand total equal to the sum of line
@@ -83,13 +89,14 @@ existing G5 index guard, not a replacement for it.
 | D3 | Compatibility visibility is **Connector-local** (Connector Settings status + structured logs). An Admin Console surface needs a separate contract-first Backend-Core item. |
 | D4 | While Egyptian VAT is deferred, an auto-applied tax row on a Retail Tower invoice **fails closed** (critical in preflight, mismatch in B). Exact tax verification (681) waits for the Fiscal contract. |
 | D5 | The supported set stays **v15** until RT-201 decides v16. RT-201 V3 carries the 657/671 pricing regression. |
+| D6 | Each line sends **`price_list_rate` = `rate`**, so ERPNext records no discount or margin that Retail Tower did not send (655/658). Mapping Retail Tower's regular price and real adjustments to `price_list_rate` / discount would need a new Backend-Core posting-contract field, so it is not done now. Evidence: RT-376. |
 
 ## Follow-ups
 
 | Key | Mode | Scope | Depends on |
 |---|---|---|---|
-| RT-376 (F1) | Verification | Runtime-prove repricing exposure on rt9, with and without the flag | — |
-| RT-377 (F2) | Implementation | A | RT-376 |
+| RT-376 (F1) | Verification | Runtime-prove repricing exposure on rt9, with and without the flag — **REPRODUCED** | — |
+| RT-377 (F2) | Implementation | A (flag + `price_list_rate`) | RT-376 |
 | RT-378 (F3) | Implementation | B | D1, D4 |
 | RT-379 (F4) | Implementation | C | D2–D5 |
 | RT-380 (F5) | Verification | A–C end to end on rt9 | RT-377, RT-378, RT-379 |
