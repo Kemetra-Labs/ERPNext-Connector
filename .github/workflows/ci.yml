@@ -1,0 +1,41 @@
+# RT-381: run the frappe-free unit tests and lint on every PR and on main.
+# tests/test_foundation.py imports frappe and runs only on a bench (staging-install runbook).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # 3.11 matches the ERPNext/Frappe v15 bench runtime (rt9 image: Python 3.11.6).
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install test tools
+        run: python -m pip install pytest==9.1.1 ruff==0.15.20
+
+      - name: Lint
+        run: python -m ruff check retail_tower_erpnext_connector
+
+      - name: Unit tests (frappe-free)
+        run: >-
+          python -m pytest -q retail_tower_erpnext_connector/tests
+          --ignore=retail_tower_erpnext_connector/tests/test_foundation.py

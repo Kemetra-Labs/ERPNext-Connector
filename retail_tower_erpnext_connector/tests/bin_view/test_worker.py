@@ -14,7 +14,6 @@ from retail_tower_erpnext_connector.connector.bin_view import contracts as c
 from retail_tower_erpnext_connector.connector.bin_view import transport as t
 from retail_tower_erpnext_connector.connector.bin_view import worker as w
 
-
 # --- quantize_qty (§III) --------------------------------------------------------------
 
 
@@ -101,8 +100,8 @@ class _RecordingTransport:
 
         class _R:
             status = 201
-            headers = {}
-            body = {"requestRef": "req-1"}
+            headers = {}  # noqa: RUF012 — read-only fake response, never mutated
+            body = {"requestRef": "req-1"}  # noqa: RUF012 — read-only fake response
 
         return _R()
 

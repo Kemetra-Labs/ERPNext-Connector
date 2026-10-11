@@ -505,8 +505,8 @@ def _build_bin_view_path():
     Reuses the Connector Settings ``dp2_base_url`` + ``dp2_token`` (the posting poller's
     transport pattern). Raises if base-URL/token unset → the tick skips cleanly.
     """
-    from .frappe_glue import FrappeBinReader, UtcClock
     from ..posting.poller import _build_http_transport  # reuse the auth-backed transport
+    from .frappe_glue import FrappeBinReader, UtcClock
 
     # RT-39 — a UUID so Backend-Core keeps + echoes it (it re-mints any non-UUID X-Request-Id).
     correlation_id = new_request_id()
