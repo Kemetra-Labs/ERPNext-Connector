@@ -152,6 +152,22 @@ class TestScrubberHardening:
         assert secret not in clean
         assert "[redacted]" in clean
 
+    @pytest.mark.parametrize(
+        "dirty",
+        [
+            'token="' + "a" * 257 + ' secret"',  # longer than the quoted cap (CodeRabbit, PR #69)
+            "got 'dp2_token=" + "a" * 300 + " secret'",
+            'password="abc secret',  # unterminated
+        ],
+    )
+    def test_an_overlong_or_unterminated_quoted_value_never_leaks_its_tail(self, dirty):
+        clean = r.scrub_message(dirty)
+        assert "secret" not in clean
+        assert clean.endswith("[redacted]")
+
+    def test_a_closed_quoted_value_keeps_the_rest_of_the_message(self):
+        assert r.scrub_message("got 'dp2_token=alpha beta' then more") == "got [redacted] then more"
+
     def test_an_unquoted_value_still_ends_at_whitespace(self):
         assert r.scrub_message("token=abc rest of message") == "[redacted] rest of message"
 
