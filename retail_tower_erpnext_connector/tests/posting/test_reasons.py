@@ -139,6 +139,12 @@ class TestScrubberHardening:
             ("password='my secret phrase'", "phrase"),
             ("got 'dp2_token=alpha beta'", "beta"),  # the repr a parse error echoes (got {value!r})
             ('got "pwd: a b c" here', "b c"),
+            # ...through the MATCHING closing quote: the other quote character and escaped quotes stay
+            # inside the credential (Codex, PR #69).
+            ("got " + repr('dp2_token=alpha "beta gamma" omega'), "omega"),
+            ("got " + repr("dp2_token=it's secret now"), "secret now"),
+            ('{"dp2_token": "a \\"b c\\" d"}', "b c"),
+            ("pwd='it\\'s secret'", "secret"),
         ],
     )
     def test_a_credential_key_ending_an_identifier_is_redacted(self, dirty, secret):
@@ -160,7 +166,16 @@ class TestScrubberHardening:
 
     @pytest.mark.parametrize(
         "dirty",
-        ["a-" * 20000, "x_" * 20000, "_token" * 8000, "'token=" * 10000, '"token=' * 10000, "'" * 50000],
+        [
+            "a-" * 20000,
+            "x_" * 20000,
+            "_token" * 8000,
+            "'token=" * 10000,
+            '"token=' * 10000,
+            "'" * 50000,
+            "'token=\\" * 10000,  # an escape that eats every closing quote: the quoted body is capped
+            'token="\\' * 10000,
+        ],
     )
     def test_long_messages_scrub_in_linear_time(self, dirty):
         # Scrubbing runs before the 1000-char bound; a quadratic key pattern stalled for ~1 min here.

@@ -66,16 +66,19 @@ _CATEGORY_BY_KIND: dict[FailureKind, str] = {
 # RT-409: a credential key matches as the END of an identifier (`dp2_token` — the Connector Settings
 # field holding the Backend-Core token — `access_token`, `client_secret`); `\b` alone never matched
 # after `_`. `token_count` is not a credential key: the key must be followed by the separator.
-# A quoted credential is redacted up to its closing quote, spaces included: a quoted value
-# (`"pwd": "my secret"`) or a whole quoted `key=value` (a `repr` such as `'dp2_token=alpha beta'`).
-# An unquoted value still ends at whitespace, so the rest of the message stays readable.
+# A quoted credential is redacted up to its MATCHING closing quote, spaces, the other quote
+# character and backslash-escaped quotes included: a quoted value (`"pwd": "my \"secret\""`) or a
+# whole quoted `key=value` (a `repr` such as `'dp2_token=alpha "beta" omega'`). An unquoted value
+# still ends at whitespace, so the rest of the message stays readable. A quoted body is capped at
+# 256 chars so an unterminated quote cannot make every match scan to the end (quadratic); a longer
+# quoted value falls back to the unquoted rule.
 _CREDENTIAL_KEY = r"""\b\w*?(?:token|password|passwd|pwd|secret|api[_-]?key|authorization)"""
 _SECRET_PATTERNS = (
     re.compile(r"(?i)\bBearer\s+\S+"),
-    re.compile(rf"""(?i)(["']){_CREDENTIAL_KEY}\s*[=:][^"']*\1"""),
+    re.compile(rf"""(?i)(["']){_CREDENTIAL_KEY}\s*[=:](?:\\.|(?!\1)[^\\]){{0,256}}\1"""),
     re.compile(
         rf"""(?i)["']?{_CREDENTIAL_KEY}["']?"""
-        r"""\s*[=:]\s*(?:"[^"]*"|'[^']*'|["']?[^\s"',}]+["']?)"""
+        r"""\s*[=:]\s*(?:"(?:\\.|[^"\\]){0,256}"|'(?:\\.|[^'\\]){0,256}'|["']?[^\s"',}]+["']?)"""
     ),
     re.compile(r"\bsk[-_][A-Za-z0-9_\-]{6,}"),
 )
