@@ -343,6 +343,16 @@ class TestInvalidItemReasonIsBounded:
         assert "abc123" not in wire["reason"]["message"]
         assert "[redacted]" in wire["reason"]["message"]
 
+    def test_a_quoted_credential_with_spaces_is_scrubbed_in_full(self):
+        # CodeRabbit (PR #68): the parse error echoes `got 'dp2_token=alpha beta'`; no part may leak.
+        wire, _key = _reject_isolated(_malformed_with("dp2_token=alpha beta"))
+        assert "alpha" not in wire["reason"]["message"] and "beta" not in wire["reason"]["message"]
+
+    def test_a_credential_holding_the_other_quote_is_scrubbed_in_full(self):
+        # Codex (PR #69): the repr is single-quoted, so the double quotes are part of the credential.
+        wire, _key = _reject_isolated(_malformed_with('dp2_token=alpha "beta gamma" omega'))
+        assert "beta" not in wire["reason"]["message"] and "omega" not in wire["reason"]["message"]
+
     def test_markup_echoed_by_the_parse_error_is_plain_text(self):
         wire, _key = _reject_isolated(_malformed_with("<b>cash</b>"))
         assert "<" not in wire["reason"]["message"]

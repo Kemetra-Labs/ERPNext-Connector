@@ -134,12 +134,42 @@ class TestScrubberHardening:
             ('{"dp2_token": "abc123"}', "abc123"),
             ("DP2_TOKEN: abc123", "abc123"),
             ("x-auth-token: abc123", "abc123"),
+            # A quoted credential is redacted to its closing quote, spaces included (CodeRabbit, PR #68).
+            ('{"dp2_token": "alpha beta"}', "beta"),
+            ("password='my secret phrase'", "phrase"),
+            ("got 'dp2_token=alpha beta'", "beta"),  # the repr a parse error echoes (got {value!r})
+            ('got "pwd: a b c" here', "b c"),
+            # ...through the MATCHING closing quote: the other quote character and escaped quotes stay
+            # inside the credential (Codex, PR #69).
+            ("got " + repr('dp2_token=alpha "beta gamma" omega'), "omega"),
+            ("got " + repr("dp2_token=it's secret now"), "secret now"),
+            ('{"dp2_token": "a \\"b c\\" d"}', "b c"),
+            ("pwd='it\\'s secret'", "secret"),
         ],
     )
     def test_a_credential_key_ending_an_identifier_is_redacted(self, dirty, secret):
         clean = r.scrub_message(dirty)
         assert secret not in clean
         assert "[redacted]" in clean
+
+    @pytest.mark.parametrize(
+        "dirty",
+        [
+            'token="' + "a" * 257 + ' secret"',  # longer than the quoted cap (CodeRabbit, PR #69)
+            "got 'dp2_token=" + "a" * 300 + " secret'",
+            'password="abc secret',  # unterminated
+        ],
+    )
+    def test_an_overlong_or_unterminated_quoted_value_never_leaks_its_tail(self, dirty):
+        clean = r.scrub_message(dirty)
+        assert "secret" not in clean
+        assert clean.endswith("[redacted]")
+
+    def test_a_closed_quoted_value_keeps_the_rest_of_the_message(self):
+        assert r.scrub_message("got 'dp2_token=alpha beta' then more") == "got [redacted] then more"
+
+    def test_an_unquoted_value_still_ends_at_whitespace(self):
+        assert r.scrub_message("token=abc rest of message") == "[redacted] rest of message"
 
     def test_an_identifier_that_only_contains_a_key_word_is_kept(self):
         assert r.scrub_message("token_count: 5") == "token_count: 5"
@@ -150,7 +180,19 @@ class TestScrubberHardening:
     def test_an_unescaped_comparison_is_not_mistaken_for_a_tag(self):
         assert r.plain_bounded_message("qty 1 &lt; 2 &gt; 0") == "qty 1 < 2 > 0"
 
-    @pytest.mark.parametrize("dirty", ["a-" * 20000, "x_" * 20000, "_token" * 8000])
+    @pytest.mark.parametrize(
+        "dirty",
+        [
+            "a-" * 20000,
+            "x_" * 20000,
+            "_token" * 8000,
+            "'token=" * 10000,
+            '"token=' * 10000,
+            "'" * 50000,
+            "'token=\\" * 10000,  # an escape that eats every closing quote: the quoted body is capped
+            'token="\\' * 10000,
+        ],
+    )
     def test_long_messages_scrub_in_linear_time(self, dirty):
         # Scrubbing runs before the 1000-char bound; a quadratic key pattern stalled for ~1 min here.
         start = time.monotonic()

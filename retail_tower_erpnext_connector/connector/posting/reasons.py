@@ -66,11 +66,20 @@ _CATEGORY_BY_KIND: dict[FailureKind, str] = {
 # RT-409: a credential key matches as the END of an identifier (`dp2_token` — the Connector Settings
 # field holding the Backend-Core token — `access_token`, `client_secret`); `\b` alone never matched
 # after `_`. `token_count` is not a credential key: the key must be followed by the separator.
+# A quoted credential is redacted up to its MATCHING closing quote, spaces, the other quote
+# character and backslash-escaped quotes included: a quoted value (`"pwd": "my \"secret\""`) or a
+# whole quoted `key=value` (a `repr` such as `'dp2_token=alpha "beta" omega'`). An unquoted value
+# still ends at whitespace, so the rest of the message stays readable. A quoted value never falls
+# back to the unquoted rule: when no closing quote comes within 256 chars (an overlong or
+# unterminated value), the rest of the message is redacted. The cap keeps every match bounded, and
+# the fallback consumes the input, so the scan stays linear.
+_CREDENTIAL_KEY = r"""\b\w*?(?:token|password|passwd|pwd|secret|api[_-]?key|authorization)"""
 _SECRET_PATTERNS = (
     re.compile(r"(?i)\bBearer\s+\S+"),
+    re.compile(rf"""(?i)(["']){_CREDENTIAL_KEY}\s*[=:](?:(?:\\.|(?!\1)[^\\]){{0,256}}\1|[\s\S]*)"""),
     re.compile(
-        r"""(?i)["']?\b\w*?(token|password|passwd|pwd|secret|api[_-]?key|authorization)["']?"""
-        r"""\s*[=:]\s*["']?[^\s"',}]+["']?"""
+        rf"""(?i)["']?{_CREDENTIAL_KEY}["']?"""
+        r"""\s*[=:]\s*(?:"(?:\\.|[^"\\]){0,256}"|'(?:\\.|[^'\\]){0,256}'|["'][\s\S]*|[^\s"',}]+["']?)"""
     ),
     re.compile(r"\bsk[-_][A-Za-z0-9_\-]{6,}"),
 )
