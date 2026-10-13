@@ -12,8 +12,9 @@ on:
   push:
     branches: [main]
 
-# Default to no permissions; the job below grants only what it needs.
-permissions: read-all
+# Read-only default; the job below adds only what Scorecard needs.
+permissions:
+  contents: read
 
 jobs:
   analysis:
