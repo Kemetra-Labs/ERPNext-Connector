@@ -41,6 +41,7 @@ _A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 _B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 _STORE = "33333333-3333-4333-8333-333333333333"
 _ORIGINAL = "ACC-SINV-2026-00100"
+_RETURN_REF = "88888888-8888-4888-8888-888888888888"  # the return's own provenance (#28 re-key)
 
 
 class _Logger:
@@ -70,6 +71,8 @@ class _Invoice:
 		self.payload, self._fake, self.name, self.values = payload, fake, "ACC-SINV-2026-00101", {}
 
 	def insert(self):
+		if self._fake.duplicate:  # RT-458: the G5 unique provenance index refuses a second credit note
+			raise self._fake.exceptions.UniqueValidationError("Duplicate entry for unique_rt_si_provenance")
 		grand = sum(Decimal(i["amount"]) for i in self.payload["items"])
 		paid = sum(Decimal(p["amount"]) for p in self.payload.get("payments") or [])
 		self.values = {"grand_total": float(grand), "paid_amount": float(paid), "change_amount": 0.0,
@@ -105,6 +108,7 @@ class _Frappe(types.ModuleType):
 		self.posted_row = {}  # RT-378 replay: overrides on the already-posted return's row
 		self.original_company = "Original Co"
 		self.posted_company = "Original Co"  # RT-378 replay: the already-posted return's company
+		self.duplicate = False  # RT-458: the return already exists under its provenance (crash window)
 		self._rows = [
 			{"name": "row-a", "item_code": "ITEM-A", "qty": 3.0, "idx": 1, "warehouse": "Stores - A",
 				"rt_line_ref": _A if line_refs else None, "uom": "Box", "conversion_factor": 12.0},
@@ -116,6 +120,7 @@ class _Frappe(types.ModuleType):
 			get_single_value=lambda doctype, field: "RT Company",  # RT-378 site default company
 			savepoint=lambda name: self.events.append("savepoint"),
 			rollback=lambda save_point=None: self.events.append("rollback"),
+			commit=lambda: self.events.append("commit"),  # RT-458
 		)
 		self.utils = types.SimpleNamespace(get_system_timezone=lambda: "UTC")
 
@@ -123,6 +128,8 @@ class _Frappe(types.ModuleType):
 		if isinstance(filters, dict):  # provenance lookups
 			if filters.get("rt_external_id") == "POS-9001" and filters.get("docstatus") == 1:
 				return _ORIGINAL  # the original sale's invoice
+			if self.duplicate and filters.get("rt_external_id") == _RETURN_REF:
+				return _POSTED_RETURN.name  # RT-458: the crash-window recovery finds the posted return
 			return None  # no already-posted return (no crash-window recovery)
 		assert filters == _ORIGINAL
 		if fields == ["posting_date", "posting_time"]:
@@ -202,7 +209,7 @@ def _return(refund=(("cash", "100.00"),), tax=None, version=None):
 	if refund is not None:
 		ref["refundTenders"] = [{"method": m, "amount": a} for m, a in refund]
 	return c.PostingWorkItem.from_wire({
-		"workItemRef": "88888888-8888-4888-8888-888888888888", "kind": "reversal", "sourceSystem": "pos-pulse",
+		"workItemRef": _RETURN_REF, "kind": "reversal", "sourceSystem": "pos-pulse",
 		"externalId": "POS-9001", "payloadHash": "e" * 64, "businessDate": "2026-06-01", "itemCursor": "c-16",
 		"reversalOf": ref,
 		**({"resolutionVersion": version} if version is not None else {}),
@@ -213,8 +220,8 @@ def _return(refund=(("cash", "100.00"),), tax=None, version=None):
 	})
 
 
-def _post(glue, work_item, *, tender_map=None, store=None, uom_map=None, customer_map=None):
-	client, store = _Client(), store or _Store()
+def _post(glue, work_item, *, tender_map=None, store=None, uom_map=None, customer_map=None, client=None):
+	client, store = client or _Client(), store or _Store()
 	outcome = glue.post_work_item(
 		work_item,
 		client=client,
@@ -244,7 +251,7 @@ class TestReturnInGlue:
 		assert payload["items"][0]["conversion_factor"] == 12.0
 		assert payload["payments"] == [{"mode_of_payment": "Cash", "amount": "-100.00"}]
 		assert (payload["posting_date"], payload["posting_time"]) == ("2026-06-05", "09:30:00.000000")
-		assert fake.events == ["savepoint", "insert", "submit", "reload"] and len(store.writes) == 1
+		assert fake.events == ["savepoint", "insert", "submit", "reload", "commit"] and len(store.writes) == 1
 
 	def test_return_without_refund_tenders_is_rejected_before_building(self, load_glue):
 		fake = _Frappe()
@@ -424,3 +431,71 @@ class TestReversalRejectionReasonAttribution:
 		assert level == "error"
 		assert record["category"] == "validation"
 		assert record["reason_message"] == client.acks[0]["reason"]["message"]
+
+
+class _TimelineClient:
+	"""Writes each ack into the stand-in's own event list, so its order against ``commit`` is visible."""
+
+	def __init__(self, fake):
+		self._fake = fake
+
+	def ack_outcome(self, ref, request, idempotency_key):
+		self._fake.events.append(f"ack:{request.to_wire()['outcome']}")
+
+
+class _ConflictStore(_Store):
+	"""``record_posted`` loses a race: another worker recorded the posted return for this key first."""
+
+	def record_posted(self, key, ref):
+		from retail_tower_erpnext_connector.connector.posting.idempotency import IdempotencyConflict
+
+		raise IdempotencyConflict(key, _POSTED_RETURN, ref)
+
+
+class TestReversalCommitsBeforeItsAck:
+	"""RT-458 (RT-382 F-1) on the reversal leg: the credit note is durable before Backend-Core hears of it."""
+
+	@pytest.mark.parametrize(
+		("after_submit", "outcome"),
+		[
+			pytest.param(None, "posted", id="posted"),
+			pytest.param({"items": _repriced_row(), "grand_total": -90.0}, "reconciliation_required", id="repriced"),
+		],
+	)
+	def test_a_return_commits_after_its_read_back_and_before_the_ack(self, load_glue, after_submit, outcome):
+		fake = _Frappe(after_submit=after_submit)
+		result, _client, _store = _post(load_glue(fake), _return(), client=_TimelineClient(fake))
+		assert result == outcome
+		assert fake.events == ["savepoint", "insert", "submit", "reload", "commit", f"ack:{outcome}"]
+
+	def test_the_duplicate_provenance_back_fill_commits_before_posted(self, load_glue):
+		fake = _Frappe()
+		fake.duplicate = True
+		outcome, _client, store = _post(
+			load_glue(fake), _return(version=3), client=_TimelineClient(fake)
+		)
+		assert outcome == "posted"
+		assert fake.events == ["savepoint", "rollback", "commit", "ack:posted"]
+		assert [ref for _key, ref in store.writes] == [_POSTED_RETURN]  # back-filled before the commit
+
+	def test_the_idempotency_conflict_echo_commits_before_posted(self, load_glue):
+		fake = _Frappe()
+		outcome, _client, _store = _post(
+			load_glue(fake), _return(version=3), store=_ConflictStore(), client=_TimelineClient(fake)
+		)
+		assert outcome == "posted"
+		assert fake.events[-2:] == ["commit", "ack:posted"]
+
+	def test_the_replay_guard_commits_before_posted(self, load_glue):
+		fake = _Frappe()
+		outcome, _client, _store = _post(
+			load_glue(fake), _return(version=3), store=_Store(existing=_POSTED_RETURN), client=_TimelineClient(fake)
+		)
+		assert outcome == "posted"
+		assert fake.events == ["commit", "ack:posted"] and fake.payloads == []  # no second document
+
+	def test_a_rolled_back_return_is_rejected_without_a_commit(self, load_glue):
+		fake = _Frappe(after_insert={"taxes": [{"charge_type": "On Net Total", "tax_amount": -14.0}]})
+		outcome, _client, _store = _post(load_glue(fake), _return())
+		assert outcome == "permanently_rejected"
+		assert fake.events == ["savepoint", "insert", "rollback"]  # nothing committed

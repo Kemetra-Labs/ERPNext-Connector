@@ -101,6 +101,7 @@ class _Frappe(types.ModuleType):
 			get_single_value=lambda doctype, field: "RT Company",  # RT-378 site default company
 			savepoint=lambda name: self.events.append("savepoint"),
 			rollback=lambda save_point=None: self.events.append("rollback"),
+			commit=lambda: None,  # RT-458 order is asserted in test_commit_before_ack_glue
 		)
 		self.utils = types.SimpleNamespace(get_system_timezone=lambda: "UTC")
 
