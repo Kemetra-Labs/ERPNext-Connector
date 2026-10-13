@@ -30,7 +30,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install test tools
-        run: python -m pip install pytest==9.1.1 ruff==0.15.20
+        run: python -m pip install pytest==9.1.1 pytest-cov==7.1.0 ruff==0.15.20
 
       - name: Lint
         run: python -m ruff check retail_tower_erpnext_connector
@@ -39,3 +39,23 @@ jobs:
         run: >-
           python -m pytest -q retail_tower_erpnext_connector/tests
           --ignore=retail_tower_erpnext_connector/tests/test_foundation.py
+          --cov=retail_tower_erpnext_connector --cov-report=xml:coverage.xml
+
+      # RT-460: informational coverage upload. Never affects the CI verdict: the step is
+      # continue-on-error and the check below only warns. Skipped for fork PRs (no secrets).
+      - name: Check coverage report
+        if: success()
+        run: |
+          if [ ! -s coverage.xml ]; then
+            echo "::warning::coverage.xml is missing or empty; skipping Codecov upload is expected."
+          fi
+
+      - name: Upload coverage to Codecov
+        if: success() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          files: coverage.xml
+          disable_search: true
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
