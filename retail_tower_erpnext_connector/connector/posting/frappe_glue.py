@@ -334,6 +334,25 @@ def _ack_existing(
     return _ack_posted(client, work_item, document_ref, correlation_id, signal)
 
 
+def _commit_before_ack() -> None:
+    """RT-458 (RT-382 F-1): make the item's ERPNext effects durable before Backend-Core hears of them.
+
+    ⏳ BENCH-VALIDATION. The scheduler tick is one transaction: ``ScheduledJobType.execute`` commits on
+    success and rolls back on ANY exception. Acking while it was still open let a later failure in the
+    tick (the next ack, the next page pull) roll back an invoice Backend-Core already held ``posted`` —
+    with its Stock Ledger/GL, its Posting Log row and its naming-series value, so the next invoice took
+    the lost sale's name. Committing here, after submit, ``record_posted`` and the RT-378 read-back,
+    means a later failure can only lose un-acked work, which Backend-Core still re-offers; a failure
+    between this commit and the ack is the designed lost-ack replay (the Posting Log replay guard).
+
+    Called only by the acks that report an existing document (``posted``, ``reconciliation_required``,
+    and the read-back ``failed_transient``). A rejection never commits: its insert was already rolled
+    back to the RT-48 savepoint, so "rejected" still means "nothing posted". A commit failure is NOT
+    caught: it propagates with no ack sent, and the item stays pending in Backend-Core.
+    """
+    frappe.db.commit()
+
+
 def _ack_posted(
     client: PostingFeedClient,
     work_item: PostingWorkItem,
@@ -341,6 +360,7 @@ def _ack_posted(
     correlation_id: str,
     signal: str,
 ) -> str:
+    _commit_before_ack()  # RT-458
     client.ack_outcome(
         work_item.work_item_ref,
         OutcomeAckRequest.posted(document_ref, resolution_version=work_item.resolution_version),
@@ -353,7 +373,12 @@ def _ack_posted(
 def _ack_verify_transient(
     client: PostingFeedClient, work_item: PostingWorkItem, correlation_id: str, exc: BaseException
 ) -> str:
-    """The invoice could not be read back: ``failed_transient`` so Backend-Core re-offers it."""
+    """The invoice could not be read back: ``failed_transient`` so Backend-Core re-offers it.
+
+    RT-458: after a fresh submit the invoice and its Posting Log row exist, so they are committed first
+    and the re-offer resolves through the replay guard (on a replay the commit has nothing to write).
+    """
+    _commit_before_ack()
     client.ack_outcome(
         work_item.work_item_ref,
         OutcomeAckRequest.failed_transient(resolution_version=work_item.resolution_version),
@@ -373,6 +398,7 @@ def _ack_reconciliation(
     """An ERP document exists but does not match: ``reconciliation_required``, never cancelled or amended."""
     # Bounded + scrubbed like every other reason (RT-48: 1..1000 chars).
     reason = to_rejection_reason(FailureKind.VALIDATION, message=mismatch)
+    _commit_before_ack()  # RT-458: the document stays as ERPNext holds it — durable before the ack
     client.ack_outcome(
         work_item.work_item_ref,
         OutcomeAckRequest.reconciliation_required(

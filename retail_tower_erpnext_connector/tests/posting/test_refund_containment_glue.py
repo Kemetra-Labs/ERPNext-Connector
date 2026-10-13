@@ -52,8 +52,12 @@ class _Frappe(types.ModuleType):
 		self.lookups = []
 		self._logger = _Logger()
 		self.logger = lambda name=None: self._logger
-		self.db = types.SimpleNamespace(get_value=self._get_value)
+		self.db = types.SimpleNamespace(get_value=self._get_value, commit=self._commit)
+		self.commits = 0
 		self._posted_name = posted_name
+
+	def _commit(self):
+		self.commits += 1  # RT-458
 
 	def _get_value(self, doctype, filters, field, **_):
 		if field == "company":  # RT-378: the original invoice's company, read for a replay
@@ -78,11 +82,13 @@ def _legacy_refund_invoice():
 
 
 class _Client:
-	def __init__(self):
-		self.acks = []
+	def __init__(self, fake=None):
+		self.acks, self._fake = [], fake
 
 	def ack_outcome(self, ref, request, idempotency_key):
-		self.acks.append({"ref": ref, "ack": request.to_wire(), "key": idempotency_key})
+		# RT-458: how many commits had happened when the ack left (None when the test does not track it).
+		commits = self._fake.commits if self._fake is not None else None
+		self.acks.append({"ref": ref, "ack": request.to_wire(), "key": idempotency_key, "commits": commits})
 
 
 class _Store:
@@ -182,17 +188,19 @@ class TestRefundContainmentInGlue:
 		assert ack["ack"]["outcome"] == "permanently_rejected"
 		assert ack["ack"]["reason"]["category"] == "validation"
 		assert store.writes == []
+		assert fake.commits == 0  # RT-458: a rejection never commits
 
 	def test_crash_window_legacy_refund_is_recovered_not_rejected(self, load_glue):
 		# The invoice exists under this reversal's provenance, but the Posting Log row is missing.
 		fake = _Frappe(posted_name="ACC-SINV-2026-00028")
 		glue = load_glue(fake)
-		client, store = _Client(), _Store()
+		client, store = _Client(fake), _Store()
 		assert _post(glue, store, client) == "posted"
 		(ack,) = client.acks
 		assert ack["ack"]["outcome"] == "posted"
 		assert ack["ack"]["documentRef"]["name"] == "ACC-SINV-2026-00028"
 		assert [ref.name for _key, ref in store.writes] == ["ACC-SINV-2026-00028"]  # back-filled
+		assert ack["commits"] == 1  # RT-458: the back-filled Posting Log row is durable before the ack
 		# The recovery lookup used the reversal's own provenance (work_item_ref), never the sale's id.
 		_doctype, filters, _field = fake.lookups[0]
 		assert filters["rt_external_id"] == "44444444-4444-4444-8444-444444444444"
