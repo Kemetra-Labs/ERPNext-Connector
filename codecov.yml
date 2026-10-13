@@ -1,0 +1,14 @@
+# RT-460: Codecov is informational only. It must never gate a PR.
+# Scope caveat: coverage.xml measures ONLY the frappe-free unit tests run in CI
+# (tests/test_foundation.py is excluded; it needs a Frappe bench). It does NOT
+# reflect Frappe bench / ERPNext posting runtime coverage.
+comment: false
+
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
