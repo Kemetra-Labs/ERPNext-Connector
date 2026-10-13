@@ -12,7 +12,7 @@
   <a href=".specify/memory/constitution.md"><img alt="ERPNext fork: never" src="https://img.shields.io/badge/ERPNext%20fork-never-f87171?labelColor=0a0f24&style=flat-square"></a>
   <a href="retail_tower_erpnext_connector/connector/posting/poller.py"><img alt="Posting poller: every minute" src="https://img.shields.io/badge/posting%20poller-every%20minute-34d399?labelColor=0a0f24&style=flat-square"></a>
   <a href="#known-gaps-and-gated-work"><img alt="Tax / fiscal gate: pending" src="https://img.shields.io/badge/tax%20%2F%20fiscal%20gate-pending-f59e0b?labelColor=0a0f24&style=flat-square"></a>
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-34d399?labelColor=0a0f24&style=flat-square"></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-34d399?labelColor=0a0f24&style=flat-square"></a>
 </p>
 
 <p align="center">
@@ -500,4 +500,4 @@ yourself.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

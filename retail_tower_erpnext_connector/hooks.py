@@ -6,7 +6,7 @@ app_description = (
 	"Foundation only: app scaffold and Connector Settings placeholder. No business mutation."
 )
 app_email = "admin@rahmaqanater.org"
-app_license = "mit"
+app_license = "Apache-2.0"
 
 # ERPNext is the ERP/accounting/inventory backend this connector integrates with.
 # Declaring it here ensures the app cannot be installed on a site without ERPNext.
