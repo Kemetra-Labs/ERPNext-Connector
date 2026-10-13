@@ -23,6 +23,7 @@ Backend-Core client), so the order of ``commit`` against the ack is asserted dir
 * a failing ack (RT-382 Run B's 500) leaves the commit already done.
 """
 
+import dataclasses
 import importlib
 import sys
 import types
@@ -76,6 +77,26 @@ _EXISTING_DOC = {
 }
 
 
+@dataclasses.dataclass(frozen=True)
+class _Scenario:
+	"""What ERPNext, the Posting Log and Backend-Core do for one post (defaults: a clean fresh post).
+
+	``insert_error`` is ``"duplicate"`` (the G5 unique provenance index), ``"validation"`` or an
+	exception instance; ``provenance_hit`` means an invoice already exists under the sale's provenance.
+	"""
+
+	provenance_hit: bool = False
+	insert_error: object = None
+	after_insert: dict = dataclasses.field(default_factory=dict)
+	after_submit: dict = dataclasses.field(default_factory=dict)
+	unreadable: bool = False
+	commit_error: BaseException | None = None
+	existing: c.ErpnextDocumentRef | None = None  # the Posting Log replay guard's hit
+	conflict: c.ErpnextDocumentRef | None = None  # another worker recorded this first
+	ack_fails: bool = False  # Backend-Core answers like RT-382 Run B's injected 500
+	uom: dict = dataclasses.field(default_factory=lambda: {"each": "Nos"})
+
+
 class _Logger:
 	def info(self, record):
 		pass
@@ -90,7 +111,7 @@ class _Invoice:
 		self.payload, self._fake, self.name, self.values = payload, fake, _FRESH, {}
 
 	def insert(self):
-		error = self._fake.insert_error
+		error = self._fake.scenario.insert_error
 		if error == "duplicate":  # the G5 unique provenance index (bench frappe v15 raises this)
 			raise self._fake.exceptions.UniqueValidationError("Duplicate entry for unique_rt_si_provenance")
 		if error == "validation":
@@ -100,7 +121,7 @@ class _Invoice:
 		grand = float(sum(Decimal(i["amount"]) for i in self.payload["items"]))
 		self.values = {"grand_total": grand, "paid_amount": 0.0, "change_amount": 0.0,
 			"write_off_amount": 0.0, "outstanding_amount": grand}
-		self.values.update(self._fake.after_insert)
+		self.values.update(self._fake.scenario.after_insert)
 		self._fake.timeline.append("insert")
 
 	def get(self, field):
@@ -111,25 +132,20 @@ class _Invoice:
 
 	def reload(self):
 		self._fake.timeline.append("reload")
-		if self._fake.unreadable:
+		if self._fake.scenario.unreadable:
 			raise TimeoutError("Lock wait timeout exceeded")
-		self.values.update(self._fake.after_submit)
+		self.values.update(self._fake.scenario.after_submit)
 
 
 class _Frappe(types.ModuleType):
-	"""``provenance_hit``: an invoice already exists under this sale's provenance (the G5 index)."""
-
-	def __init__(self, timeline, *, provenance_hit=False, insert_error=None, after_insert=None,
-			after_submit=None, unreadable=False):
+	def __init__(self, timeline, scenario):
 		super().__init__("frappe")
 		self.ValidationError = type("ValidationError", (Exception,), {})
 		self.exceptions = types.SimpleNamespace(
 			UniqueValidationError=type("UniqueValidationError", (self.ValidationError,), {})
 		)
 		self.logger = lambda name=None: _Logger()
-		self.timeline, self.provenance_hit, self.unreadable = timeline, provenance_hit, unreadable
-		self.insert_error = insert_error
-		self.after_insert, self.after_submit = after_insert or {}, after_submit or {}
+		self.timeline, self.scenario = timeline, scenario
 		self.db = types.SimpleNamespace(
 			get_value=self._get_value,
 			get_single_value=lambda doctype, field: "RT Company",  # RT-378 site default company
@@ -137,17 +153,16 @@ class _Frappe(types.ModuleType):
 			rollback=lambda save_point=None: timeline.append("rollback"),
 			commit=self._commit,
 		)
-		self.commit_error = None
 		self.utils = types.SimpleNamespace(get_system_timezone=lambda: "UTC")
 
 	def _commit(self):
 		self.timeline.append("commit")
-		if self.commit_error is not None:
-			raise self.commit_error
+		if self.scenario.commit_error is not None:
+			raise self.scenario.commit_error
 
 	def _get_value(self, doctype, filters, fields=None, **_):
 		assert isinstance(filters, dict) and filters.get("rt_external_id") == "POS-45801"
-		return _EXISTING.name if self.provenance_hit else None
+		return _EXISTING.name if self.scenario.provenance_hit else None
 
 	def get_all(self, doctype, **kwargs):
 		return []  # Items: no batch/serial tracking
@@ -161,30 +176,30 @@ class _Frappe(types.ModuleType):
 
 
 class _Client:
-	"""Backend-Core's ack endpoint. ``fail`` answers like RT-382 Run B's injected 500."""
+	"""Backend-Core's ack endpoint."""
 
-	def __init__(self, timeline, *, fail=False):
-		self.timeline, self.fail = timeline, fail
+	def __init__(self, timeline, scenario):
+		self.timeline, self.scenario = timeline, scenario
 
 	def ack_outcome(self, ref, request, idempotency_key):
 		self.timeline.append(f"ack:{request.to_wire()['outcome']}")
-		if self.fail:
+		if self.scenario.ack_fails:
 			raise RuntimeError("unexpected ack status 500: {'code': 'rt382_injected_fault'}")
 
 
 class _Store:
-	"""The Posting Log. ``existing``: the replay guard's hit; ``conflict``: another worker's record."""
+	"""The Posting Log."""
 
-	def __init__(self, timeline, *, existing=None, conflict=None):
-		self.timeline, self.existing, self.conflict = timeline, existing, conflict
+	def __init__(self, timeline, scenario):
+		self.timeline, self.scenario = timeline, scenario
 
 	def get_document_ref(self, key):
-		return self.existing
+		return self.scenario.existing
 
 	def record_posted(self, key, ref):
 		self.timeline.append("record_posted")
-		if self.conflict is not None:
-			raise IdempotencyConflict(key, self.conflict, ref)
+		if self.scenario.conflict is not None:
+			raise IdempotencyConflict(key, self.scenario.conflict, ref)
 
 
 @pytest.fixture
@@ -246,14 +261,18 @@ def _work_item():
 	)
 
 
-def _post(load_glue, *, frappe_kw=None, store_kw=None, client_kw=None, uom=None, timeline=None):
+_CLEAN = _Scenario()  # a fresh post that nothing interrupts
+
+
+def _post(load_glue, scenario=_CLEAN, timeline=None):
+	"""Post the sale under ``scenario``; every collaborator writes to the one returned ``timeline``."""
 	timeline = [] if timeline is None else timeline
-	glue = load_glue(_Frappe(timeline, **(frappe_kw or {})))
+	glue = load_glue(_Frappe(timeline, scenario))
 	outcome = glue.post_work_item(
 		_work_item(),
-		client=_Client(timeline, **(client_kw or {})),
-		store=_Store(timeline, **(store_kw or {})),
-		uom_map=UomMap({"each": "Nos"} if uom is None else uom),
+		client=_Client(timeline, scenario),
+		store=_Store(timeline, scenario),
+		uom_map=UomMap(scenario.uom),
 		warehouses=PreResolvedWarehouse({_STORE: {"doctype": "Warehouse", "name": "Map WH"}}),
 		customers=StoreCustomerMap({_STORE: "Walk-in"}),
 		tenders=TenderModeMap({"cash": "Cash"}),
@@ -270,14 +289,13 @@ class TestFreshSaleCommitsBeforeItsAck:
 
 	def test_a_reprice_on_submit_commits_before_reconciliation_required(self, load_glue):
 		# RT-378: the document stays as ERPNext holds it, so it is durable before Backend-Core hears of it.
-		reprice = {"grand_total": 90.0}
-		outcome, timeline = _post(load_glue, frappe_kw={"after_submit": reprice})
+		outcome, timeline = _post(load_glue, _Scenario(after_submit={"grand_total": 90.0}))
 		assert outcome == "reconciliation_required"
 		assert timeline[-3:] == ["reload", "commit", "ack:reconciliation_required"]
 
 	def test_an_unreadable_read_back_commits_before_failed_transient(self, load_glue):
 		# The invoice and its Posting Log row exist: a re-offer must find them through the replay guard.
-		outcome, timeline = _post(load_glue, frappe_kw={"unreadable": True})
+		outcome, timeline = _post(load_glue, _Scenario(unreadable=True))
 		assert outcome == "failed_transient"
 		assert timeline[-4:] == ["record_posted", "reload", "commit", "ack:failed_transient"]
 
@@ -286,44 +304,32 @@ class TestFreshSaleCommitsBeforeItsAck:
 		# the rollback cannot take the invoice; Backend-Core re-offers and the replay guard acks it.
 		timeline = []
 		with pytest.raises(RuntimeError, match="unexpected ack status 500"):
-			_post(load_glue, client_kw={"fail": True}, timeline=timeline)
+			_post(load_glue, _Scenario(ack_fails=True), timeline)
 		assert timeline[-2:] == ["commit", "ack:posted"]
 
 	def test_a_failing_commit_sends_no_ack(self, load_glue):
 		# Nothing durable, nothing acked: the item stays pending in Backend-Core and is re-offered.
 		timeline = []
-		fake = _Frappe(timeline)
-		fake.commit_error = TimeoutError("Lock wait timeout exceeded")
-		glue = load_glue(fake)
 		with pytest.raises(TimeoutError):
-			glue.post_work_item(
-				_work_item(),
-				client=_Client(timeline),
-				store=_Store(timeline),
-				uom_map=UomMap({"each": "Nos"}),
-				warehouses=PreResolvedWarehouse({_STORE: {"doctype": "Warehouse", "name": "Map WH"}}),
-				customers=StoreCustomerMap({_STORE: "Walk-in"}),
-				tenders=TenderModeMap({"cash": "Cash"}),
-				correlation_id="rt458-test",
-			)
+			_post(load_glue, _Scenario(commit_error=TimeoutError("Lock wait timeout exceeded")), timeline)
 		assert timeline[-1] == "commit" and not any(event.startswith("ack:") for event in timeline)
 
 
 class TestEveryExistingDocumentPathCommitsBeforeItsAck:
 	def test_the_duplicate_provenance_back_fill_commits_before_posted(self, load_glue):
 		# G5 crash window: the unique index refused a second invoice; the Posting Log row is back-filled.
-		outcome, timeline = _post(load_glue, frappe_kw={"provenance_hit": True, "insert_error": "duplicate"})
+		outcome, timeline = _post(load_glue, _Scenario(provenance_hit=True, insert_error="duplicate"))
 		assert outcome == "posted"
 		assert timeline == ["savepoint", "rollback", "record_posted", "read", "commit", "ack:posted"]
 
 	def test_the_idempotency_conflict_echo_commits_before_posted(self, load_glue):
-		outcome, timeline = _post(load_glue, store_kw={"conflict": _EXISTING})
+		outcome, timeline = _post(load_glue, _Scenario(conflict=_EXISTING))
 		assert outcome == "posted"
 		assert timeline[-4:] == ["record_posted", "read", "commit", "ack:posted"]
 
 	def test_the_replay_guard_commits_before_posted(self, load_glue):
 		# RT-458 AC 3 (lost-ack replay): BC re-offers a committed sale whose ack never arrived.
-		outcome, timeline = _post(load_glue, store_kw={"existing": _EXISTING})
+		outcome, timeline = _post(load_glue, _Scenario(existing=_EXISTING))
 		assert outcome == "posted"
 		assert timeline == ["read", "commit", "ack:posted"]  # no second document
 
@@ -332,30 +338,30 @@ class TestARejectionNeverCommits:
 	"""RT-48: a rejected item rolled back to its savepoint, so nothing of it may be committed."""
 
 	@pytest.mark.parametrize(
-		"frappe_kw",
+		"scenario",
 		[
-			pytest.param({"insert_error": "validation"}, id="validation-error-on-insert"),
-			pytest.param({"after_insert": {"grand_total": 90.0}}, id="representation-mismatch-on-insert"),
-			pytest.param({"insert_error": NameError("name 'flt' is not defined")}, id="unclassified-error"),
+			pytest.param(_Scenario(insert_error="validation"), id="validation-error-on-insert"),
+			pytest.param(_Scenario(after_insert={"grand_total": 90.0}), id="representation-mismatch-on-insert"),
+			pytest.param(_Scenario(insert_error=NameError("name 'flt' is not defined")), id="unclassified-error"),
 		],
 	)
-	def test_a_rolled_back_insert_is_rejected_without_a_commit(self, load_glue, frappe_kw):
-		outcome, timeline = _post(load_glue, frappe_kw=frappe_kw)
+	def test_a_rolled_back_insert_is_rejected_without_a_commit(self, load_glue, scenario):
+		outcome, timeline = _post(load_glue, scenario)
 		assert outcome == "permanently_rejected"
 		assert "rollback" in timeline and "commit" not in timeline
 		assert timeline[-1] == "ack:permanently_rejected"
 
 	def test_a_build_rejection_never_commits(self, load_glue):
-		outcome, timeline = _post(load_glue, uom={})  # the line's unit is unmapped
+		outcome, timeline = _post(load_glue, _Scenario(uom={}))  # the line's unit is unmapped
 		assert outcome == "permanently_rejected"
 		assert timeline == ["ack:permanently_rejected"]
 
 	def test_a_duplicate_without_a_matching_invoice_is_rejected_without_a_commit(self, load_glue):
-		outcome, timeline = _post(load_glue, frappe_kw={"insert_error": "duplicate"})
+		outcome, timeline = _post(load_glue, _Scenario(insert_error="duplicate"))
 		assert outcome == "permanently_rejected"
 		assert timeline == ["savepoint", "rollback", "ack:permanently_rejected"]
 
 	def test_a_transient_insert_error_is_retried_without_a_commit(self, load_glue):
-		outcome, timeline = _post(load_glue, frappe_kw={"insert_error": TimeoutError("Lock wait timeout")})
+		outcome, timeline = _post(load_glue, _Scenario(insert_error=TimeoutError("Lock wait timeout")))
 		assert outcome == "failed_transient"
 		assert timeline == ["savepoint", "rollback", "ack:failed_transient"]
