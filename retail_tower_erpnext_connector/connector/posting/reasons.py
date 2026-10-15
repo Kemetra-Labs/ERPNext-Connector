@@ -97,10 +97,10 @@ def scrub_message(message: str) -> str:
 REASON_MESSAGE_MAX = 1000
 _EMPTY_REASON = "(no detail)"
 # Block-level tags become a space (so "a<br>b" stays two words); every other tag is dropped.
-_BLOCK_TAG_RE = re.compile(r"(?i)<\s*/?\s*(br|p|div|li|ul|ol|tr|td|th|h[1-6])\b[^>]*>")
+_BLOCK_TAG_RE = re.compile(r"(?i)<\s*(?:/\s*)?(br|p|div|li|ul|ol|tr|td|th|h[1-6])\b[^>]*>")
 _ANY_TAG_RE = re.compile(r"<[^>]*>")
 # After unescaping, only tag-shaped text is stripped, so "qty 1 < 2 > 0" keeps its comparison.
-_DECODED_TAG_RE = re.compile(r"<\s*/?\s*[A-Za-z][^<>]*>")
+_DECODED_TAG_RE = re.compile(r"<\s*(?:/\s*)?[A-Za-z][^<>]*>")
 _WHITESPACE_RE = re.compile(r"\s+")
 
 

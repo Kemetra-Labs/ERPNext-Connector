@@ -64,7 +64,7 @@ class TestFailureMessageHygiene:
 
     def test_preserves_safe_detail(self):
         clean = r.scrub_message("accounting period 2026-Q1 is closed")
-        assert "accounting period 2026-Q1 is closed" == clean
+        assert clean == "accounting period 2026-Q1 is closed"
 
     def test_reason_built_through_mapper_is_scrubbed(self):
         reason = r.to_rejection_reason(
@@ -195,6 +195,35 @@ class TestScrubberHardening:
     )
     def test_long_messages_scrub_in_linear_time(self, dirty):
         # Scrubbing runs before the 1000-char bound; a quadratic key pattern stalled for ~1 min here.
+        start = time.monotonic()
+        r.plain_bounded_message(dirty)
+        assert time.monotonic() - start < 1.0
+
+    @pytest.mark.parametrize(
+        "markup, expected",
+        [
+            ("a<br>b", "a b"),
+            ("a<br/>b", "a b"),
+            ("a< br >b", "a b"),
+            ("a</p>b", "a b"),
+            ("a< / p >b", "a b"),
+            ("a<  /  div  class='x'>b", "a b"),
+            ("a<B>b</B>c", "abc"),
+            ("a<span>b</span>c", "abc"),
+            ("a</ span>b", "ab"),
+            ("a<h3>b</h3>c", "a b c"),
+            ("a&lt; / br &gt;b", "a b"),
+            ("a&lt;  /  i  &gt;b", "ab"),
+            ("a & b < c", "a & b < c"),
+        ],
+    )
+    def test_tag_stripping_with_whitespace_around_the_slash(self, markup, expected):
+        # RT-519 S8786: `\s*/?\s*` was rewritten as `\s*(?:/\s*)?` — same language, linear time.
+        assert r.plain_bounded_message(markup) == expected
+
+    @pytest.mark.parametrize("slash", [False, True])
+    def test_whitespace_runs_inside_a_tag_open_scrub_in_linear_time(self, slash):
+        dirty = "<" + " " * 20000 + ("/" + " " * 20000 if slash else "") + "x"
         start = time.monotonic()
         r.plain_bounded_message(dirty)
         assert time.monotonic() - start < 1.0

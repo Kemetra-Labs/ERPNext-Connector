@@ -97,7 +97,7 @@ def main():
 
     # SIMULATE THE CRASH: drop the Posting Log row so the replay guard finds nothing on re-offer
     # (exactly the crash-between-submit-and-record state). The SI in ERPNext stays.
-    deleted = frappe.db.delete("Posting Log", {"source_system": wi.source_system, "external_id": ext})
+    frappe.db.delete("Posting Log", {"source_system": wi.source_system, "external_id": ext})
     frappe.db.commit()
     print("SIMULATED CRASH: deleted Posting Log rows for (%s,%s)" % (wi.source_system, ext))
 
