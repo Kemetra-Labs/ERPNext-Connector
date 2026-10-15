@@ -8,8 +8,8 @@ fingerprint. It is composed with the Gate G5 index guard (``index_guard``), neve
 
 **Critical** (D2: the poller does not pull; nothing is rejected; the backlog stays in Backend-Core):
 
-* a Frappe or ERPNext major version outside :data:`SUPPORTED_MAJORS` (D5: v15 until RT-201), or an
-  unreadable version;
+* a Frappe or ERPNext major version outside :data:`SUPPORTED_MAJORS` (D5, amended on RT-201/RT-494:
+  v15 and v16), an unreadable version, or Frappe and ERPNext on different majors;
 * a required Retail Tower custom field missing (the ``hooks.py`` fixture list);
 * no posting currency configured, a posting currency with unknown ISO 4217 minor units, or an
   ERPNext currency precision below those minor units;
@@ -25,8 +25,8 @@ fingerprint. It is composed with the Gate G5 index guard (``index_guard``), neve
 
 **Warnings** (recorded and logged; posting continues): Selling Settings ``validate_selling_price``
 enabled (input to Pricing Planning Gate 2), enabled selling Pricing Rules (neutralised per document
-by RT-377; shown for visibility), and a default Sales Taxes and Charges Template (ERPNext v15 does
-not apply it on a server-side insert: review finding 6).
+by RT-377; shown for visibility), and a default Sales Taxes and Charges Template (ERPNext v15 and
+v16 do not apply it on a server-side insert: review finding 6, RT-201 probe P5).
 
 The Connector never changes ERP settings to pass the profile (668). This module imports NO frappe.
 """
@@ -38,7 +38,16 @@ import json
 import re
 from dataclasses import dataclass
 
-SUPPORTED_MAJORS = frozenset({15})
+# D5: the Frappe/ERPNext majors the Connector is validated on. v16 added on RT-494 after the RT-201
+# verification (validated pin: Frappe 16.52.0 / ERPNext 16.51.0); v15 stays while sites migrate.
+SUPPORTED_MAJORS = frozenset({15, 16})
+_SUPPORTED_LABEL = ", ".join(f"v{major}" for major in sorted(SUPPORTED_MAJORS))
+
+# RT-494: the posting poller's cron is every minute (RT-45); Frappe v16's scheduler wakes every 240 s
+# unless the site config sets scheduler_tick_interval.
+_POSTING_TICK_S = 60
+_V16_TICK_MAJOR = 16
+_V16_DEFAULT_TICK_S = 240
 
 # The custom fields the app ships (hooks.py fixtures); a test pins the two lists together.
 REQUIRED_CUSTOM_FIELDS = (
@@ -104,8 +113,10 @@ class SiteSnapshot:
 	unsupported: tuple[str, ...] = ()
 	# Settings ERPNext would reject on every sale (critical, with their own message).
 	blockers: tuple[str, ...] = ()
-	# Default Sales Taxes and Charges Templates: visibility only, v15 does not apply them on insert.
+	# Default Sales Taxes and Charges Templates: visibility only, v15/v16 do not apply them on insert.
 	default_tax_templates: tuple[str, ...] = ()
+	# The site config ``scheduler_tick_interval`` in seconds, or None when unset (RT-494).
+	scheduler_tick_s: int | None = None
 
 
 @dataclass(frozen=True)
@@ -155,12 +166,20 @@ def _major(version: str | None) -> int | None:
 
 def _version_findings(snapshot: SiteSnapshot) -> list[str]:
 	findings = []
+	majors = []
 	for app, version in (("Frappe", snapshot.frappe_version), ("ERPNext", snapshot.erpnext_version)):
 		major = _major(version)
+		majors.append(major)
 		if major is None:
-			findings.append(f"{app} version {version!r} cannot be read (supported: v15, D5)")
+			findings.append(f"{app} version {version!r} cannot be read (supported: {_SUPPORTED_LABEL}, D5)")
 		elif major not in SUPPORTED_MAJORS:
-			findings.append(f"{app} {version} is outside the supported set v15 (D5)")
+			findings.append(f"{app} {version} is outside the supported set {_SUPPORTED_LABEL} (D5)")
+	if not findings and majors[0] != majors[1]:
+		# Each major is supported on its own, but ERPNext runs only on its own Frappe major (RT-494).
+		findings.append(
+			f"Frappe {snapshot.frappe_version} and ERPNext {snapshot.erpnext_version} are on different "
+			"majors: an unsupported combination (D5)"
+		)
 	return findings
 
 
@@ -234,7 +253,7 @@ def _warnings(snapshot: SiteSnapshot) -> tuple[str, ...]:
 			"Selling Settings validate_selling_price is enabled (input to Pricing Planning Gate 2)"
 		)
 	warnings += [
-		f"default Sales Taxes and Charges Template {name!r} is set: ERPNext v15 does not apply it on a "
+		f"default Sales Taxes and Charges Template {name!r} is set: ERPNext v15/v16 does not apply it on a "
 		"server-side insert (the is_default fallback is not reached), and RT-378 rejects any tax row"
 		for name in snapshot.default_tax_templates
 	]
@@ -243,7 +262,25 @@ def _warnings(snapshot: SiteSnapshot) -> tuple[str, ...]:
 			f"{snapshot.selling_pricing_rules} enabled selling Pricing Rule(s); neutralised per document "
 			"by ignore_pricing_rule (RT-377)"
 		)
+	warnings += _scheduler_tick_warnings(snapshot)
 	return tuple(warnings)
+
+
+def _scheduler_tick_warnings(snapshot: SiteSnapshot) -> list[str]:
+	"""Frappe v16 ticks every 240 s by default (v15: 60 s): the every-minute poller would run every
+	~4 minutes and miss RT-45 (measured on RT-201). The fix is site config, so this only warns."""
+	major = _major(snapshot.frappe_version)
+	if major is None or major < _V16_TICK_MAJOR:
+		return []
+	tick = snapshot.scheduler_tick_s or _V16_DEFAULT_TICK_S
+	if tick <= _POSTING_TICK_S:
+		return []
+	return [
+		f"Frappe {snapshot.frappe_version} scheduler tick is {tick} s"
+		f"{'' if snapshot.scheduler_tick_s else ' (the v16 default)'}: the every-minute posting poller "
+		f"runs only every {tick} s and misses RT-45; set scheduler_tick_interval: {_POSTING_TICK_S} in "
+		"common_site_config.json"
+	]
 
 
 def fingerprint(snapshot: SiteSnapshot) -> str:
@@ -276,6 +313,9 @@ def fingerprint(snapshot: SiteSnapshot) -> str:
 		"blockers": sorted(snapshot.blockers),
 		"default_tax_templates": sorted(snapshot.default_tax_templates),
 	}
+	if snapshot.scheduler_tick_s is not None:
+		# Only when set (RT-494), so adding the field does not move every existing site's fingerprint.
+		canonical["scheduler_tick_s"] = snapshot.scheduler_tick_s
 	payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
 	return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

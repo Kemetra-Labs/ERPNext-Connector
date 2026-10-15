@@ -1,6 +1,8 @@
 # Decision: Version Pin & Upgrade Policy
 
 **Spec**: 001 — Frappe App Foundation | **Status**: Accepted | **Date**: 2026-06-04
+**Amended**: 2026-10-15, RT-494 (v16 added after the RT-201 verification; owner decision: run on
+the latest stable line)
 
 Implements FR-007 (supported version range) and supports FR-008 (upgrade policy).
 Anchored to constitution Principle III (additive & upgrade-safe changes).
@@ -9,14 +11,33 @@ Anchored to constitution Principle III (additive & upgrade-safe changes).
 
 ## Supported version range
 
-| Component | Supported line | Notes |
-|-----------|----------------|-------|
-| Frappe Framework | **v15** | Host framework |
-| ERPNext | **v15** | ERP/accounting/inventory backend; declared as `required_apps` in `hooks.py` |
-| Python | **>= 3.10** | As pinned in `pyproject.toml` (`requires-python`) |
+| Component | Supported line | Validated pin | Notes |
+|-----------|----------------|---------------|-------|
+| Frappe Framework | **v15, v16** | 15.110.0; 16.52.0 | Host framework |
+| ERPNext | **v15, v16** | 15.110.0; 16.51.0 | ERP/accounting/inventory backend; declared as `required_apps` in `hooks.py` |
+| Python | **>= 3.10** (v15 bench: 3.11; v16 bench: >= 3.14) | 3.11.6; 3.14.8 | The app's floor is `requires-python` in `pyproject.toml`; the bench decides the actual version |
+| Node | v16 bench: >= 24 | 24.22.0 | The connector ships no JS; Node matters only for the bench |
+| MariaDB | v15: 10.6; v16: 11.8 | 10.6.28; 11.8.9 | As in the frappe_docker images for each line |
 
-The connector is developed and validated against the **v15** major line of both Frappe and
-ERPNext. The app's own version starts at **`0.1.0`** (`retail_tower_erpnext_connector/__init__.py`).
+**v16 is the target line** (the latest stable Frappe/ERPNext line). v15 stays supported while
+sites migrate; dropping it is a separate decision. Frappe and ERPNext must be on the **same**
+major. v16 was validated on RT-201 (install, v15 → v16 migration, rollback, G5/idempotency,
+posting, returns, tender and pricing regression; Jira comment 11893). The app version is
+**`0.2.0`** (`retail_tower_erpnext_connector/__init__.py`; `0.1.x` was v15-only).
+
+The Compatibility Profile (RT-379) holds the same set in `SUPPORTED_MAJORS`: on a site outside it
+the posting poller does not pull (posting is paused; nothing is rejected or lost).
+
+### v16 bench prerequisites
+
+- `scheduler_tick_interval: 60` in `sites/common_site_config.json`. Frappe v16's default
+  scheduler tick is 240 s (v15: 60 s), so without it the every-minute posting poller runs only
+  about every 4 minutes and RT-45 (a sale reaches ERPNext in about a minute) is missed. Measured on
+  RT-201.
+- When the database moves from MariaDB 10.6 to 11.8 in place, run `mariadb-upgrade` (the official
+  image skips it unless `MARIADB_AUTO_UPGRADE` is set).
+- Set the site timezone (setup wizard) before installing the connector. Otherwise the scheduled
+  job types are stamped with a `creation` in the future and do not run (seen on v15 and v16).
 
 ## Enforcement stance — declared, not blocked
 
@@ -25,10 +46,12 @@ Version compatibility is **declared and documented, not enforced as install-bloc
 
 - `required_apps = ["erpnext"]` ensures the app cannot install on a site **without** ERPNext,
   but does not pin a specific ERPNext *version*.
-- If a site runs an ERPNext/Frappe version outside the v15 line, that configuration is
-  **unsupported**. The expected operator action is to align the site to the supported v15
-  line (or wait for a connector release that supports the target line) before installing or
-  upgrading. `bench` will surface gross incompatibilities during install/migrate.
+- If a site runs an ERPNext/Frappe version outside the supported lines (v15, v16), that
+  configuration is **unsupported**. The expected operator action is to align the site to a
+  supported line (or wait for a connector release that supports the target line) before
+  installing or upgrading. `bench` will surface gross incompatibilities during install/migrate.
+- Install is not blocked, but posting is: the Compatibility Profile pauses the posting poller on
+  an unsupported or mixed-major site (see above).
 
 ## Revising the pin
 

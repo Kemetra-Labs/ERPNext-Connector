@@ -50,19 +50,40 @@ class TestCompatibleSite:
 
 class TestVersion:
 	@pytest.mark.parametrize(
-		("field", "value"), [("frappe_version", "16.0.0"), ("erpnext_version", "14.70.2")]
+		("frappe_version", "erpnext_version"),
+		[("14.80.0", "14.70.2"), ("17.0.0", "17.0.0")],
 	)
-	def test_a_major_outside_v15_is_critical(self, field, value):
-		critical = _critical(**{field: value})
-		assert len(critical) == 1 and value in critical[0]
+	def test_a_major_outside_the_supported_set_is_critical(self, frappe_version, erpnext_version):
+		critical = _critical(frappe_version=frappe_version, erpnext_version=erpnext_version)
+		assert len(critical) == 2
+		assert frappe_version in critical[0]
+		assert erpnext_version in critical[1]
+		assert all("v15, v16" in finding for finding in critical)
+
+	def test_a_v16_site_is_ok(self):
+		# RT-494 (RT-201 decision): v16 is supported; the validated pin is Frappe 16.52.0 / ERPNext 16.51.0.
+		result = cp.evaluate(_snapshot(frappe_version="16.52.0", erpnext_version="16.51.0"))
+		assert result.ok
+		assert result.critical == ()
+
+	@pytest.mark.parametrize(
+		("frappe_version", "erpnext_version"), [("15.110.0", "16.51.0"), ("16.52.0", "15.110.0")]
+	)
+	def test_frappe_and_erpnext_on_different_majors_is_critical(self, frappe_version, erpnext_version):
+		# With one supported major a mismatch could not pass; with two it could, so it is checked explicitly.
+		critical = _critical(frappe_version=frappe_version, erpnext_version=erpnext_version)
+		assert len(critical) == 1
+		assert frappe_version in critical[0]
+		assert erpnext_version in critical[0]
+		assert "major" in critical[0]
 
 	@pytest.mark.parametrize("value", [None, "", "develop", "version-15"])
 	def test_an_unparseable_version_is_critical(self, value):
 		assert _critical(frappe_version=value)
 
-	def test_the_supported_set_is_v15_only(self):
-		# D5: v15 until RT-201 decides v16.
-		assert frozenset({15}) == cp.SUPPORTED_MAJORS
+	def test_the_supported_set_is_v15_and_v16(self):
+		# D5 amended by the owner on RT-201/RT-494 (2026-10-15): v15 and v16, v15 kept for the transition.
+		assert frozenset({15, 16}) == cp.SUPPORTED_MAJORS
 
 
 class TestCustomFields:
@@ -249,10 +270,12 @@ class TestReviewRound:
 		assert critical == (message,)
 
 	def test_a_default_sales_taxes_template_is_a_warning_not_critical(self):
-		# Review finding 6: v15 does not reach the is_default fallback on a server-side insert.
+		# Review finding 6: v15 does not reach the is_default fallback on a server-side insert; RT-201
+		# probe P5 showed v16.51.0 behaves the same, so the warning names both supported lines.
 		result = cp.evaluate(_snapshot(default_tax_templates=("VAT 14%",)))
 		assert result.ok and result.status == "WARNING"
 		assert "VAT 14%" in result.warnings[0] and "does not apply" in result.warnings[0]
+		assert "v15/v16" in result.warnings[0]
 
 	@pytest.mark.parametrize(
 		("field", "value"), [("unsupported", ("x",)), ("default_tax_templates", ("VAT 14%",))]
@@ -304,3 +327,36 @@ class TestBlockers:
 
 	def test_blockers_are_part_of_the_fingerprint(self):
 		assert cp.evaluate(_snapshot(blockers=("x",))).fingerprint != cp.evaluate(_snapshot()).fingerprint
+
+
+class TestSchedulerTick:
+	"""RT-494: Frappe v16's default scheduler tick is 240 s (v15: 60 s). The every-minute posting poller
+	then runs about every 4 minutes (measured on RT-201), missing RT-45. A warning, not critical:
+	posting is still correct, only slower."""
+
+	def _v16(self, **overrides):
+		return _snapshot(frappe_version="16.52.0", erpnext_version="16.51.0", **overrides)
+
+	@pytest.mark.parametrize("tick", [None, 240, 120])
+	def test_v16_without_a_one_minute_tick_is_a_warning(self, tick):
+		result = cp.evaluate(self._v16(scheduler_tick_s=tick))
+		assert result.ok
+		assert result.status == "WARNING"
+		(warning,) = result.warnings
+		assert "scheduler_tick_interval" in warning
+		assert "RT-45" in warning
+
+	@pytest.mark.parametrize("tick", [60, 30])
+	def test_v16_with_a_tick_of_a_minute_or_less_is_ok(self, tick):
+		result = cp.evaluate(self._v16(scheduler_tick_s=tick))
+		assert result.ok
+		assert result.warnings == ()
+
+	def test_v15_never_warns_about_the_tick(self):
+		# v15's default tick is already 60 s.
+		assert cp.evaluate(_snapshot(scheduler_tick_s=None)).warnings == ()
+
+	def test_an_unset_tick_leaves_the_fingerprint_unchanged(self):
+		# No drift event on every existing site just because this field was added.
+		assert cp.evaluate(_snapshot()).fingerprint == cp.evaluate(_snapshot(scheduler_tick_s=None)).fingerprint
+		assert cp.evaluate(self._v16(scheduler_tick_s=60)).fingerprint != cp.evaluate(self._v16()).fingerprint

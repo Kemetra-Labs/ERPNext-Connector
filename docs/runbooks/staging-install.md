@@ -11,13 +11,23 @@ production install is gated by [`upgrade-compatibility.md`](./upgrade-compatibil
 
 ## Prerequisites
 
-- A Frappe **bench** on the supported line: **Frappe v15 / ERPNext v15** (see
+- A Frappe **bench** on a supported line: **Frappe v16 / ERPNext v16** (target) or **Frappe v15 /
+  ERPNext v15**, both on the same major (see
   [`../decisions/version-pin-upgrade-policy.md`](../decisions/version-pin-upgrade-policy.md)).
+- On a **v16** bench: `scheduler_tick_interval: 60` in `sites/common_site_config.json` (v16
+  defaults to 240 s, which makes the every-minute posting poller run about every 4 minutes):
+  ```bash
+  bench set-config -g scheduler_tick_interval 60
+  ```
+  then restart the scheduler.
+- The site timezone is set (setup wizard) **before** the connector is installed, so its scheduled
+  jobs are due from the start.
 - A **staging** ERPNext site you can install apps onto (never production for this feature).
 - Shell access to the bench directory.
 
 > Version compatibility is **declared and documented, not enforced at install time**. A site
-> outside the supported v15 line is unsupported; align versions before installing.
+> outside the supported lines (v15, v16) is unsupported; align versions before installing. The
+> Compatibility Profile pauses posting on such a site.
 
 ## Install steps
 

@@ -474,6 +474,32 @@ class TestDeepReviewRound:
 		assert load_glue(fake).read_snapshot(_Settings(), _MAPS).tax_sources == ()
 		assert fake.set_taxes_calls[0]["tax_category"] == ""
 
+	def test_the_scheduler_tick_is_read_from_the_site_config(self, load_glue):
+		# RT-494: frappe.conf merges common_site_config, where `bench set-config -g` writes the tick.
+		fake = _Frappe(_site())
+		fake.conf = {"scheduler_tick_interval": 60}
+		assert load_glue(fake).read_snapshot(_Settings(), _MAPS).scheduler_tick_s == 60
+
+	@pytest.mark.parametrize(
+		("raw", "expected"),
+		[("60", 60), ("60.0", 60), (90.0, 90), ("60s", None), ([60], None), (0, None), (-5, None),
+		 ("inf", None), ("-Infinity", None), (float("inf"), None), ("nan", None)],
+	)
+	def test_a_malformed_scheduler_tick_reads_as_none_and_never_pauses_posting(self, load_glue, raw, expected):
+		# Gitar review on PR #76: the tick only feeds a warning, so a value Frappe's cint() reads as 0 must
+		# not make the site "unreadable" (which pauses posting). It reads as None, i.e. the v16 default.
+		fake = _Frappe(_site())
+		fake.conf = {"scheduler_tick_interval": raw}
+		glue = load_glue(fake)
+		assert glue.read_snapshot(_Settings(), _MAPS).scheduler_tick_s == expected
+		assert glue.run_preflight(_Settings(), _MAPS) is True
+		assert "compatibility.unreadable" not in _events(fake)
+
+	def test_an_unset_scheduler_tick_reads_as_none(self, load_glue):
+		fake = _Frappe(_site())
+		fake.conf = {}
+		assert load_glue(fake).read_snapshot(_Settings(), _MAPS).scheduler_tick_s is None
+
 	def test_an_erpnext_before_15_67_is_critical_with_an_honest_message(self, load_glue):
 		# Finding 2: the template flag does not exist yet; get_single_value would throw.
 		site = _site()
