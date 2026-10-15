@@ -482,7 +482,8 @@ class TestDeepReviewRound:
 
 	@pytest.mark.parametrize(
 		("raw", "expected"),
-		[("60", 60), ("60.0", 60), (90.0, 90), ("60s", None), ([60], None), (0, None), (-5, None)],
+		[("60", 60), ("60.0", 60), (90.0, 90), ("60s", None), ([60], None), (0, None), (-5, None),
+		 ("inf", None), ("-Infinity", None), (float("inf"), None), ("nan", None)],
 	)
 	def test_a_malformed_scheduler_tick_reads_as_none_and_never_pauses_posting(self, load_glue, raw, expected):
 		# Gitar review on PR #76: the tick only feeds a warning, so a value Frappe's cint() reads as 0 must

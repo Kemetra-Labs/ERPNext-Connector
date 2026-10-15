@@ -125,7 +125,7 @@ def _scheduler_tick() -> int | None:
 	conf = getattr(frappe, "conf", None) or {}
 	try:
 		value = int(float(conf.get("scheduler_tick_interval") or 0))
-	except (TypeError, ValueError):
+	except (TypeError, ValueError, OverflowError):  # OverflowError: "inf" (Gitar, PR #76)
 		return None
 	return value if value > 0 else None
 
