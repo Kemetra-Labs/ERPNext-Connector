@@ -56,13 +56,15 @@ class TestVersion:
 	def test_a_major_outside_the_supported_set_is_critical(self, frappe_version, erpnext_version):
 		critical = _critical(frappe_version=frappe_version, erpnext_version=erpnext_version)
 		assert len(critical) == 2
-		assert frappe_version in critical[0] and erpnext_version in critical[1]
+		assert frappe_version in critical[0]
+		assert erpnext_version in critical[1]
 		assert all("v15, v16" in finding for finding in critical)
 
 	def test_a_v16_site_is_ok(self):
 		# RT-494 (RT-201 decision): v16 is supported; the validated pin is Frappe 16.52.0 / ERPNext 16.51.0.
 		result = cp.evaluate(_snapshot(frappe_version="16.52.0", erpnext_version="16.51.0"))
-		assert result.ok and result.critical == ()
+		assert result.ok
+		assert result.critical == ()
 
 	@pytest.mark.parametrize(
 		("frappe_version", "erpnext_version"), [("15.110.0", "16.51.0"), ("16.52.0", "15.110.0")]
@@ -71,7 +73,9 @@ class TestVersion:
 		# With one supported major a mismatch could not pass; with two it could, so it is checked explicitly.
 		critical = _critical(frappe_version=frappe_version, erpnext_version=erpnext_version)
 		assert len(critical) == 1
-		assert frappe_version in critical[0] and erpnext_version in critical[0] and "major" in critical[0]
+		assert frappe_version in critical[0]
+		assert erpnext_version in critical[0]
+		assert "major" in critical[0]
 
 	@pytest.mark.parametrize("value", [None, "", "develop", "version-15"])
 	def test_an_unparseable_version_is_critical(self, value):
@@ -336,14 +340,17 @@ class TestSchedulerTick:
 	@pytest.mark.parametrize("tick", [None, 240, 120])
 	def test_v16_without_a_one_minute_tick_is_a_warning(self, tick):
 		result = cp.evaluate(self._v16(scheduler_tick_s=tick))
-		assert result.ok and result.status == "WARNING"
+		assert result.ok
+		assert result.status == "WARNING"
 		(warning,) = result.warnings
-		assert "scheduler_tick_interval" in warning and "RT-45" in warning
+		assert "scheduler_tick_interval" in warning
+		assert "RT-45" in warning
 
 	@pytest.mark.parametrize("tick", [60, 30])
 	def test_v16_with_a_tick_of_a_minute_or_less_is_ok(self, tick):
 		result = cp.evaluate(self._v16(scheduler_tick_s=tick))
-		assert result.ok and result.warnings == ()
+		assert result.ok
+		assert result.warnings == ()
 
 	def test_v15_never_warns_about_the_tick(self):
 		# v15's default tick is already 60 s.

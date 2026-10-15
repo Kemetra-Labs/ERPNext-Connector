@@ -116,10 +116,18 @@ def read_snapshot(settings, maps: Mapping[str, Mapping]) -> SiteSnapshot:
 
 def _scheduler_tick() -> int | None:
 	"""⏳ BENCH-VALIDATION. ``scheduler_tick_interval`` from the site config (common_site_config is
-	merged into ``frappe.conf``), or None when unset (RT-494)."""
+	merged into ``frappe.conf``), or None when unset (RT-494).
+
+	Parsed like Frappe's own ``cint`` (``"60.0"`` is 60; anything unparseable or not positive is
+	unset, which the scheduler then treats as its default). It must never raise: this value only
+	feeds a warning, and an exception here would make the whole site "unreadable" and pause posting.
+	"""
 	conf = getattr(frappe, "conf", None) or {}
-	value = int(conf.get("scheduler_tick_interval") or 0)
-	return value or None
+	try:
+		value = int(float(conf.get("scheduler_tick_interval") or 0))
+	except (TypeError, ValueError):
+		return None
+	return value if value > 0 else None
 
 
 def _erpnext_version() -> str | None:
