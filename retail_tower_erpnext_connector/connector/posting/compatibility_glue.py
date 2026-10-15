@@ -24,7 +24,7 @@ Tax sources (D4), per ERPNext v15 source (``accounts_controller.set_taxes_and_ch
 * a POS Profile of the company with ``taxes_and_charges`` (paid ``is_pos`` sales take it), including
   the scheduler user's default profile even when disabled.
 
-A default Sales Taxes and Charges Template is NOT applied on a server-side insert in v15 (the
+A default Sales Taxes and Charges Template is NOT applied on a server-side insert in v15 or v16 (the
 ``is_default`` fallback in ``set_taxes`` is not reached), so it is a warning, not critical.
 """
 
@@ -110,7 +110,16 @@ def read_snapshot(settings, maps: Mapping[str, Mapping]) -> SiteSnapshot:
 		unsupported=_unsupported(),
 		blockers=_disabled_pos_templates(pos),
 		default_tax_templates=_default_templates(company) if company else (),
+		scheduler_tick_s=_scheduler_tick(),
 	)
+
+
+def _scheduler_tick() -> int | None:
+	"""⏳ BENCH-VALIDATION. ``scheduler_tick_interval`` from the site config (common_site_config is
+	merged into ``frappe.conf``), or None when unset (RT-494)."""
+	conf = getattr(frappe, "conf", None) or {}
+	value = int(conf.get("scheduler_tick_interval") or 0)
+	return value or None
 
 
 def _erpnext_version() -> str | None:
@@ -275,7 +284,7 @@ def _tax_sources(company: str | None, customers: set[str], pos: dict[str, str]) 
 
 
 def _default_templates(company: str) -> tuple[str, ...]:
-	"""Default Sales Taxes and Charges Templates (a warning: v15 does not apply them on insert)."""
+	"""Default Sales Taxes and Charges Templates (a warning: v15/v16 do not apply them on insert)."""
 	return tuple(
 		frappe.get_all(
 			"Sales Taxes and Charges Template",

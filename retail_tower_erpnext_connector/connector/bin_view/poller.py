@@ -3,7 +3,7 @@
 
 """Bin-view poller — the scheduled entrypoint — BENCH-VALIDATION.
 
-Registered as a ``scheduler_events`` cron in ``hooks.py`` (Frappe v15 runs it on the DEFAULT
+Registered as a ``scheduler_events`` cron in ``hooks.py`` (Frappe v15 and v16 run it on the DEFAULT
 queue, 300 s job timeout). On each tick it:
 
   1. builds the 019 client over the spec-003 auth (reuses Connector Settings
@@ -20,7 +20,7 @@ queue, 300 s job timeout). On each tick it:
 INLINE WORK IS BOUNDED (Codex P1s on #56). All inline v1 attempts of a tick — retries and new
 feed requests COMBINED — share :data:`MAX_INLINE_ATTEMPTS_PER_TICK` (5 x 30 s transport
 timeout), and no DP2 call (pull or attempt) starts once ``elapsed + 30 s`` would pass
-:data:`_TICK_BUDGET_S` (240 s), so the tick stays under Frappe v15's 300 s default-queue
+:data:`_TICK_BUDGET_S` (240 s), so the tick stays under Frappe v15/v16's 300 s default-queue
 timeout. When the budget runs out mid-page, the rest of the page is left for the next tick: the
 cursor stays before the first unprocessed request, so nothing is skipped or processed twice.
 
@@ -97,7 +97,7 @@ _monotonic = time.monotonic
 # report call each, 30 s transport timeout -> at most ~150 s.
 MAX_INLINE_ATTEMPTS_PER_TICK = 5
 # No DP2 call (pull or inline attempt) starts once elapsed + 30 s would pass this; it keeps
-# the whole tick under Frappe v15's 300 s default-queue timeout.
+# the whole tick under Frappe v15/v16's 300 s default-queue timeout.
 _TICK_BUDGET_S = 240
 
 
@@ -113,7 +113,7 @@ class _Outcome:
 class _TickBudget:
     """The cron tick's bound on INLINE network work (Codex P1s on #56).
 
-    Frappe v15 runs the cron on the default queue (300 s job timeout) and every DP2 call has a
+    Frappe v15/v16 run the cron on the default queue (300 s job timeout) and every DP2 call has a
     30 s transport timeout. A tick therefore (a) starts at most :data:`MAX_INLINE_ATTEMPTS_PER_TICK`
     inline v1 attempts (new feed requests and retries COMBINED; one report call each) and (b)
     starts no DP2 call — pull or inline attempt — once ``elapsed + 30 s`` would pass
@@ -395,7 +395,7 @@ def _take_outcome(request_ref: str):
     Atomic, so an outcome can never be read twice or dropped between the read and the delete;
     works on every Redis version (unlike GETDEL, 6.2+). Bypasses ``get_value``'s per-process
     memo, which could otherwise return a stale miss within the same tick. The key and the
-    pickled value use the same scheme as frappe's ``RedisWrapper.set_value`` (v15).
+    pickled value use the same scheme as frappe's ``RedisWrapper.set_value`` (v15, unchanged in v16).
     """
     cache = frappe.cache()
     key = cache.make_key(_OUTCOME_KEY_PREFIX + request_ref)
@@ -493,7 +493,7 @@ def _log_failure(request, failure, outcome: _Outcome) -> None:
 
 
 def _job_in_flight(job_id: str) -> bool:
-    """True while the paged-report job ``job_id`` is queued or started (Frappe v15 RQ)."""
+    """True while the paged-report job ``job_id`` is queued or started (Frappe v15/v16 RQ)."""
     from frappe.utils.background_jobs import is_job_enqueued
 
     return bool(is_job_enqueued(job_id))

@@ -10,9 +10,17 @@ backup/restore, before any production change — never applied directly in produ
 
 ## Compatibility matrix
 
-| Connector version | Frappe | ERPNext | Python |
-|-------------------|--------|---------|--------|
-| 0.1.x (foundation) | v15 | v15 | >= 3.10 |
+| Connector version | Frappe | ERPNext | Python | Validated on |
+|-------------------|--------|---------|--------|--------------|
+| 0.1.x (foundation) | v15 | v15 | >= 3.10 | v15.110.0 (rt9 lab) |
+| 0.2.x (RT-494) | v15, v16 (same major for both) | v15, v16 | >= 3.10 (v16 bench: >= 3.14) | v16.51.0 / Frappe 16.52.0, MariaDB 11.8 (RT-201) |
+
+A v15 → v16 move also needs the v16 bench prerequisites in the version policy:
+`scheduler_tick_interval: 60`, `mariadb-upgrade` for MariaDB 10.6 → 11.8, and the site timezone
+set before the connector is installed. RT-201 rehearsed the whole sequence below on disposable
+stacks (Confluence Lab and Bench Runbook, section 22): backup, image swap and `bench migrate`
+(about 80 s, no data or config change), regression, and restore of the v15 backup into a clean
+v15 bench. Rollback is that restore, never an in-place database downgrade.
 
 The supported line is governed by
 [`../decisions/version-pin-upgrade-policy.md`](../decisions/version-pin-upgrade-policy.md).

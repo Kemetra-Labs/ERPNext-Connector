@@ -474,6 +474,17 @@ class TestDeepReviewRound:
 		assert load_glue(fake).read_snapshot(_Settings(), _MAPS).tax_sources == ()
 		assert fake.set_taxes_calls[0]["tax_category"] == ""
 
+	def test_the_scheduler_tick_is_read_from_the_site_config(self, load_glue):
+		# RT-494: frappe.conf merges common_site_config, where `bench set-config -g` writes the tick.
+		fake = _Frappe(_site())
+		fake.conf = {"scheduler_tick_interval": 60}
+		assert load_glue(fake).read_snapshot(_Settings(), _MAPS).scheduler_tick_s == 60
+
+	def test_an_unset_scheduler_tick_reads_as_none(self, load_glue):
+		fake = _Frappe(_site())
+		fake.conf = {}
+		assert load_glue(fake).read_snapshot(_Settings(), _MAPS).scheduler_tick_s is None
+
 	def test_an_erpnext_before_15_67_is_critical_with_an_honest_message(self, load_glue):
 		# Finding 2: the template flag does not exist yet; get_single_value would throw.
 		site = _site()
