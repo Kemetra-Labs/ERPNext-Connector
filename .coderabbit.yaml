@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# RT-590 (from RT-586 audit): CodeRabbit is the primary AI reviewer but is capped at
+# ~1 included review per hour, so reviews are aimed at high-risk PRs.
+language: "en-US"
+reviews:
+  profile: "assertive"
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true # keeps skip and rate-limit reasons visible
+  poem: false
+  in_progress_fortune: false
+  suggested_reviewers: false
+  auto_review:
+    enabled: true
+    drafts: false
+    # Pushes count against the review cap; re-review high-risk PRs with a manual
+    # `@coderabbitai review` on the final head (see README, Development principles).
+    auto_incremental_review: false
+    ignore_usernames: ["dependabot[bot]", "renovate[bot]"]
+    labels: ["!skip-coderabbit"] # opt-out label for trivial PRs
+  path_filters:
+    - "!**/dist/**"
+    - "!**/coverage/**"
+    - "!**/node_modules/**"
+    - "!**/*.png"
+    - "!**/*.svg"
+    - "!**/*.snap"
+    - "!**/__pycache__/**"
+  path_instructions:
+    - path: "retail_tower_erpnext_connector/connector/**"
+      instructions: |
+        This is the only ERPNext/Frappe adapter for Retail Tower; posting correctness is the highest risk.
+        - Idempotency: every posting must derive a stable idempotency key from the Backend-Core sale/event identity. A replay, retry or concurrent worker must never create a second ERP document (Gate G5). Flag any create path that is not guarded by a lookup or unique-index check on that key.
+        - Reversal and return builders: reversals and returns must reference the original posted document, mirror quantities, taxes and tenders with correct sign, and be idempotent themselves.
+        - MariaDB unique indexes: the unique indexes guarding posting log and Sales Invoice provenance must remain intact. Flag changes that drop, weaken or bypass them, or that rely on application-level checks alone.
+        - Tax and tender mapping: tax totals must match across POS, Backend-Core and ERPNext (Gate G6). Never silently drop, round away or default a tax, tender or stock uncertainty; surface it as an observable failure.
+        - Do not modify, monkey-patch or copy ERPNext/Frappe core. Use upgrade-safe extension mechanisms (hooks, fixtures, custom fields) only.
+        - Do not log or persist secrets or tokens; failures must stay observable with correlation IDs.
+    - path: "retail_tower_erpnext_connector/patches/**"
+      instructions: |
+        Patches run on every `bench migrate` and must be additive, idempotent and re-runnable.
+        - Unique-index patches guard `(source_system, external_id)` on Posting Log and `(rt_source_system, rt_external_id)` on Sales Invoice (Gate G5). An early no-op when the target DocType table does not exist yet is acceptable. Once the table exists, the patch must fail the migrate loudly if the guard's prerequisites are missing (e.g. absent columns) or the index cannot be added (e.g. pre-existing duplicate rows). Never silently skip, delete or merge rows.
+        - Index creation and existence checks must work on MariaDB for supported Frappe versions; flag destructive DDL, data deletion, or changes that are not safe to re-run.
+        - Do not modify ERPNext/Frappe core tables beyond the connector's own additive indexes or custom fields.
+chat:
+  auto_reply: true
