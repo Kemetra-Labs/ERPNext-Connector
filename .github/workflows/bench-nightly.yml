@@ -1,0 +1,169 @@
+# RT-581: nightly real-bench run of the app's Frappe tests (test_foundation + the Gate G5 real-DB
+# index test), which ci.yml cannot run because they need a live site and MariaDB.
+# Informational for now — NOT a required PR check (RT-578 risk-tier policy: promote only after
+# two weeks of green nightlies).
+#
+# Built on Frappe v16's own `bench new-app` CI template (frappe/utils/boilerplate.py @ v16.52.0),
+# with pinned versions, SHA-pinned actions and least privilege.
+#
+# Why v16: it is the latest stable line in the supported set {15, 16} (RT-494) and the owner's
+# target. The pins are the RT-494 validated pair, the same one RT-576's evidence was recorded on,
+# so a nightly result compares like for like. Bump them deliberately, together with that policy.
+name: Bench nightly
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FRAPPE_REF: v16.52.0
+  ERPNEXT_REF: v16.51.0
+  BENCH_VERSION: "5.31.0"
+  PYTEST_VERSION: "9.1.1"
+  APP: retail_tower_erpnext_connector
+  SITE: test_site
+
+jobs:
+  bench:
+    name: Bench tests (Frappe v16, MariaDB)
+    runs-on: ubuntu-latest
+    # A full run takes about 2-3 minutes. No dependency cache on purpose: bench 5.x already installs
+    # with uv, and a measured uv+yarn cache (~0.9 GB) restored in 13 s for no net gain (RT-581).
+    timeout-minutes: 20
+
+    # Throwaway service containers that live only for this job; the root password below is a
+    # job-local value, not a secret.
+    services:
+      redis-cache:
+        image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+        ports:
+          - 11000:6379
+      mariadb:
+        image: mariadb:11.8@sha256:f16d7a344413e519dff518f27bdb221388f84b0d274c97c4fb5f2cb0dc1b34fa
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -h 127.0.0.1"
+          --health-interval=5s --health-timeout=2s --health-retries=20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Frappe v16 requires Python 3.14 and Node 24 (RT-494).
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Install MariaDB client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mariadb-client
+
+      - name: Initialise bench
+        run: |
+          pip install --only-binary :all: "frappe-bench==${BENCH_VERSION}"
+          bench init --frappe-branch "${FRAPPE_REF}" --skip-redis-config-generation --skip-assets \
+            --python "$(which python)" ~/frappe-bench
+
+      - name: Get apps and create the throwaway site
+        working-directory: /home/runner/frappe-bench
+        env:
+          CI: "Yes"
+        run: |
+          bench get-app --branch "${ERPNEXT_REF}" --skip-assets https://github.com/frappe/erpnext
+          bench get-app --skip-assets "${APP}" "${GITHUB_WORKSPACE}"
+          bench setup requirements --dev
+          # The app's frappe-free unit-test modules import pytest; bench discovery imports every
+          # test_*.py, so it must be importable even though bench runs only unittest TestCases.
+          bench pip install --only-binary :all: "pytest==${PYTEST_VERSION}"
+          bench new-site --db-host 127.0.0.1 --db-root-password root --admin-password admin "${SITE}"
+          bench --site "${SITE}" install-app erpnext
+          bench --site "${SITE}" install-app "${APP}"
+
+      - name: Run app tests
+        working-directory: /home/runner/frappe-bench
+        env:
+          CI: "Yes"
+        run: |
+          bench --site "${SITE}" set-config allow_tests true
+          bench --site "${SITE}" run-tests --app "${APP}" --junit-xml-output "${RUNNER_TEMP}/bench-junit.xml"
+
+      # Lists every failing test and fails if any real-DB G5 test method was skipped or never
+      # collected, so a silent skip can't pass for a green run.
+      - name: Summarise results
+        if: always()
+        env:
+          JUNIT: ${{ runner.temp }}/bench-junit.xml
+        shell: python
+        run: |
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+
+          out = open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8")
+          out.write("## Bench nightly\n\n")
+          path = os.environ["JUNIT"]
+          if not os.path.exists(path):
+              out.write("No JUnit report: the tests did not run (see the earlier steps).\n")
+              sys.exit(1)
+
+          results = {}
+          for case in ET.parse(path).iter("testcase"):
+              test_id = f"{case.get('classname')}.{case.get('name')}"
+              status = "passed"
+              for tag in ("failure", "error", "skipped"):
+                  if case.find(tag) is not None:
+                      status = tag
+              results[test_id] = status
+
+          counts = {}
+          for status in results.values():
+              counts[status] = counts.get(status, 0) + 1
+          out.write(f"Total: {len(results)} — " + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) + "\n\n")
+          bad = sorted(t for t, s in results.items() if s in ("failure", "error"))
+          if bad:
+              out.write("Failing tests:\n\n" + "".join(f"- `{t}` ({results[t]})\n" for t in bad) + "\n")
+
+          # Every G5 method must have run: keep this set in step with test_g5_unique_index_db.py.
+          expected = {
+              "test_index_is_installed",
+              "test_duplicate_provenance_is_rejected_by_the_unique_index",
+              "test_distinct_provenance_is_accepted",
+              "test_null_provenance_is_not_deduplicated",
+          }
+          g5 = {t.rsplit(".", 1)[-1]: s for t, s in results.items() if "TestSalesInvoiceProvenanceUniqueIndex" in t}
+          missing = sorted(expected - set(g5))
+          skipped = sorted(m for m, s in g5.items() if s == "skipped")
+          if missing or skipped:
+              out.write(f"**The Gate G5 real-DB test did not fully run.** Missing: {missing}; skipped: {skipped}\n")
+              print(f"::error::Gate G5 real-DB test incomplete. Missing: {missing}; skipped: {skipped}")
+              sys.exit(1)
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-junit
+          path: ${{ runner.temp }}/bench-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
