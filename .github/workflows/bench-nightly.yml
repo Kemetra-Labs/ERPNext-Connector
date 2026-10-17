@@ -15,12 +15,6 @@ on:
   schedule:
     - cron: "23 2 * * *"
   workflow_dispatch:
-  # TEMPORARY (RT-581 development only): lets the job run on its own PR before it exists on main.
-  # Remove before merge.
-  pull_request:
-    paths:
-      - .github/workflows/bench-nightly.yml
-      - retail_tower_erpnext_connector/tests/test_g5_unique_index_db.py
 
 permissions:
   contents: read
@@ -87,7 +81,7 @@ jobs:
 
       - name: Initialise bench
         run: |
-          pip install "frappe-bench==${BENCH_VERSION}"
+          pip install --only-binary :all: "frappe-bench==${BENCH_VERSION}"
           bench init --frappe-branch "${FRAPPE_REF}" --skip-redis-config-generation --skip-assets \
             --python "$(which python)" ~/frappe-bench
 
@@ -101,7 +95,7 @@ jobs:
           bench setup requirements --dev
           # The app's frappe-free unit-test modules import pytest; bench discovery imports every
           # test_*.py, so it must be importable even though bench runs only unittest TestCases.
-          bench pip install "pytest==${PYTEST_VERSION}"
+          bench pip install --only-binary :all: "pytest==${PYTEST_VERSION}"
           bench new-site --db-host 127.0.0.1 --db-root-password root --admin-password admin "${SITE}"
           bench --site "${SITE}" install-app erpnext
           bench --site "${SITE}" install-app "${APP}"
