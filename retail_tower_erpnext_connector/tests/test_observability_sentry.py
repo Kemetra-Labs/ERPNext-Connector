@@ -158,9 +158,11 @@ class TestFailureNeverPropagates(_CacheReset):
 		capture.assert_called_once_with(original, request_id=_REQUEST_ID, job_name="posting_poll")
 
 	def test_report_unhandled_reraises_even_when_reporting_fails(self):
+		original = ValueError("tick failed")
 		with mock.patch.object(sentry_client, "resolve_config", side_effect=RuntimeError("boom")):
-			with self.assertRaises(ValueError):
-				_tick_raising(ValueError("tick failed"))
+			with self.assertRaises(ValueError) as raised:
+				_tick_raising(original)
+		self.assertIs(raised.exception, original)
 
 	def test_report_unhandled_is_silent_on_success(self):
 		with mock.patch.object(sentry_client, "capture_tick_error") as capture:
