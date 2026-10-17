@@ -433,6 +433,9 @@ Exit criteria:
 - Preserve auditability: every mutation is idempotent and every failure observable.
 - Never hide tax or stock uncertainty.
 - Upgrade through staging, never directly in production.
+- High-risk PRs (RT-582 High tier) get a manual `@coderabbitai review` comment on the final head;
+  CodeRabbit's automatic incremental reviews are off because pushes count against its review cap.
+  Add the `skip-coderabbit` label to opt a trivial PR out entirely.
 
 Governing documents: [constitution](.specify/memory/constitution.md) ·
 [standing rules](docs/agent-os/standing-rules.md). The unit of work is a Jira issue (project RT);
