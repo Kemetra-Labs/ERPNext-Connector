@@ -180,20 +180,22 @@ def _wire_work_item() -> dict:
 	}
 
 
-def _posting_tick(monkeypatch):
+def _posting_page() -> dict:
+	# A valid item (→ post_valid → glue) and a malformed one (→ the worker's real ack path).
+	return {
+		"items": [_wire_work_item(), {"workItemRef": _BAD_REF, "kind": "bogus"}],
+		"cursor": "c-1",
+		"next_page_token": None,
+	}
+
+
+def _posting_tick(monkeypatch, transport=None):
 	"""Run one real ``run_posting_poll`` tick over faked frappe/HTTP seams; return what it sent."""
 	poller = importlib.import_module(_POSTING_POLLER)
 	glue = importlib.import_module(_POSTING_GLUE)
 	guard = importlib.import_module(_INDEX_GUARD)
 
-	# A valid item (→ post_valid → glue) and a malformed one (→ the worker's real ack path).
-	transport = _RecordingTransport(
-		{
-			"items": [_wire_work_item(), {"workItemRef": _BAD_REF, "kind": "bogus"}],
-			"cursor": "c-1",
-			"next_page_token": None,
-		}
-	)
+	transport = transport or _RecordingTransport(_posting_page())
 	monkeypatch.setattr(guard, "evaluate", lambda _probe: guard.GuardResult(ok=True, missing=()))
 	# RT-379: a compatible site (the profile itself is covered by test_compatibility_*).
 	profile = importlib.import_module("retail_tower_erpnext_connector.connector.posting.compatibility_glue")
@@ -259,28 +261,30 @@ class _Clock:
 		return "2026-06-01T10:00:00.000Z"
 
 
-def _bin_view_tick(monkeypatch):
+def _bin_view_page() -> dict:
+	return {
+		"items": [
+			{
+				"requestRef": _REQUEST_REF,
+				"storeId": _STORE,
+				"erpnextWarehouseRef": "ERP-WH-1",
+				"runRef": "44444444-4444-4444-8444-444444444444",
+				"itemWindow": {"windowSeq": 0, "maxItems": 500, "fromItemRef": None, "toItemRef": None},
+				"itemCursor": _REQUEST_REF,
+			}
+		],
+		"cursor": "c-1",
+		"next_page_token": None,
+	}
+
+
+def _bin_view_tick(monkeypatch, transport=None):
 	"""Run one real ``run_bin_view_poll`` tick over faked frappe/HTTP seams; return what it sent."""
 	poller = importlib.import_module(_BIN_VIEW_POLLER)
 	posting_poller = importlib.import_module(_POSTING_POLLER)
 	glue = importlib.import_module(_BIN_VIEW_GLUE)
 
-	transport = _RecordingTransport(
-		{
-			"items": [
-				{
-					"requestRef": _REQUEST_REF,
-					"storeId": _STORE,
-					"erpnextWarehouseRef": "ERP-WH-1",
-					"runRef": "44444444-4444-4444-8444-444444444444",
-					"itemWindow": {"windowSeq": 0, "maxItems": 500, "fromItemRef": None, "toItemRef": None},
-					"itemCursor": _REQUEST_REF,
-				}
-			],
-			"cursor": "c-1",
-			"next_page_token": None,
-		}
-	)
+	transport = transport or _RecordingTransport(_bin_view_page())
 	monkeypatch.setattr(posting_poller, "_build_http_transport", lambda _settings: transport)
 	monkeypatch.setattr(glue, "FrappeBinReader", _Reader)
 	monkeypatch.setattr(glue, "UtcClock", _Clock)
@@ -306,3 +310,108 @@ def test_bin_view_tick_keeps_the_request_ref_idempotency_key(frappe_stub, monkey
 
 def test_each_bin_view_tick_mints_its_own_request_id(frappe_stub, monkeypatch):
 	assert _request_ids(_bin_view_tick(monkeypatch)) != _request_ids(_bin_view_tick(monkeypatch))
+
+
+# --- RT-635 (OBS-6): an unhandled tick error reaches Sentry tagged with the SAME request id ------
+# The Connector-only Sentry client is replaced by a recorder (it has its own tests in
+# test_observability_sentry.py); these prove the wiring: the tag equals the X-Request-Id the tick
+# sent to Backend-Core, the original error still propagates to the scheduler, a healthy tick never
+# touches Sentry, and a failing Sentry never stops posting (AC4 / AC5 at unit level).
+
+_SENTRY = f"{_ROOT}.connector.observability.sentry_client"
+_DSN = "https://0123456789abcdef0123456789abcdef@o123.ingest.de.sentry.io/4567"
+
+
+class _FailingPullTransport(_RecordingTransport):
+	"""Records the pull's headers, then fails it the way ``requests`` does when DP2 is down."""
+
+	def get(self, path, *, params, headers):
+		super().get(path, params=params, headers=headers)
+		raise ConnectionError("GET https://dp2.example/v1/feed?since=c-1 failed")
+
+
+def _record_captures(monkeypatch) -> list:
+	sentry = importlib.import_module(_SENTRY)
+	captured = []
+
+	def _capture(exc, *, request_id, job_name):
+		captured.append((exc, request_id, job_name))
+		return True
+
+	monkeypatch.setattr(sentry, "capture_tick_error", _capture)
+	return captured
+
+
+def test_posting_tick_error_is_reported_with_the_sent_request_id(frappe_stub, monkeypatch):
+	captured = _record_captures(monkeypatch)
+	transport = _FailingPullTransport(_posting_page())
+
+	with pytest.raises(ConnectionError) as raised:
+		_posting_tick(monkeypatch, transport)
+
+	((exc, request_id, job_name),) = captured
+	assert raised.value is exc  # the scheduler still sees the original error
+	assert job_name == "posting_poll"
+	assert _request_ids(transport) == {request_id}  # same id as Backend-Core logged
+
+
+def test_bin_view_tick_error_is_reported_with_the_sent_request_id(frappe_stub, monkeypatch):
+	captured = _record_captures(monkeypatch)
+	transport = _FailingPullTransport(_bin_view_page())
+
+	with pytest.raises(ConnectionError) as raised:
+		_bin_view_tick(monkeypatch, transport)
+
+	((exc, request_id, job_name),) = captured
+	assert raised.value is exc
+	assert job_name == "bin_view_poll"
+	assert _request_ids(transport) == {request_id}
+
+
+
+def test_paged_report_job_error_is_reported_and_reraised(frappe_stub, monkeypatch):
+	captured = _record_captures(monkeypatch)
+	poller = importlib.import_module(_BIN_VIEW_POLLER)
+
+	malformed = {"requestRef": "not-a-request"}  # no storeId: an unhandled KeyError in the job
+	with pytest.raises(KeyError, match="storeId") as raised:
+		poller.run_paged_report_job(malformed)
+
+	((exc, request_id, job_name),) = captured
+	assert raised.value is exc
+	assert job_name == "bin_view_paged_report"
+	_assert_backend_core_accepts(request_id)
+
+def test_healthy_ticks_never_touch_sentry(frappe_stub, monkeypatch):
+	monkeypatch.setenv("RT_CONNECTOR_SENTRY_DSN", _DSN)
+	sentry = importlib.import_module(_SENTRY)
+
+	def _never(*_a, **_k):
+		raise AssertionError("the SDK was loaded on a healthy tick")
+
+	monkeypatch.setattr(sentry, "_load_sdk", _never)
+	_posting_tick(monkeypatch)
+	_bin_view_tick(monkeypatch)
+
+
+def test_posting_continues_while_sentry_is_blocked(frappe_stub, monkeypatch):
+	monkeypatch.setenv("RT_CONNECTOR_SENTRY_DSN", _DSN)
+	sentry = importlib.import_module(_SENTRY)
+	sentry.reset_cache()
+
+	class _BlockedHub:
+		def __init__(self, _client):
+			pass
+
+		def capture_exception(self, *_a, **_k):
+			raise OSError("sentry ingest unreachable")
+
+	sdk = types.SimpleNamespace(Client=lambda **_options: object(), Hub=_BlockedHub)
+	monkeypatch.setattr(sentry, "_load_sdk", lambda: sdk)
+
+	failing = _FailingPullTransport(_posting_page())
+	with pytest.raises(ConnectionError):  # the tick's own error, never Sentry's
+		_posting_tick(monkeypatch, failing)
+	_transport, glue_calls = _posting_tick(monkeypatch)  # the next tick still posts
+	assert len(glue_calls) == 1
+	sentry.reset_cache()

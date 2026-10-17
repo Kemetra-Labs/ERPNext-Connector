@@ -29,8 +29,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      # RT-635: sentry-sdk is not an app dependency (Frappe v15/v16 ship sentry-sdk~=1.45.1); it is
+      # pinned here so the Connector Sentry client tests run against the real SDK, not only on a bench.
       - name: Install test tools
-        run: python -m pip install pytest==9.1.1 pytest-cov==7.1.0 ruff==0.15.20
+        run: |
+          python -m pip install --only-binary :all: pytest==9.1.1 pytest-cov==7.1.0 ruff==0.15.20 sentry-sdk==1.45.1
 
       - name: Lint
         run: python -m ruff check retail_tower_erpnext_connector

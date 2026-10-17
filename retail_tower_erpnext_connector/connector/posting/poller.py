@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import frappe
 
+from ..observability.sentry_client import report_unhandled
 from ..request_id import new_request_id
 from . import worker
 from .frappe_store import FrappePostingLogStore
@@ -37,6 +38,15 @@ def run_posting_poll() -> None:
     Conservative by design: bounded pages per tick, no self-retry (a transient ack returns control
     to DP2), and every page's per-item outcomes are recorded before any page-level alert.
     """
+    # RT-39 — one UUID per tick, sent as the X-Request-Id of every call (Backend-Core keeps + echoes
+    # it). RT-635 — the same value tags an unhandled tick error in the Connector's Sentry project,
+    # so the event matches Backend-Core's log line. The error is re-raised unchanged.
+    request_id = new_request_id()
+    with report_unhandled(job_name="posting_poll", request_id=request_id):
+        _run_posting_tick(request_id)
+
+
+def _run_posting_tick(request_id: str) -> None:
     # RT-58 — never post without the Gate G5 exactly-once indexes (RT-54: a fresh install lacked
     # them and a crash-window replay duplicated the SI and its stock movement). Skip the tick:
     # sales stay pending in DP2 — nothing is rejected, lost or duplicated.
@@ -54,7 +64,7 @@ def run_posting_poll() -> None:
         )
         return
 
-    path = _ready_posting_path()
+    path = _ready_posting_path(request_id)
     if path is None:
         return
     client, post_valid = path
@@ -79,7 +89,7 @@ def run_posting_poll() -> None:
             break  # caught up — no more pending pages
 
 
-def _ready_posting_path():
+def _ready_posting_path(correlation_id: str):
     """The bound posting path, or ``None`` when this tick must not pull (nothing is lost either way).
 
     ``None`` when the configuration is not ready (``posting.poll.skipped``) or when the RT-379
@@ -88,7 +98,7 @@ def _ready_posting_path():
     backlog stays in Backend-Core (D2); warnings are recorded and posting continues.
     """
     try:
-        client, post_valid, preflight = _build_posting_path()
+        client, post_valid, preflight = _build_posting_path(correlation_id)
     except Exception as exc:  # config/auth not ready — log and skip this tick (no partial work).
         frappe.logger(_LOGGER).warning(
             {"event": "posting.poll.skipped", "reason": _safe(str(exc))}
@@ -102,7 +112,7 @@ def _ready_posting_path():
     return (client, post_valid) if ready else None
 
 
-def _build_posting_path():
+def _build_posting_path(correlation_id: str):
     """Construct the 012 client, a bound ``post_valid(work_item)`` callable and the RT-379 preflight.
 
     Wires: the spec-003-authed PostingFeedClient, the Frappe-backed idempotency store, the signed
@@ -117,8 +127,6 @@ def _build_posting_path():
     from .transport import PostingFeedClient
     from .uom import PreResolvedWarehouse, StoreCustomerMap, UomMap
 
-    # RT-39 — a UUID so Backend-Core keeps + echoes it (it re-mints any non-UUID X-Request-Id).
-    correlation_id = new_request_id()
     settings = frappe.get_doc("Connector Settings")  # one read; child tables + Password live here
 
     # Proactive credential-lifecycle warnings (007 OQ-1 expiry + OQ-2 unlinked): best-effort, BEFORE
