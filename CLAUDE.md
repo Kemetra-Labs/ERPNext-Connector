@@ -519,6 +519,12 @@ Bootstrap read order for every session:
 
 The Spec-Kit flow (specify → clarify → plan → tasks → analyze → implement) remains the spec-authoring process used within a Jira issue's scope; it does not replace Jira as the work-management authority. Do not duplicate standing-rules content here; `standing-rules.md` governs on engineering-gate questions.
 
+## Allowed observability egress (RT-635, OBS-1 §6)
+
+> **Allowed observability egress.** This service may send telemetry only to Sentry (`*.ingest.de.sentry.io`, org `kemetra`) and Datadog (`*.us5.datadoghq.com`, or the internal Datadog Agent). It must follow the Observability contract (RT-629): allowlisted fields only, no PII, secrets or business payloads, default-inert without keys, and never blocking on vendor failure. Any new destination is a separate owner decision.
+
+In this repo that is `connector/observability/` only: a Connector-owned Sentry `Hub(Client(...))`, errors only, inert unless `RT_CONNECTOR_SENTRY_DSN` is set (`*.ingest.de.sentry.io` DSNs only), tagged `service=erpnext-connector`, `env` (`DEPLOYMENT_ENVIRONMENT`), `version`/`release` (`RT_CONNECTOR_RELEASE`, SHA12) and the tick `request_id`. Never call `sentry_sdk.init()`, never bind a client to the global hub, and never enable Frappe's built-in integration (`FRAPPE_SENTRY_DSN`, `enable_telemetry`): it reports through the global hub with request bodies.
+
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:

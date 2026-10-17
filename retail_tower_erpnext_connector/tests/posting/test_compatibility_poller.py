@@ -77,7 +77,7 @@ def _wire(monkeypatch, poller, *, profile_ok):
 		calls["preflight"] += 1
 		return profile_ok
 
-	def _build():
+	def _build(_correlation_id):
 		calls["build"] += 1
 		return object(), lambda item: None, _preflight
 
@@ -108,7 +108,7 @@ class TestComposition:
 		poller = load_poller(_Frappe())
 		calls = _wire(monkeypatch, poller, profile_ok=True)
 
-		def _build():
+		def _build(_correlation_id):
 			def _boom():
 				raise RuntimeError("profile bug")
 
@@ -147,7 +147,7 @@ class TestPreflightSeesTheParsedMaps:
 		seen = {}
 		monkeypatch.setattr(glue, "run_preflight", lambda s, maps: seen.update(settings=s, maps=maps) or True)
 		monkeypatch.setattr(poller, "_warn_credential_lifecycle", lambda s: None)
-		_client, _post_valid, preflight = poller._build_posting_path()
+		_client, _post_valid, preflight = poller._build_posting_path("5f0c6f7e-3c1a-4b8e-9d2f-1a2b3c4d5e6f")
 		assert preflight() is True
 		assert seen["settings"] is settings
 		assert seen["maps"] == {

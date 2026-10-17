@@ -65,6 +65,7 @@ from dataclasses import dataclass
 
 import frappe
 
+from ..observability.sentry_client import report_unhandled
 from ..request_id import new_request_id
 from . import worker
 from .contracts import BinViewRequest
@@ -163,8 +164,16 @@ class _Tick:
 
 def run_bin_view_poll() -> None:
     """Scheduler entrypoint — fold job outcomes, drain retries, pull + report one batch."""
+    # RT-39 / RT-635 — one UUID per tick: the X-Request-Id of every call and the Sentry tag of an
+    # unhandled tick error (re-raised unchanged), so the event matches Backend-Core's log line.
+    request_id = new_request_id()
+    with report_unhandled(job_name="bin_view_poll", request_id=request_id):
+        _run_bin_view_tick(request_id)
+
+
+def _run_bin_view_tick(request_id: str) -> None:
     try:
-        client, reader, clock = _build_bin_view_path()
+        client, reader, clock = _build_bin_view_path(request_id)
     except Exception as exc:  # config/auth not ready — log + skip the tick (no partial work).
         frappe.logger(_LOGGER).warning(
             {"event": "bin_view.poll.skipped", "reason": _safe(str(exc))}
@@ -281,9 +290,17 @@ def run_paged_report_job(request_wire: dict, retried: bool = False) -> None:
     one, the next tick sees no outcome and no job in flight, and counts the charged attempt as
     failed.
     """
+    # RT-635 — its own request id, like a tick: the X-Request-Id of the job's calls and the Sentry
+    # tag of an unhandled job error (re-raised unchanged).
+    request_id = new_request_id()
+    with report_unhandled(job_name="bin_view_paged_report", request_id=request_id):
+        _run_paged_report(request_wire, retried, request_id)
+
+
+def _run_paged_report(request_wire: dict, retried: bool, request_id: str) -> None:
     request = BinViewRequest.from_wire(request_wire)
     try:
-        client, reader, clock = _build_bin_view_path()
+        client, reader, clock = _build_bin_view_path(request_id)
     except Exception as exc:
         frappe.logger(_LOGGER).warning(
             {"event": "bin_view.poll.skipped", "reason": _safe(str(exc)),
@@ -499,7 +516,7 @@ def _job_in_flight(job_id: str) -> bool:
     return bool(is_job_enqueued(job_id))
 
 
-def _build_bin_view_path():
+def _build_bin_view_path(correlation_id: str):
     """Construct the 019 client + the frappe-backed Bin reader + a UTC clock.
 
     Reuses the Connector Settings ``dp2_base_url`` + ``dp2_token`` (the posting poller's
@@ -508,8 +525,6 @@ def _build_bin_view_path():
     from ..posting.poller import _build_http_transport  # reuse the auth-backed transport
     from .frappe_glue import FrappeBinReader, UtcClock
 
-    # RT-39 — a UUID so Backend-Core keeps + echoes it (it re-mints any non-UUID X-Request-Id).
-    correlation_id = new_request_id()
     settings = frappe.get_doc("Connector Settings")
     transport = _build_http_transport(settings)
     client = BinViewClient(transport, correlation_id=correlation_id)

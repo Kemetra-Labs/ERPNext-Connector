@@ -195,7 +195,7 @@ def _poller(fake, dp2, reader):
     poller = importlib.import_module(_POLLER)
     from retail_tower_erpnext_connector.connector.bin_view.transport import BinViewClient
 
-    poller._build_bin_view_path = lambda: (BinViewClient(dp2, correlation_id="corr"), reader, _Clock())
+    poller._build_bin_view_path = lambda _correlation_id: (BinViewClient(dp2, correlation_id="corr"), reader, _Clock())
     poller._job_in_flight = lambda job_id: any(job["job_id"] == job_id for job in fake.jobs)
     return poller
 
