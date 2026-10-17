@@ -1,0 +1,187 @@
+# RT-581: nightly real-bench run of the app's Frappe tests (test_foundation + the Gate G5 real-DB
+# index test), which ci.yml cannot run because they need a live site and MariaDB.
+# Informational for now — NOT a required PR check (RT-578 risk-tier policy: promote only after
+# two weeks of green nightlies).
+#
+# Built on Frappe v16's own `bench new-app` CI template (frappe/utils/boilerplate.py @ v16.52.0),
+# with pinned versions, SHA-pinned actions and least privilege.
+#
+# Why v16: it is the latest stable line in the supported set {15, 16} (RT-494) and the owner's
+# target. The pins are the RT-494 validated pair, the same one RT-576's evidence was recorded on,
+# so a nightly result compares like for like. Bump them deliberately, together with that policy.
+name: Bench nightly
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+  # TEMPORARY (RT-581 development only): lets the job run on its own PR before it exists on main.
+  # Remove before merge.
+  pull_request:
+    paths:
+      - .github/workflows/bench-nightly.yml
+      - retail_tower_erpnext_connector/tests/test_g5_unique_index_db.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FRAPPE_REF: v16.52.0
+  ERPNEXT_REF: v16.51.0
+  BENCH_VERSION: "5.31.0"
+  PYTEST_VERSION: "9.1.1"
+  APP: retail_tower_erpnext_connector
+  SITE: test_site
+
+jobs:
+  bench:
+    name: Bench tests (Frappe v16, MariaDB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    # Throwaway service containers that live only for this job; the root password below is a
+    # job-local value, not a secret.
+    services:
+      redis-cache:
+        image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+        ports:
+          - 11000:6379
+      mariadb:
+        image: mariadb:11.8@sha256:f16d7a344413e519dff518f27bdb221388f84b0d274c97c4fb5f2cb0dc1b34fa
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -h 127.0.0.1"
+          --health-interval=5s --health-timeout=2s --health-retries=20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Frappe v16 requires Python 3.14 and Node 24 (RT-494).
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      # Keyed on the pinned versions: the bench's dependencies change only when a pin changes.
+      - name: Cache pip
+        id: pip-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pip
+          key: bench-pip-${{ runner.os }}-py3.14-${{ env.FRAPPE_REF }}-${{ env.ERPNEXT_REF }}-${{ env.BENCH_VERSION }}
+
+      - name: Get yarn cache directory
+        id: yarn-dir
+        run: echo "dir=$(yarn cache dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache yarn
+        id: yarn-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.yarn-dir.outputs.dir }}
+          key: bench-yarn-${{ runner.os }}-node24-${{ env.FRAPPE_REF }}-${{ env.ERPNEXT_REF }}
+
+      - name: Install MariaDB client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mariadb-client
+
+      - name: Initialise bench
+        run: |
+          pip install "frappe-bench==${BENCH_VERSION}"
+          bench init --frappe-branch "${FRAPPE_REF}" --skip-redis-config-generation --skip-assets \
+            --python "$(which python)" ~/frappe-bench
+
+      - name: Get apps and create the throwaway site
+        working-directory: /home/runner/frappe-bench
+        env:
+          CI: "Yes"
+        run: |
+          bench get-app --branch "${ERPNEXT_REF}" --skip-assets https://github.com/frappe/erpnext
+          bench get-app --skip-assets "${APP}" "${GITHUB_WORKSPACE}"
+          bench setup requirements --dev
+          # The app's frappe-free unit-test modules import pytest; bench discovery imports every
+          # test_*.py, so it must be importable even though bench runs only unittest TestCases.
+          bench pip install "pytest==${PYTEST_VERSION}"
+          bench new-site --db-host 127.0.0.1 --db-root-password root --admin-password admin "${SITE}"
+          bench --site "${SITE}" install-app erpnext
+          bench --site "${SITE}" install-app "${APP}"
+
+      - name: Run app tests
+        working-directory: /home/runner/frappe-bench
+        env:
+          CI: "Yes"
+        run: |
+          bench --site "${SITE}" set-config allow_tests true
+          bench --site "${SITE}" run-tests --app "${APP}" --junit-xml-output "${RUNNER_TEMP}/bench-junit.xml"
+
+      # Lists every failing test and fails if the real-DB G5 test was skipped or never collected,
+      # so a silent skip can't pass for a green run.
+      - name: Summarise results
+        if: always()
+        env:
+          JUNIT: ${{ runner.temp }}/bench-junit.xml
+          PIP_CACHE_HIT: ${{ steps.pip-cache.outputs.cache-hit }}
+          YARN_CACHE_HIT: ${{ steps.yarn-cache.outputs.cache-hit }}
+        shell: python
+        run: |
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+
+          out = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
+          out.write("## Bench nightly\n\n")
+          out.write(f"Cache hit: pip=`{os.environ['PIP_CACHE_HIT'] or 'false'}`, "
+                    f"yarn=`{os.environ['YARN_CACHE_HIT'] or 'false'}`\n\n")
+          path = os.environ["JUNIT"]
+          if not os.path.exists(path):
+              out.write("No JUnit report: the tests did not run (see the earlier steps).\n")
+              sys.exit(1)
+
+          results = {}
+          for case in ET.parse(path).iter("testcase"):
+              test_id = f"{case.get('classname')}.{case.get('name')}"
+              status = "passed"
+              for tag in ("failure", "error", "skipped"):
+                  if case.find(tag) is not None:
+                      status = tag
+              results[test_id] = status
+
+          counts = {}
+          for status in results.values():
+              counts[status] = counts.get(status, 0) + 1
+          out.write(f"Total: {len(results)} — " + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) + "\n\n")
+          bad = sorted(t for t, s in results.items() if s in ("failure", "error"))
+          if bad:
+              out.write("Failing tests:\n\n" + "".join(f"- `{t}` ({results[t]})\n" for t in bad) + "\n")
+
+          g5 = {t: s for t, s in results.items() if "TestSalesInvoiceProvenanceUniqueIndex" in t}
+          if not g5 or any(s == "skipped" for s in g5.values()):
+              out.write("**The Gate G5 real-DB test did not run (missing or skipped).**\n")
+              print("::error::TestSalesInvoiceProvenanceUniqueIndex was not collected or was skipped")
+              sys.exit(1)
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-junit
+          path: ${{ runner.temp }}/bench-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
