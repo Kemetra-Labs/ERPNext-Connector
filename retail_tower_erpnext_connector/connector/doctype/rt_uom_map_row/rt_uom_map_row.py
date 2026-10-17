@@ -12,4 +12,4 @@ from frappe.model.document import Document
 
 
 class RTUomMapRow(Document):
-    pass
+	pass

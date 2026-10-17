@@ -305,7 +305,9 @@ class TestBeforeSubmit:
 		assert fake.payloads[0]["is_pos"] == 1
 		assert fake.events == ["savepoint", "insert", "rollback"]
 		assert client.acks[0]["ack"]["reason"]["category"] == "validation"
-		assert client.acks[0]["ack"]["reason"]["message"].startswith("RepresentationMismatch: representation:")
+		assert client.acks[0]["ack"]["reason"]["message"].startswith(
+			"RepresentationMismatch: representation:"
+		)
 		assert store.writes == []
 
 	def test_the_sale_carries_the_site_default_company_explicitly(self, load_glue):
@@ -395,7 +397,10 @@ class TestRejectionReasonAttribution:
 		fake = _Frappe(on_insert=_raise_on_insert(NameError("name 'flt' is not defined")))
 		outcome, client, store = _post(load_glue(fake))
 		assert outcome == "permanently_rejected"
-		assert client.acks[0]["ack"]["reason"] == {"category": "other", "message": "NameError: name 'flt' is not defined"}
+		assert client.acks[0]["ack"]["reason"] == {
+			"category": "other",
+			"message": "NameError: name 'flt' is not defined",
+		}
 		assert "rollback" in fake.events and store.writes == []
 
 	def test_a_frappe_validation_error_is_prefixed_with_its_class(self, load_glue):

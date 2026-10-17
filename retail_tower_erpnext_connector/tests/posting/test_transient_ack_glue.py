@@ -67,8 +67,13 @@ class _Invoice:
 			raise TimeoutError("Lock wait timeout exceeded")
 		grand = sum(Decimal(i["amount"]) for i in self.payload["items"])
 		paid = sum(Decimal(p["amount"]) for p in self.payload.get("payments") or [])
-		self.values = {"grand_total": float(grand), "paid_amount": float(paid), "change_amount": 0.0,
-			"write_off_amount": 0.0, "outstanding_amount": float(grand - paid)}
+		self.values = {
+			"grand_total": float(grand),
+			"paid_amount": float(paid),
+			"change_amount": 0.0,
+			"write_off_amount": 0.0,
+			"outstanding_amount": float(grand - paid),
+		}
 		self._fake.events.append("insert")
 
 	def get(self, field):
@@ -115,13 +120,26 @@ class _Frappe(types.ModuleType):
 			return {"posting_date": datetime.date(2026, 6, 1), "posting_time": datetime.timedelta(hours=10)}
 		if fields == "company":
 			return "Original Co"  # RT-378: a reversal replay is held to the original's company
-		return {"update_stock": 1, "disable_rounded_total": 1, "is_pos": 0, "customer": "Original Customer",
-			"company": "Original Co"}
+		return {
+			"update_stock": 1,
+			"disable_rounded_total": 1,
+			"is_pos": 0,
+			"customer": "Original Customer",
+			"company": "Original Co",
+		}
 
 	def get_all(self, doctype, **kwargs):
 		if doctype == "Sales Invoice Item":
-			row = {"name": "row-a", "item_code": "ITEM-A", "qty": 1.0, "idx": 1, "warehouse": "Stores - A",
-				"rt_line_ref": _A, "uom": "Nos", "conversion_factor": 1.0}
+			row = {
+				"name": "row-a",
+				"item_code": "ITEM-A",
+				"qty": 1.0,
+				"idx": 1,
+				"warehouse": "Stores - A",
+				"rt_line_ref": _A,
+				"uom": "Nos",
+				"conversion_factor": 1.0,
+			}
 			return [{f: row[f] for f in kwargs["fields"] if f in row}]
 		return []  # Items (no batch/serial) and the original's payments (unpaid original)
 
@@ -175,34 +193,71 @@ def load_glue():
 
 
 def _sale(external_id):
-	return {"saleRef": "22222222-2222-4222-8222-222222222222", "storeId": _STORE, "currencyCode": "EGP",
-		"posTotal": "100.00", "occurredAt": "2026-06-01T10:00:00Z", "businessDate": "2026-06-01",
-		"sourceSystem": "pos-pulse", "externalId": external_id,
-		"lines": [{"lineRef": _A, "lineName": "Item A", "unitPrice": "100.00", "currencyCode": "EGP",
-			"quantity": "1", "lineAmount": "100.00", "unit": "each",
-			"erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"}}]}
+	return {
+		"saleRef": "22222222-2222-4222-8222-222222222222",
+		"storeId": _STORE,
+		"currencyCode": "EGP",
+		"posTotal": "100.00",
+		"occurredAt": "2026-06-01T10:00:00Z",
+		"businessDate": "2026-06-01",
+		"sourceSystem": "pos-pulse",
+		"externalId": external_id,
+		"lines": [
+			{
+				"lineRef": _A,
+				"lineName": "Item A",
+				"unitPrice": "100.00",
+				"currencyCode": "EGP",
+				"quantity": "1",
+				"lineAmount": "100.00",
+				"unit": "each",
+				"erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
+			}
+		],
+	}
 
 
 def _sale_post(cursor, *, unit="each"):
 	sale = _sale("POS-17101")
 	sale["lines"][0]["unit"] = unit
-	return c.PostingWorkItem.from_wire({
-		"workItemRef": _SALE_REF, "kind": "sale_post", "sourceSystem": "pos-pulse", "externalId": "POS-17101",
-		"payloadHash": "a" * 64, "businessDate": "2026-06-01", "itemCursor": str(cursor), "sale": sale,
-	})
+	return c.PostingWorkItem.from_wire(
+		{
+			"workItemRef": _SALE_REF,
+			"kind": "sale_post",
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-17101",
+			"payloadHash": "a" * 64,
+			"businessDate": "2026-06-01",
+			"itemCursor": str(cursor),
+			"sale": sale,
+		}
+	)
 
 
 def _reversal(kind, cursor):
-	ref = {"sourceSystem": "pos-pulse", "externalId": _ORIGINAL_EXTERNAL_ID, "reversalKind": kind,
-		"recordedAt": "2026-06-05T09:30:00Z", "businessDate": "2026-06-05"}
+	ref = {
+		"sourceSystem": "pos-pulse",
+		"externalId": _ORIGINAL_EXTERNAL_ID,
+		"reversalKind": kind,
+		"recordedAt": "2026-06-05T09:30:00Z",
+		"businessDate": "2026-06-05",
+	}
 	if kind == "return":
 		ref["returnLines"] = [{"lineRef": _A, "quantity": "1", "lineAmount": "100.00"}]
 		ref["refundTenders"] = [{"method": "cash", "amount": "100.00"}]
-	return c.PostingWorkItem.from_wire({
-		"workItemRef": _REVERSAL_REF, "kind": "reversal", "sourceSystem": "pos-pulse",
-		"externalId": _ORIGINAL_EXTERNAL_ID, "payloadHash": "b" * 64, "businessDate": "2026-06-01",
-		"itemCursor": str(cursor), "reversalOf": ref, "sale": _sale(_ORIGINAL_EXTERNAL_ID),
-	})
+	return c.PostingWorkItem.from_wire(
+		{
+			"workItemRef": _REVERSAL_REF,
+			"kind": "reversal",
+			"sourceSystem": "pos-pulse",
+			"externalId": _ORIGINAL_EXTERNAL_ID,
+			"payloadHash": "b" * 64,
+			"businessDate": "2026-06-01",
+			"itemCursor": str(cursor),
+			"reversalOf": ref,
+			"sale": _sale(_ORIGINAL_EXTERNAL_ID),
+		}
+	)
 
 
 def _post(glue, work_item, client=None, store=None):
@@ -236,7 +291,11 @@ class TestTransientAckKeyPerOffer:
 			f"{_SALE_REF}:failed_transient:12",
 			f"{_SALE_REF}:posted",
 		]
-		assert [a["ack"]["outcome"] for a in client.acks] == ["failed_transient", "failed_transient", "posted"]
+		assert [a["ack"]["outcome"] for a in client.acks] == [
+			"failed_transient",
+			"failed_transient",
+			"posted",
+		]
 		assert fake.events.count("submit") == 1  # nothing half-posted by the transients
 		assert fake.events.count("rollback") == 2
 
@@ -286,8 +345,13 @@ class TestReversalAwaitsOriginal:
 		client = _Client()
 
 		assert _post(glue, _reversal(kind, 11), client)[0] == "failed_transient"
-		assert client.acks == [{"ref": _REVERSAL_REF, "ack": {"outcome": "failed_transient"},
-			"key": f"{_REVERSAL_REF}:failed_transient:11"}]
+		assert client.acks == [
+			{
+				"ref": _REVERSAL_REF,
+				"ack": {"outcome": "failed_transient"},
+				"key": f"{_REVERSAL_REF}:failed_transient:11",
+			}
+		]
 		assert fake.payloads == [] and fake.events == []  # nothing built into ERPNext, no insert
 		(signal,) = [r for r in fake._logger.records if r["event"] == "posting.reversal.awaiting_original"]
 		assert signal["work_item_ref"] == _REVERSAL_REF and signal["reversal_kind"] == kind

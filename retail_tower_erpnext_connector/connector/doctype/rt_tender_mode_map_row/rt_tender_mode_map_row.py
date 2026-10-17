@@ -13,4 +13,4 @@ from frappe.model.document import Document
 
 
 class RTTenderModeMapRow(Document):
-    pass
+	pass

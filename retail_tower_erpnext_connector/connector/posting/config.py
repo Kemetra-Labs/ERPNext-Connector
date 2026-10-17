@@ -25,103 +25,99 @@ from collections.abc import Iterable, Mapping
 
 
 class ConfigError(Exception):
-    """A Connector Settings row is malformed (blank field or duplicate key) — fail loud."""
+	"""A Connector Settings row is malformed (blank field or duplicate key) — fail loud."""
 
 
 def _row_get(row: object, field: str) -> str:
-    """Read ``field`` from a child-table row (dict-like or attr-like), as a stripped string."""
-    if isinstance(row, Mapping):
-        value = row.get(field)
-    else:  # a Frappe Document row exposes fields as attributes
-        value = getattr(row, field, None)
-    return "" if value is None else str(value).strip()
+	"""Read ``field`` from a child-table row (dict-like or attr-like), as a stripped string."""
+	if isinstance(row, Mapping):
+		value = row.get(field)
+	else:  # a Frappe Document row exposes fields as attributes
+		value = getattr(row, field, None)
+	return "" if value is None else str(value).strip()
 
 
-def _parse_pairs(
-    rows: Iterable | None, key_field: str, value_field: str, label: str
-) -> dict[str, str]:
-    """Parse child rows into a ``{key: value}`` dict; raise on a blank field or duplicate key."""
-    out: dict[str, str] = {}
-    for row in rows or []:
-        key = _row_get(row, key_field)
-        value = _row_get(row, value_field)
-        if not key or not value:
-            raise ConfigError(
-                f"{label} row is incomplete: {key_field}={key!r}, {value_field}={value!r} "
-                "(both are required — fix the Connector Settings row, do not leave it half-filled)"
-            )
-        if key in out:
-            raise ConfigError(
-                f"{label} has a duplicate {key_field}={key!r} — ambiguous mapping "
-                "(remove the duplicate row; the connector never silently picks last-wins)"
-            )
-        out[key] = value
-    return out
+def _parse_pairs(rows: Iterable | None, key_field: str, value_field: str, label: str) -> dict[str, str]:
+	"""Parse child rows into a ``{key: value}`` dict; raise on a blank field or duplicate key."""
+	out: dict[str, str] = {}
+	for row in rows or []:
+		key = _row_get(row, key_field)
+		value = _row_get(row, value_field)
+		if not key or not value:
+			raise ConfigError(
+				f"{label} row is incomplete: {key_field}={key!r}, {value_field}={value!r} "
+				"(both are required — fix the Connector Settings row, do not leave it half-filled)"
+			)
+		if key in out:
+			raise ConfigError(
+				f"{label} has a duplicate {key_field}={key!r} — ambiguous mapping "
+				"(remove the duplicate row; the connector never silently picks last-wins)"
+			)
+		out[key] = value
+	return out
 
 
 def parse_uom_map(rows: Iterable | None) -> dict[str, str]:
-    """Child rows ``{dp2_unit, erpnext_uom}`` → ``{unit: uom}`` for :class:`uom.UomMap`."""
-    return _parse_pairs(rows, "dp2_unit", "erpnext_uom", "UOM map")
+	"""Child rows ``{dp2_unit, erpnext_uom}`` → ``{unit: uom}`` for :class:`uom.UomMap`."""
+	return _parse_pairs(rows, "dp2_unit", "erpnext_uom", "UOM map")
 
 
 def parse_warehouse_map(rows: Iterable | None) -> dict[str, dict]:
-    """Child rows ``{store_id, warehouse}`` → ``{store_id: {doctype, name}}`` for the applier.
+	"""Child rows ``{store_id, warehouse}`` → ``{store_id: {doctype, name}}`` for the applier.
 
-    Addresses the warehouse generically as ``{doctype:"Warehouse", name}`` (Principle II, FR-002).
-    """
-    pairs = _parse_pairs(rows, "store_id", "warehouse", "warehouse map")
-    return {store: {"doctype": "Warehouse", "name": name} for store, name in pairs.items()}
+	Addresses the warehouse generically as ``{doctype:"Warehouse", name}`` (Principle II, FR-002).
+	"""
+	pairs = _parse_pairs(rows, "store_id", "warehouse", "warehouse map")
+	return {store: {"doctype": "Warehouse", "name": name} for store, name in pairs.items()}
 
 
 def parse_store_customer_map(rows: Iterable | None) -> dict[str, str]:
-    """Child rows ``{store_id, customer}`` → ``{store_id: customer}`` for the customer map (F-009)."""
-    return _parse_pairs(rows, "store_id", "customer", "store→customer map")
+	"""Child rows ``{store_id, customer}`` → ``{store_id: customer}`` for the customer map (F-009)."""
+	return _parse_pairs(rows, "store_id", "customer", "store→customer map")
 
 
 def parse_tender_mode_map(rows: Iterable | None) -> dict[str, str]:
-    """Child rows ``{tender_method, mode_of_payment}`` → ``{method: Mode of Payment}`` (RT-78, RT-10 D5).
+	"""Child rows ``{tender_method, mode_of_payment}`` → ``{method: Mode of Payment}`` (RT-78, RT-10 D5).
 
-    Not a REQUIRED map (see :func:`require_configured_maps`): while sales are tender-unknown an
-    empty map is legitimate, and a tender-bearing sale then fails closed per item. A method outside
-    the posting-feed enum is a config error (the Select field should have prevented it) — fail loud.
-    """
-    from .contracts import TENDER_METHODS
+	Not a REQUIRED map (see :func:`require_configured_maps`): while sales are tender-unknown an
+	empty map is legitimate, and a tender-bearing sale then fails closed per item. A method outside
+	the posting-feed enum is a config error (the Select field should have prevented it) — fail loud.
+	"""
+	from .contracts import TENDER_METHODS
 
-    pairs = _parse_pairs(rows, "tender_method", "mode_of_payment", "tender map")
-    unknown = sorted(set(pairs) - TENDER_METHODS)
-    if unknown:
-        raise ConfigError(
-            f"tender map has unknown tender_method(s) {unknown} — allowed: {sorted(TENDER_METHODS)}"
-        )
-    return pairs
+	pairs = _parse_pairs(rows, "tender_method", "mode_of_payment", "tender map")
+	unknown = sorted(set(pairs) - TENDER_METHODS)
+	if unknown:
+		raise ConfigError(
+			f"tender map has unknown tender_method(s) {unknown} — allowed: {sorted(TENDER_METHODS)}"
+		)
+	return pairs
 
 
-def require_configured_maps(
-    *, uom: Mapping, warehouse: Mapping, customer: Mapping
-) -> None:
-    """Raise :class:`ConfigError` naming any REQUIRED map that is empty (Codex PR #23 P1).
+def require_configured_maps(*, uom: Mapping, warehouse: Mapping, customer: Mapping) -> None:
+	"""Raise :class:`ConfigError` naming any REQUIRED map that is empty (Codex PR #23 P1).
 
-    Every posting work-item carries a store and ≥1 line (012 ``minItems: 1``), and the builder
-    resolves all three maps unconditionally — so an EMPTY map guarantees 100% rejection, which is
-    indistinguishable from "not yet configured". If the operator saved credentials before finishing
-    the maps, activating the poll would PERMANENTLY reject every pending sale (terminal
-    ``permanently_rejected``/``validation`` → DP2 DLQ, recoverable only via 017) — a Principle VI
-    inversion (a config gap masquerading as a data rejection).
+	Every posting work-item carries a store and ≥1 line (012 ``minItems: 1``), and the builder
+	resolves all three maps unconditionally — so an EMPTY map guarantees 100% rejection, which is
+	indistinguishable from "not yet configured". If the operator saved credentials before finishing
+	the maps, activating the poll would PERMANENTLY reject every pending sale (terminal
+	``permanently_rejected``/``validation`` → DP2 DLQ, recoverable only via 017) — a Principle VI
+	inversion (a config gap masquerading as a data rejection).
 
-    So a fully-empty required map is treated as "not configured": this raises, the poller's
-    ``_build_posting_path`` lets it propagate, and ``run_posting_poll`` logs ``posting.poll.skipped``
-    and skips the tick — sales stay ``pending`` until the connector is fully configured.
+	So a fully-empty required map is treated as "not configured": this raises, the poller's
+	``_build_posting_path`` lets it propagate, and ``run_posting_poll`` logs ``posting.poll.skipped``
+	and skips the tick — sales stay ``pending`` until the connector is fully configured.
 
-    IMPORTANT — this gates ONLY the EMPTY (unconfigured) state. A NON-empty map with a specific key
-    absent (store B unmapped while A is live) is a GENUINE terminal rejection (decision-table rows
-    5/8) and is left to the per-item ``UnmappedUnit``/``UnmappedStore`` path in ``frappe_glue``,
-    UNCHANGED — this helper never inspects individual keys.
-    """
-    empty = [name for name, m in (("uom", uom), ("warehouse", warehouse), ("customer", customer)) if not m]
-    if empty:
-        raise ConfigError(
-            "Connector Settings: required map(s) not configured: "
-            + ", ".join(empty)
-            + " — refusing to activate the poller (would mass-reject pending sales). "
-            "Finish the mapping table(s); the poll skips until then."
-        )
+	IMPORTANT — this gates ONLY the EMPTY (unconfigured) state. A NON-empty map with a specific key
+	absent (store B unmapped while A is live) is a GENUINE terminal rejection (decision-table rows
+	5/8) and is left to the per-item ``UnmappedUnit``/``UnmappedStore`` path in ``frappe_glue``,
+	UNCHANGED — this helper never inspects individual keys.
+	"""
+	empty = [name for name, m in (("uom", uom), ("warehouse", warehouse), ("customer", customer)) if not m]
+	if empty:
+		raise ConfigError(
+			"Connector Settings: required map(s) not configured: "
+			+ ", ".join(empty)
+			+ " — refusing to activate the poller (would mass-reject pending sales). "
+			"Finish the mapping table(s); the poll skips until then."
+		)

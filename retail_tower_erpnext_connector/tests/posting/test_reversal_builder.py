@@ -416,7 +416,6 @@ class TestStockEffectByReversalKind:
 		assert doc["is_return"] == 1
 
 
-
 class TestNoRounding:
 	"""RT-80: a credit note inherits the forward builder's ``disable_rounded_total=1``.
 
@@ -509,7 +508,6 @@ class TestVoidSettlement:
 		wi = _with_tenders(_reversal_work_item(), c.SaleTender("cash", "200.00"))
 		doc = _build(wi)
 		assert "is_pos" not in doc and "payments" not in doc
-
 
 
 def _timed_void(recorded_at, business_date):

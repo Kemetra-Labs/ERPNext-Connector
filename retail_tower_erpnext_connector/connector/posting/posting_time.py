@@ -33,7 +33,6 @@ DAY_START = "00:00:00.000000"
 DAY_END = "23:59:59.999999"
 
 
-
 @dataclass(frozen=True)
 class PostingClock:
 	"""The ERPNext site timezone plus "now" (an aware instant; ``None`` = do not cap)."""

@@ -158,9 +158,7 @@ def _mirror_settlement(
 	paid = sum((Decimal(str(r["amount"])) for r in rows), Decimal(0))
 	refunded = -sum((Decimal(str(p["amount"])) for p in void_payments), Decimal(0))
 	if paid != refunded:
-		raise VoidSettlementMismatch(
-			f"void tender total {refunded} != original invoice payment total {paid}"
-		)
+		raise VoidSettlementMismatch(f"void tender total {refunded} != original invoice payment total {paid}")
 	out["is_pos"] = 1
 	out["payments"] = [
 		{"mode_of_payment": r["mode_of_payment"], "amount": str(-Decimal(str(r["amount"])))} for r in rows
@@ -248,7 +246,9 @@ def mirror_company(doc: Mapping[str, object], original_company: str | None) -> d
 	original without a company fails closed (:class:`ReturnLineMismatch` → ``validation``).
 	"""
 	if not original_company:
-		raise ReturnLineMismatch("the original invoice carries no company — the credit note's company is unknown")
+		raise ReturnLineMismatch(
+			"the original invoice carries no company — the credit note's company is unknown"
+		)
 	return {**doc, "company": original_company}
 
 
@@ -262,7 +262,9 @@ def _row_for_line_ref(pos: int, line: Mapping[str, object], rows: Sequence[Mappi
 			"(posted before RT-16, or a line of another sale)"
 		)
 	if len(matches) > 1:
-		raise ReturnLineMismatch(f"return line {pos}: rt_line_ref {ref!r} is ambiguous on the original invoice")
+		raise ReturnLineMismatch(
+			f"return line {pos}: rt_line_ref {ref!r} is ambiguous on the original invoice"
+		)
 	return matches[0]
 
 

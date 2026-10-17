@@ -119,8 +119,13 @@ class _Invoice:
 		if error is not None:
 			raise error
 		grand = float(sum(Decimal(i["amount"]) for i in self.payload["items"]))
-		self.values = {"grand_total": grand, "paid_amount": 0.0, "change_amount": 0.0,
-			"write_off_amount": 0.0, "outstanding_amount": grand}
+		self.values = {
+			"grand_total": grand,
+			"paid_amount": 0.0,
+			"change_amount": 0.0,
+			"write_off_amount": 0.0,
+			"outstanding_amount": grand,
+		}
 		self.values.update(self._fake.scenario.after_insert)
 		self._fake.timeline.append("insert")
 
@@ -285,7 +290,15 @@ class TestFreshSaleCommitsBeforeItsAck:
 	def test_posted_commits_after_record_and_read_back_and_before_the_ack(self, load_glue):
 		outcome, timeline = _post(load_glue)
 		assert outcome == "posted"
-		assert timeline == ["savepoint", "insert", "submit", "record_posted", "reload", "commit", "ack:posted"]
+		assert timeline == [
+			"savepoint",
+			"insert",
+			"submit",
+			"record_posted",
+			"reload",
+			"commit",
+			"ack:posted",
+		]
 
 	def test_a_reprice_on_submit_commits_before_reconciliation_required(self, load_glue):
 		# RT-378: the document stays as ERPNext holds it, so it is durable before Backend-Core hears of it.
@@ -341,8 +354,12 @@ class TestARejectionNeverCommits:
 		"scenario",
 		[
 			pytest.param(_Scenario(insert_error="validation"), id="validation-error-on-insert"),
-			pytest.param(_Scenario(after_insert={"grand_total": 90.0}), id="representation-mismatch-on-insert"),
-			pytest.param(_Scenario(insert_error=NameError("name 'flt' is not defined")), id="unclassified-error"),
+			pytest.param(
+				_Scenario(after_insert={"grand_total": 90.0}), id="representation-mismatch-on-insert"
+			),
+			pytest.param(
+				_Scenario(insert_error=NameError("name 'flt' is not defined")), id="unclassified-error"
+			),
 		],
 	)
 	def test_a_rolled_back_insert_is_rejected_without_a_commit(self, load_glue, scenario):

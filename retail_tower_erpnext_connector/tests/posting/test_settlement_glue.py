@@ -241,7 +241,12 @@ class TestSettlementInGlue:
 
 	@pytest.mark.parametrize(
 		"drift",
-		[{"change_amount": 0.49}, {"outstanding_amount": 0.49}, {"write_off_amount": 0.49}, {"paid_amount": 10.0}],
+		[
+			{"change_amount": 0.49},
+			{"outstanding_amount": 0.49},
+			{"write_off_amount": 0.49},
+			{"paid_amount": 10.0},
+		],
 	)
 	def test_totals_that_do_not_settle_exactly_are_rolled_back_and_rejected(self, load_glue, drift):
 		fake = _Frappe(drift=drift)

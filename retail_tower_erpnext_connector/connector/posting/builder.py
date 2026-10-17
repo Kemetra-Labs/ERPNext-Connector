@@ -45,108 +45,108 @@ from .tender import build_payments
 
 
 class UnmappedUnit(Exception):
-    """A DP2 free-text ``unit`` has no entry in the signed unit→UOM map (FR-008).
+	"""A DP2 free-text ``unit`` has no entry in the signed unit→UOM map (FR-008).
 
-    The caller maps this to a ``permanently_rejected`` / ``validation`` outcome — never a
-    silent default (Principle VI). Raised by the injected UOM resolver.
-    """
+	The caller maps this to a ``permanently_rejected`` / ``validation`` outcome — never a
+	silent default (Principle VI). Raised by the injected UOM resolver.
+	"""
 
-    def __init__(self, unit: str) -> None:
-        super().__init__(f"unit {unit!r} has no ERPNext UOM mapping (fail-closed → validation)")
-        self.unit = unit
+	def __init__(self, unit: str) -> None:
+		super().__init__(f"unit {unit!r} has no ERPNext UOM mapping (fail-closed → validation)")
+		self.unit = unit
 
 
 def build_sales_invoice(
-    work_item: PostingWorkItem,
-    *,
-    uom_for: Callable[[str], str],
-    warehouse_for: Callable[[str], dict],
-    customer_for: Callable[[str], str],
-    posting_stamp: PostingStamp | None = None,
-    mode_of_payment_for: Callable[[str], str] | None = None,
-    company: str | None = None,
+	work_item: PostingWorkItem,
+	*,
+	uom_for: Callable[[str], str],
+	warehouse_for: Callable[[str], dict],
+	customer_for: Callable[[str], str],
+	posting_stamp: PostingStamp | None = None,
+	mode_of_payment_for: Callable[[str], str] | None = None,
+	company: str | None = None,
 ) -> dict:
-    """Build the ERPNext Sales-Invoice payload for one ``sale_post`` work-item.
+	"""Build the ERPNext Sales-Invoice payload for one ``sale_post`` work-item.
 
-    ``uom_for(unit) -> erpnext_uom`` resolves the signed unit→UOM map (raises
-    :class:`UnmappedUnit` on a miss). ``warehouse_for(store_id) -> {doctype, name}`` returns
-    the DP2-pre-resolved warehouse identity (rider R5; never guessed by this builder).
-    ``customer_for(store_id) -> customer`` resolves the operator-configured store→Customer map
-    (F-009; raises :class:`uom.UnmappedStore` on a miss — the builder NEVER fabricates a
-    customer, which would hide a config gap; Principle VI).
-    ``posting_stamp`` is the RT-49 posting date/time; the glue computes it with the ERPNext site
-    clock. Without one, it is derived from ``occurredAt`` in UTC (``posting_time.UTC_CLOCK``).
-    ``mode_of_payment_for(method) -> Mode of Payment`` resolves the RT-10 D5 tender map (raises
-    :class:`tender.UnmappedTender` on a miss). It is only consulted when the sale carries tenders;
-    a tender-bearing sale without it fails closed rather than posting unpaid.
-    ``company`` (RT-378) is set explicitly: the glue passes the site default, the value the
-    representation check expects. Without one the document carries no ``company`` key.
-    """
-    sale = work_item.sale
-    warehouse = warehouse_for(sale.store_id)
-    # F-009: the 012 work-item carries no customer identity — only Sale.store_id. The operator
-    # maps each store to its ERPNext Customer (config, injected) exactly as for the warehouse.
-    customer = customer_for(sale.store_id)
+	``uom_for(unit) -> erpnext_uom`` resolves the signed unit→UOM map (raises
+	:class:`UnmappedUnit` on a miss). ``warehouse_for(store_id) -> {doctype, name}`` returns
+	the DP2-pre-resolved warehouse identity (rider R5; never guessed by this builder).
+	``customer_for(store_id) -> customer`` resolves the operator-configured store→Customer map
+	(F-009; raises :class:`uom.UnmappedStore` on a miss — the builder NEVER fabricates a
+	customer, which would hide a config gap; Principle VI).
+	``posting_stamp`` is the RT-49 posting date/time; the glue computes it with the ERPNext site
+	clock. Without one, it is derived from ``occurredAt`` in UTC (``posting_time.UTC_CLOCK``).
+	``mode_of_payment_for(method) -> Mode of Payment`` resolves the RT-10 D5 tender map (raises
+	:class:`tender.UnmappedTender` on a miss). It is only consulted when the sale carries tenders;
+	a tender-bearing sale without it fails closed rather than posting unpaid.
+	``company`` (RT-378) is set explicitly: the glue passes the site default, the value the
+	representation check expects. Without one the document carries no ``company`` key.
+	"""
+	sale = work_item.sale
+	warehouse = warehouse_for(sale.store_id)
+	# F-009: the 012 work-item carries no customer identity — only Sale.store_id. The operator
+	# maps each store to its ERPNext Customer (config, injected) exactly as for the warehouse.
+	customer = customer_for(sale.store_id)
 
-    items = []
-    for line in sale.lines:
-        item = {
-            # Apply the pre-resolved Item identity — no lookup (rider R2).
-            "item_code": line.erpnext_item_ref.name,
-            "qty": line.quantity,
-            "uom": uom_for(line.unit),
-            "rate": line.unit_price,
-            # RT-377 / D6: the list price IS the Retail Tower price, so ERPNext derives no discount.
-            "price_list_rate": line.unit_price,
-            "amount": line.line_amount,
-            "warehouse": warehouse["name"],
-            "currency": line.currency_code,
-        }
-        if line.line_ref is not None:
-            # RT-16 / RT-14 D6: the sale-line identity a later partial return is matched on.
-            item["rt_line_ref"] = line.line_ref
-        items.append(item)
+	items = []
+	for line in sale.lines:
+		item = {
+			# Apply the pre-resolved Item identity — no lookup (rider R2).
+			"item_code": line.erpnext_item_ref.name,
+			"qty": line.quantity,
+			"uom": uom_for(line.unit),
+			"rate": line.unit_price,
+			# RT-377 / D6: the list price IS the Retail Tower price, so ERPNext derives no discount.
+			"price_list_rate": line.unit_price,
+			"amount": line.line_amount,
+			"warehouse": warehouse["name"],
+			"currency": line.currency_code,
+		}
+		if line.line_ref is not None:
+			# RT-16 / RT-14 D6: the sale-line identity a later partial return is matched on.
+			item["rt_line_ref"] = line.line_ref
+		items.append(item)
 
-    # F-009 CLOSED: the customer is resolved from the operator-configured store→Customer map
-    # (above), never fabricated. The 012 work-item carries no customer; the operator owns the
-    # mapping, identical to the UOM and warehouse maps. `company` is the explicit site default the
-    # glue passes (RT-378); a multi-company store→company mapping is a future extension if needed.
-    doc = {
-        "doctype": "Sales Invoice",
-        "customer": customer,
-        "currency": sale.currency_code,
-        # Provenance for idempotency + audit (O-3); carried on custom fields.
-        "rt_source_system": sale.source_system,
-        "rt_external_id": sale.external_id,
-        "rt_sale_ref": sale.sale_ref,
-        # RT-48 / RT-47 D1: the sale moves stock out of each line's mapped store warehouse.
-        "update_stock": 1,
-        # RT-80: post the exact POS total. ERPNext otherwise applies the site default
-        # (Global Defaults disable_rounded_total=0) and rounds 10.49 to 10.00 + Round Off.
-        "disable_rounded_total": 1,
-        # RT-377 / Pricing 657: ERPNext Pricing Rules must not alter a finalized Retail Tower sale.
-        "ignore_pricing_rule": 1,
-        "items": items,
-        **({"company": company} if company else {}),  # RT-378: explicit, never ERPNext's user default
-    }
+	# F-009 CLOSED: the customer is resolved from the operator-configured store→Customer map
+	# (above), never fabricated. The 012 work-item carries no customer; the operator owns the
+	# mapping, identical to the UOM and warehouse maps. `company` is the explicit site default the
+	# glue passes (RT-378); a multi-company store→company mapping is a future extension if needed.
+	doc = {
+		"doctype": "Sales Invoice",
+		"customer": customer,
+		"currency": sale.currency_code,
+		# Provenance for idempotency + audit (O-3); carried on custom fields.
+		"rt_source_system": sale.source_system,
+		"rt_external_id": sale.external_id,
+		"rt_sale_ref": sale.sale_ref,
+		# RT-48 / RT-47 D1: the sale moves stock out of each line's mapped store warehouse.
+		"update_stock": 1,
+		# RT-80: post the exact POS total. ERPNext otherwise applies the site default
+		# (Global Defaults disable_rounded_total=0) and rounds 10.49 to 10.00 + Round Off.
+		"disable_rounded_total": 1,
+		# RT-377 / Pricing 657: ERPNext Pricing Rules must not alter a finalized Retail Tower sale.
+		"ignore_pricing_rule": 1,
+		"items": items,
+		**({"company": company} if company else {}),  # RT-378: explicit, never ERPNext's user default
+	}
 
-    # RT-78 / RT-10 D3(b): a tender-bearing sale is settled on this invoice (no Payment Entry).
-    payments = build_payments(
-        sale.tenders,
-        line_amounts=[item["amount"] for item in items],
-        mode_of_payment_for=mode_of_payment_for,
-    )
-    if payments:
-        doc["is_pos"] = 1
-        doc["payments"] = payments
+	# RT-78 / RT-10 D3(b): a tender-bearing sale is settled on this invoice (no Payment Entry).
+	payments = build_payments(
+		sale.tenders,
+		line_amounts=[item["amount"] for item in items],
+		mode_of_payment_for=mode_of_payment_for,
+	)
+	if payments:
+		doc["is_pos"] = 1
+		doc["payments"] = payments
 
-    # FR-009 enforced in the path (not only by a separately-callable check): every monetary
-    # field is an exact-decimal string + ISO-4217, never a float. Local import avoids the
-    # builder↔uom import cycle (uom imports UnmappedUnit from this module).
-    from .uom import assert_money_conformance
+	# FR-009 enforced in the path (not only by a separately-callable check): every monetary
+	# field is an exact-decimal string + ISO-4217, never a float. Local import avoids the
+	# builder↔uom import cycle (uom imports UnmappedUnit from this module).
+	from .uom import assert_money_conformance
 
-    assert_money_conformance(doc)
-    # businessDate drives the fiscal period — never the connector's post-time (T033). RT-49:
-    # set_posting_time=1, or ERPNext overwrites posting_date/posting_time with "now".
-    stamp = posting_stamp or stamp_for(sale.occurred_at, sale.business_date, UTC_CLOCK)
-    return apply_stamp(doc, stamp)
+	assert_money_conformance(doc)
+	# businessDate drives the fiscal period — never the connector's post-time (T033). RT-49:
+	# set_posting_time=1, or ERPNext overwrites posting_date/posting_time with "now".
+	stamp = posting_stamp or stamp_for(sale.occurred_at, sale.business_date, UTC_CLOCK)
+	return apply_stamp(doc, stamp)

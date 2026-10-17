@@ -92,7 +92,9 @@ class PersistedInvoice:
 	lines: tuple[Mapping[str, object], ...]
 
 
-def expected_from_payload(payload: Mapping[str, object], *, exempt: frozenset[str] = frozenset()) -> ExpectedInvoice:
+def expected_from_payload(
+	payload: Mapping[str, object], *, exempt: frozenset[str] = frozenset()
+) -> ExpectedInvoice:
 	"""The representation in a built Sales Invoice payload; ``exempt`` fields are not compared.
 
 	Raises :class:`RepresentationMismatch` when the payload carries no company (the site default is

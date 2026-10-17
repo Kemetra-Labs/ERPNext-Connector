@@ -10,7 +10,6 @@ ACC-SINV-2026-00028 = -24.00 against a 24.00 sale). Until line-aware returns lan
 the connector must reject refunds instead of posting them.
 """
 
-
 import pytest
 
 from retail_tower_erpnext_connector.connector.posting import contracts as c
@@ -49,7 +48,11 @@ def _work_item(kind="reversal", reversal_kind="refund") -> c.PostingWorkItem:
 		},
 	}
 	if kind == "reversal":
-		wire["reversalOf"] = {"sourceSystem": "pos-pulse", "externalId": "POS-9001", "reversalKind": reversal_kind}
+		wire["reversalOf"] = {
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-9001",
+			"reversalKind": reversal_kind,
+		}
 	return c.PostingWorkItem.from_wire(wire)
 
 

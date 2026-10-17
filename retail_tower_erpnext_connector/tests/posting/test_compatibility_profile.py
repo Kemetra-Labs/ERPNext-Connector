@@ -358,5 +358,7 @@ class TestSchedulerTick:
 
 	def test_an_unset_tick_leaves_the_fingerprint_unchanged(self):
 		# No drift event on every existing site just because this field was added.
-		assert cp.evaluate(_snapshot()).fingerprint == cp.evaluate(_snapshot(scheduler_tick_s=None)).fingerprint
+		assert (
+			cp.evaluate(_snapshot()).fingerprint == cp.evaluate(_snapshot(scheduler_tick_s=None)).fingerprint
+		)
 		assert cp.evaluate(self._v16(scheduler_tick_s=60)).fingerprint != cp.evaluate(self._v16()).fingerprint

@@ -75,8 +75,13 @@ class _Invoice:
 			raise self._fake.exceptions.UniqueValidationError("Duplicate entry for unique_rt_si_provenance")
 		grand = sum(Decimal(i["amount"]) for i in self.payload["items"])
 		paid = sum(Decimal(p["amount"]) for p in self.payload.get("payments") or [])
-		self.values = {"grand_total": float(grand), "paid_amount": float(paid), "change_amount": 0.0,
-			"write_off_amount": 0.0, "outstanding_amount": float(grand - paid)}
+		self.values = {
+			"grand_total": float(grand),
+			"paid_amount": float(paid),
+			"change_amount": 0.0,
+			"write_off_amount": 0.0,
+			"outstanding_amount": float(grand - paid),
+		}
 		self.values.update(self._fake.after_insert)  # RT-378: what ERPNext computed differently
 		self._fake.events.append("insert")
 
@@ -110,10 +115,26 @@ class _Frappe(types.ModuleType):
 		self.posted_company = "Original Co"  # RT-378 replay: the already-posted return's company
 		self.duplicate = False  # RT-458: the return already exists under its provenance (crash window)
 		self._rows = [
-			{"name": "row-a", "item_code": "ITEM-A", "qty": 3.0, "idx": 1, "warehouse": "Stores - A",
-				"rt_line_ref": _A if line_refs else None, "uom": "Box", "conversion_factor": 12.0},
-			{"name": "row-b", "item_code": "ITEM-B", "qty": 1.0, "idx": 2, "warehouse": "Stores - B",
-				"rt_line_ref": _B if line_refs else None, "uom": "Nos", "conversion_factor": 1.0},
+			{
+				"name": "row-a",
+				"item_code": "ITEM-A",
+				"qty": 3.0,
+				"idx": 1,
+				"warehouse": "Stores - A",
+				"rt_line_ref": _A if line_refs else None,
+				"uom": "Box",
+				"conversion_factor": 12.0,
+			},
+			{
+				"name": "row-b",
+				"item_code": "ITEM-B",
+				"qty": 1.0,
+				"idx": 2,
+				"warehouse": "Stores - B",
+				"rt_line_ref": _B if line_refs else None,
+				"uom": "Nos",
+				"conversion_factor": 1.0,
+			},
 		]
 		self.db = types.SimpleNamespace(
 			get_value=self._get_value,
@@ -136,8 +157,13 @@ class _Frappe(types.ModuleType):
 			return {"posting_date": datetime.date(2026, 6, 1), "posting_time": datetime.timedelta(hours=10)}
 		if fields == "company":
 			return self.original_company  # RT-378: a return replay is held to the original's company
-		return {"update_stock": 1, "disable_rounded_total": 1, "is_pos": 0, "customer": "Original Customer",
-			"company": self.original_company}
+		return {
+			"update_stock": 1,
+			"disable_rounded_total": 1,
+			"is_pos": 0,
+			"customer": "Original Customer",
+			"company": self.original_company,
+		}
 
 	def get_all(self, doctype, **kwargs):
 		if doctype == "Sales Invoice Item":
@@ -198,26 +224,53 @@ def load_glue():
 
 
 def _line(ref, item, qty, amount):
-	return {"lineRef": ref, "lineName": item, "unitPrice": "100.00", "currencyCode": "EGP", "quantity": qty,
-		"lineAmount": amount, "unit": "each", "erpnextItemRef": {"doctype": "Item", "name": item}}
+	return {
+		"lineRef": ref,
+		"lineName": item,
+		"unitPrice": "100.00",
+		"currencyCode": "EGP",
+		"quantity": qty,
+		"lineAmount": amount,
+		"unit": "each",
+		"erpnextItemRef": {"doctype": "Item", "name": item},
+	}
 
 
 def _return(refund=(("cash", "100.00"),), tax=None, version=None):
-	ref = {"sourceSystem": "pos-pulse", "externalId": "POS-9001", "reversalKind": "return",
-		"recordedAt": "2026-06-05T09:30:00Z", "businessDate": "2026-06-05",
-		"returnLines": [{"lineRef": _A, "quantity": "1", "lineAmount": "100.00", "taxAmount": tax}]}
+	ref = {
+		"sourceSystem": "pos-pulse",
+		"externalId": "POS-9001",
+		"reversalKind": "return",
+		"recordedAt": "2026-06-05T09:30:00Z",
+		"businessDate": "2026-06-05",
+		"returnLines": [{"lineRef": _A, "quantity": "1", "lineAmount": "100.00", "taxAmount": tax}],
+	}
 	if refund is not None:
 		ref["refundTenders"] = [{"method": m, "amount": a} for m, a in refund]
-	return c.PostingWorkItem.from_wire({
-		"workItemRef": _RETURN_REF, "kind": "reversal", "sourceSystem": "pos-pulse",
-		"externalId": "POS-9001", "payloadHash": "e" * 64, "businessDate": "2026-06-01", "itemCursor": "c-16",
-		"reversalOf": ref,
-		**({"resolutionVersion": version} if version is not None else {}),
-		"sale": {"saleRef": "22222222-2222-4222-8222-222222222222", "storeId": _STORE, "currencyCode": "EGP",
-			"posTotal": "400.00", "occurredAt": "2026-06-01T10:00:00Z", "businessDate": "2026-06-01",
-			"sourceSystem": "pos-pulse", "externalId": "POS-9001",
-			"lines": [_line(_A, "ITEM-A", "3", "300.00"), _line(_B, "ITEM-B", "1", "100.00")]},
-	})
+	return c.PostingWorkItem.from_wire(
+		{
+			"workItemRef": _RETURN_REF,
+			"kind": "reversal",
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-9001",
+			"payloadHash": "e" * 64,
+			"businessDate": "2026-06-01",
+			"itemCursor": "c-16",
+			"reversalOf": ref,
+			**({"resolutionVersion": version} if version is not None else {}),
+			"sale": {
+				"saleRef": "22222222-2222-4222-8222-222222222222",
+				"storeId": _STORE,
+				"currencyCode": "EGP",
+				"posTotal": "400.00",
+				"occurredAt": "2026-06-01T10:00:00Z",
+				"businessDate": "2026-06-01",
+				"sourceSystem": "pos-pulse",
+				"externalId": "POS-9001",
+				"lines": [_line(_A, "ITEM-A", "3", "300.00"), _line(_B, "ITEM-B", "1", "100.00")],
+			},
+		}
+	)
 
 
 def _post(glue, work_item, *, tender_map=None, store=None, uom_map=None, customer_map=None, client=None):
@@ -242,9 +295,10 @@ class TestReturnInGlue:
 		assert outcome == "posted" and client.acks[0]["outcome"] == "posted"
 		(payload,) = fake.payloads
 		assert payload["return_against"] == _ORIGINAL and payload["is_return"] == 1
-		assert [(i["item_code"], i["qty"], i["amount"], i["sales_invoice_item"], i["warehouse"], i["uom"]) for i in payload["items"]] == [
-			("ITEM-A", "-1", "-100.00", "row-a", "Stores - A", "Box")
-		]
+		assert [
+			(i["item_code"], i["qty"], i["amount"], i["sales_invoice_item"], i["warehouse"], i["uom"])
+			for i in payload["items"]
+		] == [("ITEM-A", "-1", "-100.00", "row-a", "Stores - A", "Box")]
 		assert payload["customer"] == "Original Customer"  # not the current store map's "Walk-in"
 		assert payload["company"] == "Original Co"  # RT-378: the original's, not the site default
 		# Greptile PR #51: the glue must READ the original row's conversion factor, not only copy it.
@@ -282,8 +336,18 @@ class TestReturnInGlue:
 
 def _repriced_row():
 	"""The returned row as ERPNext would hold it after a Pricing Rule cut the rate 100 -> 90."""
-	return [{"item_code": "ITEM-A", "qty": -1.0, "uom": "Box", "rate": 90.0, "amount": -90.0,
-		"warehouse": "Stores - A", "price_list_rate": 100.0, "discount_amount": 10.0}]
+	return [
+		{
+			"item_code": "ITEM-A",
+			"qty": -1.0,
+			"uom": "Box",
+			"rate": 90.0,
+			"amount": -90.0,
+			"warehouse": "Stores - A",
+			"price_list_rate": 100.0,
+			"discount_amount": 10.0,
+		}
+	]
 
 
 class TestReturnRepresentation:
@@ -305,8 +369,18 @@ class TestReturnRepresentation:
 
 	def test_an_erp_derived_discount_after_insert_rolls_back(self, load_glue):
 		# Same rate and total, but ERPNext filled its own list price 110 and recorded a discount (D6).
-		row = [{"item_code": "ITEM-A", "qty": -1.0, "uom": "Box", "rate": 100.0, "amount": -100.0,
-			"warehouse": "Stores - A", "price_list_rate": 110.0, "discount_amount": 10.0}]
+		row = [
+			{
+				"item_code": "ITEM-A",
+				"qty": -1.0,
+				"uom": "Box",
+				"rate": 100.0,
+				"amount": -100.0,
+				"warehouse": "Stores - A",
+				"price_list_rate": 110.0,
+				"discount_amount": 10.0,
+			}
+		]
 		fake = _Frappe(after_insert={"items": row})
 		outcome, client, _store = _post(load_glue(fake), _return())
 		assert outcome == "permanently_rejected" and "submit" not in fake.events
@@ -327,11 +401,31 @@ _POSTED_RETURN = c.ErpnextDocumentRef(doctype="Sales Invoice", name="ACC-SINV-20
 def _posted_return_doc(**row_overrides):
 	"""The return as ERPNext holds it: the ORIGINAL row's UOM (Box) and warehouse, and the ORIGINAL
 	invoice's customer, none of which the current maps ("Nos", "Map WH", "Walk-in") would give."""
-	row = {"item_code": "ITEM-A", "qty": -1.0, "uom": "Box", "rate": 100.0, "amount": -100.0,
-		"warehouse": "Stores - A", "rt_line_ref": _A, "price_list_rate": 100.0, "discount_percentage": 0.0,
-		"discount_amount": 0.0, "margin_type": "", "margin_rate_or_amount": 0.0, **row_overrides}
-	return {"docstatus": 1, "currency": "EGP", "customer": "Original Customer", "company": "Original Co",
-		"ignore_pricing_rule": 1, "grand_total": row["amount"], "taxes": [], "items": [row]}
+	row = {
+		"item_code": "ITEM-A",
+		"qty": -1.0,
+		"uom": "Box",
+		"rate": 100.0,
+		"amount": -100.0,
+		"warehouse": "Stores - A",
+		"rt_line_ref": _A,
+		"price_list_rate": 100.0,
+		"discount_percentage": 0.0,
+		"discount_amount": 0.0,
+		"margin_type": "",
+		"margin_rate_or_amount": 0.0,
+		**row_overrides,
+	}
+	return {
+		"docstatus": 1,
+		"currency": "EGP",
+		"customer": "Original Customer",
+		"company": "Original Co",
+		"ignore_pricing_rule": 1,
+		"grand_total": row["amount"],
+		"taxes": [],
+		"items": [row],
+	}
 
 
 class TestReturnReplay:
@@ -407,7 +501,10 @@ class TestReversalRejectionReasonAttribution:
 		fake = _Frappe()
 		outcome, client, store = _post(load_glue(fake), _return())
 		assert outcome == "permanently_rejected"
-		assert client.acks[0]["reason"] == {"category": "other", "message": "NameError: name 'flt' is not defined"}
+		assert client.acks[0]["reason"] == {
+			"category": "other",
+			"message": "NameError: name 'flt' is not defined",
+		}
 		assert "rollback" in fake.events and store.writes == []
 
 	def test_a_build_rejection_is_prefixed_and_logged_at_error(self, load_glue):
@@ -422,7 +519,10 @@ class TestReversalRejectionReasonAttribution:
 	def test_a_literal_reason_is_not_prefixed(self, load_glue):
 		fake = _Frappe()
 		_outcome, client, _store = _post(load_glue(fake), dataclasses.replace(_return(), reversal_of=None))
-		assert client.acks[0]["reason"]["message"] == "reversal work-item carries no reversalOf (return_against unresolvable)"
+		assert (
+			client.acks[0]["reason"]["message"]
+			== "reversal work-item carries no reversalOf (return_against unresolvable)"
+		)
 
 	def test_reconciliation_required_is_logged_at_error_with_the_wire_reason(self, load_glue):
 		fake = _Frappe(after_submit={"items": _repriced_row(), "grand_total": -90.0})
@@ -459,7 +559,9 @@ class TestReversalCommitsBeforeItsAck:
 		("after_submit", "outcome"),
 		[
 			pytest.param(None, "posted", id="posted"),
-			pytest.param({"items": _repriced_row(), "grand_total": -90.0}, "reconciliation_required", id="repriced"),
+			pytest.param(
+				{"items": _repriced_row(), "grand_total": -90.0}, "reconciliation_required", id="repriced"
+			),
 		],
 	)
 	def test_a_return_commits_after_its_read_back_and_before_the_ack(self, load_glue, after_submit, outcome):
@@ -471,9 +573,7 @@ class TestReversalCommitsBeforeItsAck:
 	def test_the_duplicate_provenance_back_fill_commits_before_posted(self, load_glue):
 		fake = _Frappe()
 		fake.duplicate = True
-		outcome, _client, store = _post(
-			load_glue(fake), _return(version=3), client=_TimelineClient(fake)
-		)
+		outcome, _client, store = _post(load_glue(fake), _return(version=3), client=_TimelineClient(fake))
 		assert outcome == "posted"
 		assert fake.events == ["savepoint", "rollback", "commit", "ack:posted"]
 		assert [ref for _key, ref in store.writes] == [_POSTED_RETURN]  # back-filled before the commit
@@ -489,7 +589,10 @@ class TestReversalCommitsBeforeItsAck:
 	def test_the_replay_guard_commits_before_posted(self, load_glue):
 		fake = _Frappe()
 		outcome, _client, _store = _post(
-			load_glue(fake), _return(version=3), store=_Store(existing=_POSTED_RETURN), client=_TimelineClient(fake)
+			load_glue(fake),
+			_return(version=3),
+			store=_Store(existing=_POSTED_RETURN),
+			client=_TimelineClient(fake),
 		)
 		assert outcome == "posted"
 		assert fake.events == ["commit", "ack:posted"] and fake.payloads == []  # no second document

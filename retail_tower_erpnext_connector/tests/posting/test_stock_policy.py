@@ -100,17 +100,13 @@ class TestVoidLinkage:
 
 	def test_mirrors_an_unrounded_original(self):
 		# RT-80: a sale posted with the fix carries disable_rounded_total=1; its void does too.
-		assert _link(original_disable_rounded_total=1)[
-			"disable_rounded_total"
-		] == 1
+		assert _link(original_disable_rounded_total=1)["disable_rounded_total"] == 1
 
 	def test_legacy_rounded_original_is_reversed_with_its_own_rounding(self):
 		# RT-80 (Codex P2, PR #47): a pre-fix sale posted 10.49 as AR 10.00 + Round Off 0.49. An
 		# unrounded -10.49 void would leave a -0.49 customer credit and never reverse the Round Off
 		# (rt9 bench T4). Mirroring the original's rounding makes the void net to exactly zero.
-		assert _link(original_disable_rounded_total=0)[
-			"disable_rounded_total"
-		] == 0
+		assert _link(original_disable_rounded_total=0)["disable_rounded_total"] == 0
 
 	def test_each_line_references_its_original_row_by_position(self):
 		doc = _link()
@@ -250,10 +246,26 @@ def _return_doc(*items):
 def _original_with_refs():
 	# The ORIGINAL invoice's rows only (the glue filters by parent): qty is a DB float.
 	return [
-		{"name": "row-a", "item_code": "ITEM-A", "qty": 3.0, "idx": 1, "warehouse": "Stores - A", "rt_line_ref": _A,
-			"uom": "Box", "conversion_factor": 12.0},
-		{"name": "row-b", "item_code": "ITEM-B", "qty": 1.0, "idx": 2, "warehouse": "Stores - B", "rt_line_ref": _B,
-			"uom": "Nos", "conversion_factor": 1.0},
+		{
+			"name": "row-a",
+			"item_code": "ITEM-A",
+			"qty": 3.0,
+			"idx": 1,
+			"warehouse": "Stores - A",
+			"rt_line_ref": _A,
+			"uom": "Box",
+			"conversion_factor": 12.0,
+		},
+		{
+			"name": "row-b",
+			"item_code": "ITEM-B",
+			"qty": 1.0,
+			"idx": 2,
+			"warehouse": "Stores - B",
+			"rt_line_ref": _B,
+			"uom": "Nos",
+			"conversion_factor": 1.0,
+		},
 	]
 
 
