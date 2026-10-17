@@ -51,6 +51,12 @@ _SHA = "0123456789abcdef0123456789abcdef01234567"
 _ENV = {DSN_ENV: _DSN, ENVIRONMENT_ENV: "staging", RELEASE_ENV: _SHA}
 
 
+def _tick_raising(exc: BaseException) -> None:
+	"""A tick body that fails with ``exc`` inside :func:`report_unhandled`."""
+	with report_unhandled(job_name="posting_poll", request_id=_REQUEST_ID):
+		raise exc
+
+
 def _raised(exc: BaseException) -> BaseException:
 	"""``exc`` with a real traceback, as a poller tick would surface it."""
 	try:
@@ -147,16 +153,14 @@ class TestFailureNeverPropagates(_CacheReset):
 		original = ValueError("tick failed")
 		with mock.patch.object(sentry_client, "capture_tick_error", return_value=True) as capture:
 			with self.assertRaises(ValueError) as raised:
-				with report_unhandled(job_name="posting_poll", request_id=_REQUEST_ID):
-					raise original
+				_tick_raising(original)
 		self.assertIs(raised.exception, original)
 		capture.assert_called_once_with(original, request_id=_REQUEST_ID, job_name="posting_poll")
 
 	def test_report_unhandled_reraises_even_when_reporting_fails(self):
 		with mock.patch.object(sentry_client, "resolve_config", side_effect=RuntimeError("boom")):
 			with self.assertRaises(ValueError):
-				with report_unhandled(job_name="posting_poll", request_id=_REQUEST_ID):
-					raise ValueError("tick failed")
+				_tick_raising(ValueError("tick failed"))
 
 	def test_report_unhandled_is_silent_on_success(self):
 		with mock.patch.object(sentry_client, "capture_tick_error") as capture:

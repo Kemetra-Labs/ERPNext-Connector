@@ -86,7 +86,7 @@ _REDACTED = "[redacted]"
 # --- §3.1 allowlist rebuild ------------------------------------------------------------------
 
 
-def scrub_event(event: Mapping, hint: Mapping | None = None) -> dict | None:
+def scrub_event(event: Mapping, _hint: Mapping | None = None) -> dict | None:
     """``before_send``: the event rebuilt from allowlisted fields, or ``None`` (drop) without an exception.
 
     Pure: never mutates ``event``.
@@ -131,13 +131,18 @@ def _scrub_exception(entry: Mapping) -> dict:
     mechanism = entry.get("mechanism")
     if isinstance(mechanism, Mapping):
         out["mechanism"] = _pick_scalars(mechanism, MECHANISM_KEYS)
-    stacktrace = entry.get("stacktrace")
-    frames = stacktrace.get("frames") if isinstance(stacktrace, Mapping) else None
-    if isinstance(frames, list):
-        out["stacktrace"] = {
-            "frames": [_pick_scalars(frame, FRAME_KEYS) for frame in frames if isinstance(frame, Mapping)]
-        }
+    frames = _frames(entry.get("stacktrace"))
+    if frames is not None:
+        out["stacktrace"] = {"frames": frames}
     return out
+
+
+def _frames(stacktrace: object) -> list[dict] | None:
+    """Each frame's location fields only; ``None`` when there is no frame list."""
+    frames = stacktrace.get("frames") if isinstance(stacktrace, Mapping) else None
+    if not isinstance(frames, list):
+        return None
+    return [_pick_scalars(frame, FRAME_KEYS) for frame in frames if isinstance(frame, Mapping)]
 
 
 def _pick_scalars(source: Mapping, keys: tuple[str, ...]) -> dict:
@@ -151,7 +156,7 @@ def sanitize_message(message: object) -> str:
     """The message with every §3.2/§3.3 pattern masked, capped and truncated to the contract length."""
     if not isinstance(message, str):
         return ""
-    text = _mask_row_detail(_capped(message))
+    text = _mask_duplicate_entry(_mask_postgres_rows(_capped(message)))
     cleaned = "".join(_scrub_tokens(text))
     if len(cleaned) > MAX_MESSAGE_LENGTH:
         cleaned = cleaned[: MAX_MESSAGE_LENGTH - len(_ELLIPSIS)] + _ELLIPSIS
@@ -171,18 +176,23 @@ def _capped(message: str) -> str:
     return message[:end]
 
 
-def _mask_row_detail(text: str) -> str:
+def _mask_postgres_rows(text: str) -> str:
     for marker, mask in _ROW_MARKERS:
         at = text.find(marker)
         if at != -1:
             text = text[:at] + mask
-    at = text.find(_DUPLICATE_ENTRY)
-    if at != -1:
-        value_start = at + len(_DUPLICATE_ENTRY)
-        key_at = text.find(_DUPLICATE_KEY, value_start)
-        tail = text[key_at:] if key_at != -1 else "'"
-        text = text[:value_start] + "..." + tail
     return text
+
+
+def _mask_duplicate_entry(text: str) -> str:
+    """``Duplicate entry '<value>' for key 'x'`` → ``Duplicate entry '...' for key 'x'``."""
+    at = text.find(_DUPLICATE_ENTRY)
+    if at == -1:
+        return text
+    value_start = at + len(_DUPLICATE_ENTRY)
+    key_at = text.find(_DUPLICATE_KEY, value_start)
+    tail = text[key_at:] if key_at != -1 else "'"
+    return text[:value_start] + "..." + tail
 
 
 def _split_keeping_whitespace(text: str) -> Iterator[str]:
@@ -213,14 +223,15 @@ def _scrub_token(token: str) -> tuple[str, bool]:
     if _is_bearer(token):
         return _REDACTED, True
     masked = _without_relative_query(_without_url(token))
-    if masked == token:
+    redact_next = False
+    if masked == token:  # not a URL: may be a credential `key=value`
         masked, redact_next = _without_credential(token)
-        if redact_next:
-            return masked, True
-    masked = _without_jwt(masked)
-    if _is_email_like(masked):
-        return "[email]", False
-    return masked, False
+    return _without_jwt_or_email(masked), redact_next
+
+
+def _without_jwt_or_email(token: str) -> str:
+    masked = _without_jwt(token)
+    return "[email]" if _is_email_like(masked) else masked
 
 
 def _is_bearer(token: str) -> bool:
@@ -231,17 +242,18 @@ def _is_bearer(token: str) -> bool:
 def _without_url(token: str) -> str:
     """Keep scheme + host + path; drop userinfo, query and fragment. Unparsable → ``[url]``."""
     sep = token.find("://")
-    if sep <= 0:
+    start = _scan_back(token, sep, _SCHEME_CHARS) if sep > 0 else sep
+    if start < 0 or start == sep:
         return token
-    start = sep
-    while start > 0 and token[start - 1] in _SCHEME_CHARS:
-        start -= 1
-    if start == sep:
-        return token
-    end = len(token)
-    while end > start and token[end - 1] in _TRAILING_PUNCTUATION:
-        end -= 1
+    end = _scan_back(token, len(token), _TRAILING_PUNCTUATION, floor=start)
     return token[:start] + _safe_url(token[start:end]) + token[end:]
+
+
+def _scan_back(text: str, end: int, chars: frozenset[str] | str, floor: int = 0) -> int:
+    """The start of the run of ``chars`` that ends at ``end`` (never below ``floor``)."""
+    while end > floor and text[end - 1] in chars:
+        end -= 1
+    return end
 
 
 def _safe_url(raw: str) -> str:
@@ -249,10 +261,14 @@ def _safe_url(raw: str) -> str:
         parts = urlsplit(raw)
     except ValueError:  # e.g. an unbalanced IPv6 bracket
         return "[url]"
-    host = parts.netloc.rpartition("@")[2]
-    if not parts.scheme or not parts.hostname or not host or not _has_valid_port(parts):
+    if not _is_complete_url(parts):
         return "[url]"
+    host = parts.netloc.rpartition("@")[2]  # drop userinfo
     return f"{parts.scheme}://{host}{parts.path}"
+
+
+def _is_complete_url(parts) -> bool:
+    return all((parts.scheme, parts.hostname, _has_valid_port(parts)))
 
 
 def _has_valid_port(parts) -> bool:
@@ -264,16 +280,10 @@ def _has_valid_port(parts) -> bool:
 
 def _without_relative_query(token: str) -> str:
     """A path-shaped token (``/v1/feed?since=…``, as urllib3 prints it) without its query/fragment."""
-    cut = len(token)
-    for marker in "?#":
-        at = token.find(marker)
-        if at != -1:
-            cut = min(cut, at)
-    if cut == len(token) or token.find("/", 0, cut) == -1:
+    cut = min((at for at in (token.find("?"), token.find("#")) if at != -1), default=-1)
+    if cut == -1 or token.find("/", 0, cut) == -1:
         return token
-    end = len(token)
-    while end > cut and token[end - 1] in _TRAILING_PUNCTUATION:
-        end -= 1
+    end = _scan_back(token, len(token), _TRAILING_PUNCTUATION, floor=cut)
     return token[:cut] + token[end:]
 
 
@@ -292,12 +302,8 @@ def _without_credential(token: str) -> tuple[str, bool]:
 
 
 def _credential_key_before(token: str, sep: int) -> bool:
-    end = sep
-    while end > 0 and token[end - 1] in _QUOTES:
-        end -= 1
-    start = end
-    while start > 0 and token[start - 1] in _IDENTIFIER_CHARS:
-        start -= 1
+    end = _scan_back(token, sep, _QUOTES)
+    start = _scan_back(token, end, _IDENTIFIER_CHARS)
     return token[start:end].lower().endswith(_CREDENTIAL_SUFFIXES)
 
 

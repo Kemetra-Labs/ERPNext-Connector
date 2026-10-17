@@ -350,9 +350,9 @@ def test_posting_tick_error_is_reported_with_the_sent_request_id(frappe_stub, mo
 		_posting_tick(monkeypatch, transport)
 
 	((exc, request_id, job_name),) = captured
-	assert exc is raised.value  # the scheduler still sees the original error
+	assert raised.value is exc  # the scheduler still sees the original error
 	assert job_name == "posting_poll"
-	assert {request_id} == _request_ids(transport)  # same id as Backend-Core logged
+	assert _request_ids(transport) == {request_id}  # same id as Backend-Core logged
 
 
 def test_bin_view_tick_error_is_reported_with_the_sent_request_id(frappe_stub, monkeypatch):
@@ -363,9 +363,9 @@ def test_bin_view_tick_error_is_reported_with_the_sent_request_id(frappe_stub, m
 		_bin_view_tick(monkeypatch, transport)
 
 	((exc, request_id, job_name),) = captured
-	assert exc is raised.value
+	assert raised.value is exc
 	assert job_name == "bin_view_poll"
-	assert {request_id} == _request_ids(transport)
+	assert _request_ids(transport) == {request_id}
 
 
 
@@ -373,11 +373,12 @@ def test_paged_report_job_error_is_reported_and_reraised(frappe_stub, monkeypatc
 	captured = _record_captures(monkeypatch)
 	poller = importlib.import_module(_BIN_VIEW_POLLER)
 
-	with pytest.raises(Exception) as raised:
-		poller.run_paged_report_job({"requestRef": "not-a-request"})  # malformed wire: unhandled
+	malformed = {"requestRef": "not-a-request"}  # no storeId: an unhandled KeyError in the job
+	with pytest.raises(KeyError, match="storeId") as raised:
+		poller.run_paged_report_job(malformed)
 
 	((exc, request_id, job_name),) = captured
-	assert exc is raised.value
+	assert raised.value is exc
 	assert job_name == "bin_view_paged_report"
 	_assert_backend_core_accepts(request_id)
 
@@ -408,8 +409,9 @@ def test_posting_continues_while_sentry_is_blocked(frappe_stub, monkeypatch):
 	sdk = types.SimpleNamespace(Client=lambda **_options: object(), Hub=_BlockedHub)
 	monkeypatch.setattr(sentry, "_load_sdk", lambda: sdk)
 
+	failing = _FailingPullTransport(_posting_page())
 	with pytest.raises(ConnectionError):  # the tick's own error, never Sentry's
-		_posting_tick(monkeypatch, _FailingPullTransport(_posting_page()))
+		_posting_tick(monkeypatch, failing)
 	_transport, glue_calls = _posting_tick(monkeypatch)  # the next tick still posts
 	assert len(glue_calls) == 1
 	sentry.reset_cache()
