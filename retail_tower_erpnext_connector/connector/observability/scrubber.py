@@ -81,6 +81,8 @@ _CREDENTIAL_SUFFIXES = (
     "dsn",
 )
 _REDACTED = "[redacted]"
+# HTTP auth schemes: after ``Authorization:``, the scheme AND the credential that follows are masked.
+_AUTH_SCHEMES = frozenset({"bearer", "basic", "digest", "token", "apikey", "negotiate", "ntlm"})
 
 
 # --- §3.1 allowlist rebuild ------------------------------------------------------------------
@@ -146,7 +148,12 @@ def _frames(stacktrace: object) -> list[dict] | None:
 
 
 def _pick_scalars(source: Mapping, keys: tuple[str, ...]) -> dict:
-    return {key: source[key] for key in keys if isinstance(source.get(key), _SCALARS)}
+    """The listed scalar fields; strings (type names, frame paths, functions) are sanitized too."""
+    return {key: _sanitized(source[key]) for key in keys if isinstance(source.get(key), _SCALARS)}
+
+
+def _sanitized(value: object) -> object:
+    return sanitize_message(value) if isinstance(value, str) else value
 
 
 # --- §3.2 / §3.3 message masking ---------------------------------------------------------------
@@ -211,7 +218,7 @@ def _scrub_tokens(text: str) -> Iterator[str]:
             yield token
             continue
         if redact_next:
-            redact_next = _is_bearer(token)  # "Authorization: Bearer <x>" → both masked
+            redact_next = _is_auth_scheme(token)  # "Authorization: Basic <x>" → both masked
             yield _REDACTED
             continue
         scrubbed, redact_next = _scrub_token(token)
@@ -222,10 +229,7 @@ def _scrub_token(token: str) -> tuple[str, bool]:
     """One whitespace-free token, masked; and whether the NEXT token is a secret value."""
     if _is_bearer(token):
         return _REDACTED, True
-    masked = _without_relative_query(_without_url(token))
-    redact_next = False
-    if masked == token:  # not a URL: may be a credential `key=value`
-        masked, redact_next = _without_credential(token)
+    masked, redact_next = _without_credential(_without_relative_query(_without_url(token)))
     return _without_jwt_or_email(masked), redact_next
 
 
@@ -237,6 +241,10 @@ def _without_jwt_or_email(token: str) -> str:
 def _is_bearer(token: str) -> bool:
     """``Bearer`` on its own, quoted or not (``'Bearer`` in a header-dict repr)."""
     return token.strip(_WRAPPERS).lower() == "bearer"
+
+
+def _is_auth_scheme(token: str) -> bool:
+    return token.strip(_WRAPPERS).lower() in _AUTH_SCHEMES
 
 
 def _without_url(token: str) -> str:

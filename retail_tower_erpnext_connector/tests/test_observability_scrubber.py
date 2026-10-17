@@ -185,6 +185,17 @@ class TestEventAllowlist(unittest.TestCase):
 		for key in ("outcome", "route", "method"):
 			self.assertNotIn(key, tags)
 
+	def test_string_frame_and_type_fields_are_sanitized(self):
+		event = _dirty_event()
+		frame = event["exception"]["values"][0]["stacktrace"]["frames"][0]
+		frame["filename"] = "/home/jane.doe@example.com/apps/poller.py"
+		frame["function"] = f"handler_{_JWT}"
+		frame["module"] = "pkg.mod?token=abc"
+		(scrubbed,) = scrub_event(event, {})["exception"]["values"][0]["stacktrace"]["frames"]
+		self.assertEqual(scrubbed["filename"], "[email]")
+		self.assertEqual(scrubbed["function"], "handler_[jwt]")
+		self.assertNotIn("token=abc", repr(scrubbed))
+
 	def test_frame_values_that_are_not_scalars_are_dropped(self):
 		event = _dirty_event()
 		event["exception"]["values"][0]["stacktrace"]["frames"][0]["function"] = {"nested": "x"}
@@ -272,6 +283,24 @@ class TestMessageMasking(unittest.TestCase):
 			"headers={'Authorization': [redacted] [redacted] rejected",
 		)
 		self.assertEqual(sanitize_message('sent "Bearer abc123" twice'), "sent [redacted] [redacted] twice")
+
+	def test_any_authorization_scheme_value_is_masked(self):
+		for scheme in ("Basic", "Token", "Digest", "ApiKey", "'Basic"):
+			with self.subTest(scheme=scheme):
+				self.assertEqual(
+					sanitize_message(f"Authorization: {scheme} dXNlcjpwYXNz sent"),
+					"Authorization: [redacted] [redacted] sent",
+				)
+
+	def test_basic_as_a_plain_word_is_kept(self):
+		self.assertEqual(sanitize_message("basic validation failed"), "basic validation failed")
+
+	def test_credential_in_a_token_that_also_holds_a_url_is_masked(self):
+		self.assertEqual(
+			sanitize_message("token=xyz,url=https://h.example/p?q=1"), "token=[redacted]"
+		)
+		self.assertEqual(sanitize_message("password=ab/cd?x=1"), "password=[redacted]")
+		self.assertEqual(sanitize_message("dp2_token=abc/def#f"), "dp2_token=[redacted]")
 
 	def test_credential_key_value_forms_are_masked(self):
 		self.assertEqual(sanitize_message("dp2_token=abc123 api_key:xyz ok"), "dp2_token=[redacted] api_key:[redacted] ok")
