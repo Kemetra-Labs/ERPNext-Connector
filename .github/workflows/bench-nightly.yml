@@ -108,8 +108,8 @@ jobs:
           bench --site "${SITE}" set-config allow_tests true
           bench --site "${SITE}" run-tests --app "${APP}" --junit-xml-output "${RUNNER_TEMP}/bench-junit.xml"
 
-      # Lists every failing test and fails if the real-DB G5 test was skipped or never collected,
-      # so a silent skip can't pass for a green run.
+      # Lists every failing test and fails if any real-DB G5 test method was skipped or never
+      # collected, so a silent skip can't pass for a green run.
       - name: Summarise results
         if: always()
         env:
@@ -120,7 +120,7 @@ jobs:
           import sys
           import xml.etree.ElementTree as ET
 
-          out = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
+          out = open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8")
           out.write("## Bench nightly\n\n")
           path = os.environ["JUNIT"]
           if not os.path.exists(path):
@@ -144,10 +144,19 @@ jobs:
           if bad:
               out.write("Failing tests:\n\n" + "".join(f"- `{t}` ({results[t]})\n" for t in bad) + "\n")
 
-          g5 = {t: s for t, s in results.items() if "TestSalesInvoiceProvenanceUniqueIndex" in t}
-          if not g5 or any(s == "skipped" for s in g5.values()):
-              out.write("**The Gate G5 real-DB test did not run (missing or skipped).**\n")
-              print("::error::TestSalesInvoiceProvenanceUniqueIndex was not collected or was skipped")
+          # Every G5 method must have run: keep this set in step with test_g5_unique_index_db.py.
+          expected = {
+              "test_index_is_installed",
+              "test_duplicate_provenance_is_rejected_by_the_unique_index",
+              "test_distinct_provenance_is_accepted",
+              "test_null_provenance_is_not_deduplicated",
+          }
+          g5 = {t.rsplit(".", 1)[-1]: s for t, s in results.items() if "TestSalesInvoiceProvenanceUniqueIndex" in t}
+          missing = sorted(expected - set(g5))
+          skipped = sorted(m for m, s in g5.items() if s == "skipped")
+          if missing or skipped:
+              out.write(f"**The Gate G5 real-DB test did not fully run.** Missing: {missing}; skipped: {skipped}\n")
+              print(f"::error::Gate G5 real-DB test incomplete. Missing: {missing}; skipped: {skipped}")
               sys.exit(1)
 
       - name: Upload JUnit report
