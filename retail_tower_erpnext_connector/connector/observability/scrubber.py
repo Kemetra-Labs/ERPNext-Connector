@@ -144,7 +144,24 @@ def _frames(stacktrace: object) -> list[dict] | None:
     frames = stacktrace.get("frames") if isinstance(stacktrace, Mapping) else None
     if not isinstance(frames, list):
         return None
-    return [_pick_scalars(frame, FRAME_KEYS) for frame in frames if isinstance(frame, Mapping)]
+    return [_frame(frame) for frame in frames if isinstance(frame, Mapping)]
+
+
+def _frame(frame: Mapping) -> dict:
+    filename = frame.get("filename")
+    if isinstance(filename, str):
+        frame = {**frame, "filename": _without_directories_if_absolute(filename)}
+    return _pick_scalars(frame, FRAME_KEYS)
+
+
+def _without_directories_if_absolute(filename: str) -> str:
+    """An absolute path (``/home/<user>/…``, ``C:\\Users\\<user>\\…``) → its file name only.
+
+    Module-relative paths (the SDK's usual ``filename``) carry no user directory and are kept.
+    """
+    if not (filename.startswith(("/", "\\")) or filename[1:3] in (":\\", ":/")):
+        return filename
+    return filename.replace("\\", "/").rpartition("/")[2]
 
 
 def _pick_scalars(source: Mapping, keys: tuple[str, ...]) -> dict:
@@ -303,9 +320,11 @@ def _without_credential(token: str) -> tuple[str, bool]:
     """
     for sep, char in enumerate(token):
         if char in "=:" and _credential_key_before(token, sep):
-            if sep == len(token) - 1:
+            value = token[sep + 1 :]
+            if not value:
                 return token, True  # `"password":` — the value is the next token
-            return token[: sep + 1] + _REDACTED, False
+            # `Authorization:Basic <x>` — the inline value is the scheme; the credential is next.
+            return token[: sep + 1] + _REDACTED, _is_auth_scheme(value)
     return token, False
 
 

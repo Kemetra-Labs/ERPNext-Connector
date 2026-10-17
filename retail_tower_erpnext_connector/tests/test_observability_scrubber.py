@@ -192,9 +192,21 @@ class TestEventAllowlist(unittest.TestCase):
 		frame["function"] = f"handler_{_JWT}"
 		frame["module"] = "pkg.mod?token=abc"
 		(scrubbed,) = scrub_event(event, {})["exception"]["values"][0]["stacktrace"]["frames"]
-		self.assertEqual(scrubbed["filename"], "[email]")
+		self.assertEqual(scrubbed["filename"], "poller.py")
 		self.assertEqual(scrubbed["function"], "handler_[jwt]")
 		self.assertNotIn("token=abc", repr(scrubbed))
+
+	def test_absolute_frame_paths_keep_only_the_file_name(self):
+		for path in ("/home/jane/apps/poller.py", "C:\\Users\\jane\\poller.py", "D:/jane/poller.py"):
+			with self.subTest(path=path):
+				event = _dirty_event()
+				event["exception"]["values"][0]["stacktrace"]["frames"][0]["filename"] = path
+				(frame,) = scrub_event(event, {})["exception"]["values"][0]["stacktrace"]["frames"]
+				self.assertEqual(frame["filename"], "poller.py")
+
+	def test_relative_frame_paths_are_kept(self):
+		(frame,) = self.scrubbed["exception"]["values"][0]["stacktrace"]["frames"]
+		self.assertEqual(frame["filename"], "retail_tower_erpnext_connector/connector/posting/poller.py")
 
 	def test_frame_values_that_are_not_scalars_are_dropped(self):
 		event = _dirty_event()
@@ -291,6 +303,18 @@ class TestMessageMasking(unittest.TestCase):
 					sanitize_message(f"Authorization: {scheme} dXNlcjpwYXNz sent"),
 					"Authorization: [redacted] [redacted] sent",
 				)
+
+	def test_compact_authorization_forms_mask_the_credential(self):
+		for text in (
+			"Authorization:Basic dXNlcjpwYXNz sent",
+			"Authorization=Bearer abc123 sent",
+			'{"Authorization":"Basic dXNlcjpwYXNz"} sent',
+		):
+			with self.subTest(text=text):
+				out = sanitize_message(text)
+				self.assertNotIn("dXNlcjpwYXNz", out)
+				self.assertNotIn("abc123", out)
+				self.assertTrue(out.endswith(" sent"))
 
 	def test_basic_as_a_plain_word_is_kept(self):
 		self.assertEqual(sanitize_message("basic validation failed"), "basic validation failed")
