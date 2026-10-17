@@ -213,6 +213,21 @@ class TestMessageMasking(unittest.TestCase):
 			"url='https://dp2.example/v1/feed'.",
 		)
 
+	def test_relative_url_query_is_removed(self):
+		# requests.ConnectionError when Backend-Core is down: urllib3 prints a RELATIVE url.
+		self.assertEqual(
+			sanitize_message(
+				"HTTPSConnectionPool(host='dp2.example', port=443): Max retries exceeded with url: "
+				"/v1/connector/posting-feed?since=c-1&token=abc (Caused by NewConnectionError('refused'))"
+			),
+			"HTTPSConnectionPool(host='dp2.example', port=443): Max retries exceeded with url: "
+			"/v1/connector/posting-feed (Caused by NewConnectionError('refused'))",
+		)
+		self.assertEqual(sanitize_message("path='/v1/feed?since=c-1#x'."), "path='/v1/feed'.")
+
+	def test_question_without_a_path_is_kept(self):
+		self.assertEqual(sanitize_message("why? because"), "why? because")
+
 	def test_unparsable_url_becomes_placeholder(self):
 		self.assertEqual(sanitize_message("bad http://[::1/x?token=y here"), "bad [url] here")
 		self.assertEqual(sanitize_message("bad https://host:notaport/x end"), "bad [url] end")
@@ -250,9 +265,19 @@ class TestMessageMasking(unittest.TestCase):
 			"sent Authorization: [redacted] [redacted] to dp2",
 		)
 
+	def test_quoted_bearer_token_is_masked(self):
+		# The posting transport's own header dict, as a repr in an exception message.
+		self.assertEqual(
+			sanitize_message("headers={'Authorization': 'Bearer abc123'} rejected"),
+			"headers={'Authorization': [redacted] [redacted] rejected",
+		)
+		self.assertEqual(sanitize_message('sent "Bearer abc123" twice'), "sent [redacted] [redacted] twice")
+
 	def test_credential_key_value_forms_are_masked(self):
 		self.assertEqual(sanitize_message("dp2_token=abc123 api_key:xyz ok"), "dp2_token=[redacted] api_key:[redacted] ok")
 		self.assertEqual(sanitize_message('{"password": "hunter2", "qty": 1}'), '{"password": [redacted] "qty": 1}')
+		self.assertEqual(sanitize_message("headers={'dp2_token': 'abc'}"), "headers={'dp2_token': [redacted]")
+		self.assertEqual(sanitize_message("cfg=x;client_secret=s3"), "cfg=x;client_secret=[redacted]")
 
 	def test_non_credential_key_values_are_kept(self):
 		self.assertEqual(sanitize_message("token_count=3 qty=1"), "token_count=3 qty=1")
@@ -278,6 +303,12 @@ class TestBoundsAndLinearity(unittest.TestCase):
 	def test_secret_beyond_the_scan_cap_is_never_emitted(self):
 		out = sanitize_message("a" * 2000 + " jane@example.com")
 		self.assertNotIn("example.com", out)
+
+	def test_token_cut_by_the_scan_cap_is_dropped(self):
+		# A cap landing mid-email leaves "jane@e" (no dot after "@") past the email check; the long
+		# query masked away first brings that fragment inside the 300-char output.
+		out = sanitize_message("GET https://dp2.example/v1?" + "q" * 1966 + " jane@example.com")
+		self.assertEqual(out, "GET https://dp2.example/v1")
 
 	def test_adversarial_inputs_scrub_quickly(self):
 		adversarial = [

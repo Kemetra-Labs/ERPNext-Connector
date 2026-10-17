@@ -64,7 +64,9 @@ _DUPLICATE_KEY = "' for key "
 
 _SCHEME_CHARS = frozenset(string.ascii_letters + string.digits + "+.-")
 _TRAILING_PUNCTUATION = frozenset("\"')],;.>")
-_KEY_STRIP = "\"'{[(,"
+_QUOTES = "\"'"
+_WRAPPERS = "\"'{[(,:"
+_IDENTIFIER_CHARS = frozenset(string.ascii_letters + string.digits + "_-")
 # A credential key matches as the END of an identifier: ``dp2_token``, ``client_secret``, ``api-key``.
 _CREDENTIAL_SUFFIXES = (
     "token",
@@ -149,11 +151,24 @@ def sanitize_message(message: object) -> str:
     """The message with every §3.2/§3.3 pattern masked, capped and truncated to the contract length."""
     if not isinstance(message, str):
         return ""
-    text = _mask_row_detail(message[:MAX_SCAN_LENGTH])
+    text = _mask_row_detail(_capped(message))
     cleaned = "".join(_scrub_tokens(text))
     if len(cleaned) > MAX_MESSAGE_LENGTH:
         cleaned = cleaned[: MAX_MESSAGE_LENGTH - len(_ELLIPSIS)] + _ELLIPSIS
     return cleaned
+
+
+def _capped(message: str) -> str:
+    """The first ``MAX_SCAN_LENGTH`` chars, cut back to whitespace so no token is split by the cap.
+
+    A split token would dodge the checks (``jane@exa`` has no dot after its ``@``).
+    """
+    if len(message) <= MAX_SCAN_LENGTH:
+        return message
+    end = MAX_SCAN_LENGTH
+    while end > 0 and not message[end].isspace():
+        end -= 1
+    return message[:end]
 
 
 def _mask_row_detail(text: str) -> str:
@@ -186,7 +201,7 @@ def _scrub_tokens(text: str) -> Iterator[str]:
             yield token
             continue
         if redact_next:
-            redact_next = token.lower() == "bearer"  # "Authorization: Bearer <x>" → both masked
+            redact_next = _is_bearer(token)  # "Authorization: Bearer <x>" → both masked
             yield _REDACTED
             continue
         scrubbed, redact_next = _scrub_token(token)
@@ -195,9 +210,9 @@ def _scrub_tokens(text: str) -> Iterator[str]:
 
 def _scrub_token(token: str) -> tuple[str, bool]:
     """One whitespace-free token, masked; and whether the NEXT token is a secret value."""
-    if token.lower() == "bearer":
+    if _is_bearer(token):
         return _REDACTED, True
-    masked = _without_url(token)
+    masked = _without_relative_query(_without_url(token))
     if masked == token:
         masked, redact_next = _without_credential(token)
         if redact_next:
@@ -206,6 +221,11 @@ def _scrub_token(token: str) -> tuple[str, bool]:
     if _is_email_like(masked):
         return "[email]", False
     return masked, False
+
+
+def _is_bearer(token: str) -> bool:
+    """``Bearer`` on its own, quoted or not (``'Bearer`` in a header-dict repr)."""
+    return token.strip(_WRAPPERS).lower() == "bearer"
 
 
 def _without_url(token: str) -> str:
@@ -227,33 +247,58 @@ def _without_url(token: str) -> str:
 def _safe_url(raw: str) -> str:
     try:
         parts = urlsplit(raw)
-        parts.port  # raises ValueError on a malformed port
-    except ValueError:
+    except ValueError:  # e.g. an unbalanced IPv6 bracket
         return "[url]"
     host = parts.netloc.rpartition("@")[2]
-    if not parts.scheme or not parts.hostname or not host:
+    if not parts.scheme or not parts.hostname or not host or not _has_valid_port(parts):
         return "[url]"
     return f"{parts.scheme}://{host}{parts.path}"
 
 
+def _has_valid_port(parts) -> bool:
+    try:
+        return parts.port is None or parts.port >= 0
+    except ValueError:  # a non-numeric or out-of-range port
+        return False
+
+
+def _without_relative_query(token: str) -> str:
+    """A path-shaped token (``/v1/feed?since=…``, as urllib3 prints it) without its query/fragment."""
+    cut = len(token)
+    for marker in "?#":
+        at = token.find(marker)
+        if at != -1:
+            cut = min(cut, at)
+    if cut == len(token) or token.find("/", 0, cut) == -1:
+        return token
+    end = len(token)
+    while end > cut and token[end - 1] in _TRAILING_PUNCTUATION:
+        end -= 1
+    return token[:cut] + token[end:]
+
+
 def _without_credential(token: str) -> tuple[str, bool]:
-    """``key=value`` / ``key:value`` with a credential key → the value masked (or the next token)."""
-    sep = _first_separator(token)
-    if sep == -1:
-        return token, False
-    key = token[:sep].strip(_KEY_STRIP).lower()
-    if not key.endswith(_CREDENTIAL_SUFFIXES):
-        return token, False
-    if sep == len(token) - 1:
-        return token, True  # `"password":` — the value is the next token
-    return token[: sep + 1] + _REDACTED, False
+    """``key=value`` / ``key:value`` with a credential key → the value masked (or the next token).
+
+    Every separator is checked, so ``headers={'dp2_token':`` matches too. The backward scan only
+    covers the identifier in front of each separator, so the work stays linear.
+    """
+    for sep, char in enumerate(token):
+        if char in "=:" and _credential_key_before(token, sep):
+            if sep == len(token) - 1:
+                return token, True  # `"password":` — the value is the next token
+            return token[: sep + 1] + _REDACTED, False
+    return token, False
 
 
-def _first_separator(token: str) -> int:
-    for index, char in enumerate(token):
-        if char in "=:":
-            return index
-    return -1
+def _credential_key_before(token: str, sep: int) -> bool:
+    end = sep
+    while end > 0 and token[end - 1] in _QUOTES:
+        end -= 1
+    start = end
+    while start > 0 and token[start - 1] in _IDENTIFIER_CHARS:
+        start -= 1
+    return token[start:end].lower().endswith(_CREDENTIAL_SUFFIXES)
 
 
 def _without_jwt(token: str) -> str:
