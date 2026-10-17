@@ -39,7 +39,7 @@ reviews:
     - path: "retail_tower_erpnext_connector/patches/**"
       instructions: |
         Patches run on every `bench migrate` and must be additive, idempotent and re-runnable.
-        - Unique-index patches (posting log idempotency key, Sales Invoice provenance) must fail the migrate loudly if the guard cannot be installed (missing columns, pre-existing duplicate rows). Never record the patch as applied having done nothing, and never silently delete or merge rows (Gate G5).
+        - Unique-index patches guard `(source_system, external_id)` on Posting Log and `(rt_source_system, rt_external_id)` on Sales Invoice (Gate G5). An early no-op when the target DocType table does not exist yet is acceptable. Once the table exists, the patch must fail the migrate loudly if the guard's prerequisites are missing (e.g. absent columns) or the index cannot be added (e.g. pre-existing duplicate rows). Never silently skip, delete or merge rows.
         - Index creation and existence checks must work on MariaDB for supported Frappe versions; flag destructive DDL, data deletion, or changes that are not safe to re-run.
         - Do not modify ERPNext/Frappe core tables beyond the connector's own additive indexes or custom fields.
 chat:
