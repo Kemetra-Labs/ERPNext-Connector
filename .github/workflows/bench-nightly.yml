@@ -41,7 +41,8 @@ jobs:
   bench:
     name: Bench tests (Frappe v16, MariaDB)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # A full run takes about 2-3 minutes; the margin covers slow clones and a cold cache.
+    timeout-minutes: 20
 
     # Throwaway service containers that live only for this job; the root password below is a
     # job-local value, not a secret.
@@ -78,24 +79,21 @@ jobs:
         with:
           node-version: 24
 
-      # Keyed on the pinned versions: the bench's dependencies change only when a pin changes.
-      - name: Cache pip
-        id: pip-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/pip
-          key: bench-pip-${{ runner.os }}-py3.14-${{ env.FRAPPE_REF }}-${{ env.ERPNEXT_REF }}-${{ env.BENCH_VERSION }}
-
+      # bench 5.x installs Python packages with uv and Node packages with yarn. Both caches are keyed
+      # on the pinned versions, and saved right after install (before the tests): a failing nightly
+      # would otherwise never save them, because actions/cache only saves on job success.
       - name: Get yarn cache directory
         id: yarn-dir
         run: echo "dir=$(yarn cache dir)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache yarn
-        id: yarn-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore dependency caches
+        id: deps-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ steps.yarn-dir.outputs.dir }}
-          key: bench-yarn-${{ runner.os }}-node24-${{ env.FRAPPE_REF }}-${{ env.ERPNEXT_REF }}
+          path: |
+            ~/.cache/uv
+            ${{ steps.yarn-dir.outputs.dir }}
+          key: bench-deps-${{ runner.os }}-py3.14-node24-${{ env.FRAPPE_REF }}-${{ env.ERPNEXT_REF }}-${{ env.BENCH_VERSION }}
 
       - name: Install MariaDB client
         run: |
@@ -123,6 +121,15 @@ jobs:
           bench --site "${SITE}" install-app erpnext
           bench --site "${SITE}" install-app "${APP}"
 
+      - name: Save dependency caches
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/uv
+            ${{ steps.yarn-dir.outputs.dir }}
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+
       - name: Run app tests
         working-directory: /home/runner/frappe-bench
         env:
@@ -137,8 +144,7 @@ jobs:
         if: always()
         env:
           JUNIT: ${{ runner.temp }}/bench-junit.xml
-          PIP_CACHE_HIT: ${{ steps.pip-cache.outputs.cache-hit }}
-          YARN_CACHE_HIT: ${{ steps.yarn-cache.outputs.cache-hit }}
+          CACHE_HIT: ${{ steps.deps-cache.outputs.cache-hit }}
         shell: python
         run: |
           import os
@@ -147,8 +153,7 @@ jobs:
 
           out = open(os.environ["GITHUB_STEP_SUMMARY"], "a")
           out.write("## Bench nightly\n\n")
-          out.write(f"Cache hit: pip=`{os.environ['PIP_CACHE_HIT'] or 'false'}`, "
-                    f"yarn=`{os.environ['YARN_CACHE_HIT'] or 'false'}`\n\n")
+          out.write(f"Dependency cache hit: `{os.environ['CACHE_HIT'] or 'false'}`\n\n")
           path = os.environ["JUNIT"]
           if not os.path.exists(path):
               out.write("No JUnit report: the tests did not run (see the earlier steps).\n")
