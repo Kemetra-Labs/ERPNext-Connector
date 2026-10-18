@@ -1,0 +1,220 @@
+{
+  "contract": "OBS-1 §3.5 golden vectors (Confluence 42926084 v2, RT-682). Copy this file unchanged into every repository's scrubber tests.",
+  "vectors": [
+    {
+      "id": "B1",
+      "input": "upstream rejected Authorization: Bearer rt638-bearer-value",
+      "expected": "upstream rejected Authorization: [redacted] [redacted]"
+    },
+    {
+      "id": "B2",
+      "input": "auth failed for Bearer rt638-console-bearer at gateway",
+      "expected": "auth failed for [redacted] [redacted] at gateway"
+    },
+    {
+      "id": "B3",
+      "input": "header authorization: bearer abc.def",
+      "expected": "header authorization: [redacted] [redacted]"
+    },
+    {
+      "id": "B4",
+      "input": "sent Authorization: Basic dXNlcjpwYXNz to host",
+      "expected": "sent Authorization: [redacted] [redacted] to host"
+    },
+    {
+      "id": "B5",
+      "input": "Authorization:Bearer opaque-123 rejected",
+      "expected": "Authorization:[redacted] [redacted] rejected"
+    },
+    {
+      "id": "B6",
+      "input": "headers={'Authorization': 'Bearer opaque-123'} failed",
+      "expected": "headers={'Authorization': [redacted] [redacted] failed"
+    },
+    {
+      "id": "B7",
+      "input": "{\"authorization\":\"Bearer opaque-123\"} invalid",
+      "expected": "{\"authorization\":[redacted] [redacted] invalid"
+    },
+    {
+      "id": "B8",
+      "input": "Proxy-Authorization: Bearer opaque-123 denied",
+      "expected": "Proxy-Authorization: [redacted] [redacted] denied"
+    },
+    {
+      "id": "B9",
+      "input": "Authorization: opaque-no-scheme denied",
+      "expected": "Authorization: [redacted] denied"
+    },
+    {
+      "id": "B10",
+      "input": "call with Bearer eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl failed",
+      "expected": "call with [redacted] [redacted] failed"
+    },
+    {
+      "id": "B11",
+      "input": "missing Bearer",
+      "expected": "missing [redacted]"
+    },
+    {
+      "id": "B12",
+      "input": "BEARER xyz",
+      "expected": "[redacted] [redacted]"
+    },
+    {
+      "id": "P1",
+      "input": "customer phone +201000000638 not reachable",
+      "expected": "customer phone [phone] not reachable"
+    },
+    {
+      "id": "P2",
+      "input": "phone=01012345678, retry",
+      "expected": "phone=[phone], retry"
+    },
+    {
+      "id": "P3",
+      "input": "whatsapp 201112345678 failed",
+      "expected": "whatsapp [phone] failed"
+    },
+    {
+      "id": "P4",
+      "input": "dial 00201512345678 failed",
+      "expected": "dial [phone] failed"
+    },
+    {
+      "id": "P5",
+      "input": "intl +14155552671 bounced",
+      "expected": "intl [phone] bounced"
+    },
+    {
+      "id": "P6",
+      "input": "ref XYZ-01012345678 invalid",
+      "expected": "ref XYZ-[phone] invalid"
+    },
+    {
+      "id": "P7",
+      "input": "(01212345678) unreachable",
+      "expected": "([phone]) unreachable"
+    },
+    {
+      "id": "P8",
+      "input": "GET https://api.example.invalid/customers/01012345678/orders?x=1 failed",
+      "expected": "GET https://api.example.invalid/customers/[phone]/orders failed"
+    },
+    {
+      "id": "P9",
+      "input": "tel:+201000000638",
+      "expected": "tel:[phone]"
+    },
+    {
+      "id": "N1",
+      "input": "sale 01928f3e-7b1c-7d2a-9e4f-012345678901 rejected",
+      "expected": "sale 01928f3e-7b1c-7d2a-9e4f-012345678901 rejected"
+    },
+    {
+      "id": "N2",
+      "input": "release a01012345678 deployed",
+      "expected": "release a01012345678 deployed"
+    },
+    {
+      "id": "N3",
+      "input": "trace 4bf92f3577b34da6a3ce929d0e0e4736 sampled",
+      "expected": "trace 4bf92f3577b34da6a3ce929d0e0e4736 sampled"
+    },
+    {
+      "id": "N4",
+      "input": "at 1760745600 and 1760745600000 ms",
+      "expected": "at 1760745600 and 1760745600000 ms"
+    },
+    {
+      "id": "N5",
+      "input": "at 2026-10-18T12:00:00+02:00 local",
+      "expected": "at 2026-10-18T12:00:00+02:00 local"
+    },
+    {
+      "id": "N6",
+      "input": "total 1500.00 EGP, change +250.50",
+      "expected": "total 1500.00 EGP, change +250.50"
+    },
+    {
+      "id": "N7",
+      "input": "sale T01-2026-10-18-000123 duplicated",
+      "expected": "sale T01-2026-10-18-000123 duplicated"
+    },
+    {
+      "id": "N8",
+      "input": "receipt 000000123456 reprinted",
+      "expected": "receipt 000000123456 reprinted"
+    },
+    {
+      "id": "N9",
+      "input": "connect ECONNREFUSED 127.0.0.1:5432",
+      "expected": "connect ECONNREFUSED 127.0.0.1:5432"
+    },
+    {
+      "id": "N10",
+      "input": "barcode 6221234567890 not found",
+      "expected": "barcode 6221234567890 not found"
+    },
+    {
+      "id": "N11",
+      "input": "blob abc+123456789/ invalid",
+      "expected": "blob abc+123456789/ invalid"
+    },
+    {
+      "id": "N12",
+      "input": "number 0101234567 too short",
+      "expected": "number 0101234567 too short"
+    },
+    {
+      "id": "N13",
+      "input": "number 01312345678 invalid prefix",
+      "expected": "number 01312345678 invalid prefix"
+    },
+    {
+      "id": "N14",
+      "input": "spaced +20 100 000 0638 leaks",
+      "expected": "spaced +20 100 000 0638 leaks"
+    },
+    {
+      "id": "N15",
+      "input": "token count exceeded the bearer limit",
+      "expected": "token count exceeded the [redacted] [redacted]"
+    },
+    {
+      "id": "X1",
+      "input": "user jane@example.invalid with Bearer abc and 01012345678",
+      "expected": "user [email] with [redacted] [redacted] and [phone]"
+    }
+  ],
+  "linearTime": {
+    "maxTotalMs": 500,
+    "maxOutputLength": 300,
+    "inputs": [
+      {
+        "pattern": "Bearer ",
+        "repeat": 400
+      },
+      {
+        "pattern": "Authorization: ",
+        "repeat": 200
+      },
+      {
+        "pattern": "1",
+        "repeat": 5000
+      },
+      {
+        "pattern": "+",
+        "repeat": 5000
+      },
+      {
+        "pattern": "+1",
+        "repeat": 2500
+      },
+      {
+        "pattern": "01",
+        "repeat": 2500
+      }
+    ]
+  }
+}

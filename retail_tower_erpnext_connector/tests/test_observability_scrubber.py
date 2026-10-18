@@ -21,8 +21,10 @@ no frappe, no sentry_sdk.
 """
 
 import copy
+import json
 import time
 import unittest
+from pathlib import Path
 
 from retail_tower_erpnext_connector.connector.observability.scrubber import (
 	MAX_MESSAGE_LENGTH,
@@ -378,3 +380,56 @@ class TestBoundsAndLinearity(unittest.TestCase):
 		for text in adversarial:
 			sanitize_message(text)
 		self.assertLess(time.perf_counter() - started, 1.0)
+
+
+_GOLDEN = json.loads((Path(__file__).parent / "obs1-golden-vectors.json").read_text(encoding="utf-8"))
+
+
+class TestObs1GoldenVectors(unittest.TestCase):
+	"""RT-686 — the OBS-1 §3.5 golden vectors (RT-682), copied unchanged from Backend-Core.
+
+	Every repository's scrubber gives exactly these outputs: Bearer/Authorization credentials and
+	phone numbers (E.164, Egyptian mobiles) masked; UUIDs, SHA12, trace ids, timestamps, prices,
+	sale numbers and barcodes kept.
+	"""
+
+	def test_every_vector_masks_exactly_as_the_contract_says(self):
+		for vector in _GOLDEN["vectors"]:
+			with self.subTest(vector["id"]):
+				self.assertEqual(sanitize_message(vector["input"]), vector["expected"])
+
+	def test_phone_rule_edges_follow_the_contract_text(self):
+		cases = {
+			# (a) fails (leading 0) but (b) still applies: the `+` stays, the digits go.
+			"call +01012345678 now": "call +[phone] now",
+			# (a) fails (letter before the `+`) but (c) still applies.
+			"x+201000000638 kept": "x+[phone] kept",
+			"missing Authorization:": "missing Authorization:",
+		}
+		for text, expected in cases.items():
+			with self.subTest(text):
+				self.assertEqual(sanitize_message(text), expected)
+
+	def test_contract_linear_time_inputs(self):
+		linear = _GOLDEN["linearTime"]
+		started = time.perf_counter()
+		for item in linear["inputs"]:
+			out = sanitize_message(item["pattern"] * item["repeat"])
+			self.assertLessEqual(len(out), linear["maxOutputLength"])
+		self.assertLess((time.perf_counter() - started) * 1000, linear["maxTotalMs"])
+
+	def test_long_phone_scans_under_the_cap_stay_linear(self):
+		# The contract's long inputs exceed MAX_SCAN_LENGTH with no whitespace, so the cap empties them
+		# before the phone scan runs. These stay under the cap so the digit-run scan itself is timed.
+		under_cap = [
+			"1" * 1999,
+			"+1" * 999,
+			"01" * 999,
+			"+201000000638 " * 140,
+			"a01012345678" * 166,
+		]
+		started = time.perf_counter()
+		for text in under_cap:
+			self.assertLessEqual(len(sanitize_message(text)), MAX_MESSAGE_LENGTH)
+		self.assertLess(time.perf_counter() - started, 0.5)
+		self.assertTrue(sanitize_message("+201000000638 " * 140).startswith("[phone] [phone] "))
