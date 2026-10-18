@@ -64,7 +64,7 @@ class TestSaleStamp:
 			pt.stamp_for("2026-09-27T10:15:30", "2026-09-27", _UTC)
 
 	def test_unknown_site_timezone_is_rejected(self):
-		with pytest.raises(ValueError):
+		with pytest.raises(ValueError, match=r"unknown ERPNext site timezone 'Mars/Base'"):
 			pt.stamp_for("2026-09-27T10:15:30Z", "2026-09-27", pt.PostingClock(site_tz="Mars/Base", now=_NOW))
 
 	def test_clock_without_now_does_not_cap(self):
@@ -119,7 +119,7 @@ class TestFormatTime:
 		assert pt.format_time(value) == expected
 
 	def test_rejects_a_day_or_more(self):
-		with pytest.raises(ValueError):
+		with pytest.raises(ValueError, match=r"posting_time out of range"):
 			pt.format_time(timedelta(days=1))
 
 

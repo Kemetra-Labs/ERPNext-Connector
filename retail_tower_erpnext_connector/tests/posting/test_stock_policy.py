@@ -158,7 +158,7 @@ class TestVoidLinkage:
 		assert [i["warehouse"] for i in out["items"]] == ["Old Store - RT", "Old Store - RT"]
 
 	def test_rejects_a_non_return_document(self):
-		with pytest.raises(ValueError):
+		with pytest.raises(ValueError, match=r"link_void_to_original expects a return \(is_return=1\) document"):
 			_link(_doc(is_return=0))
 
 
@@ -332,7 +332,7 @@ class TestReturnLinkage:
 		assert "sales_invoice_item" not in src["items"][0] and src["items"][0]["warehouse"] == "Map WH"
 
 	def test_rejects_a_non_return_document(self):
-		with pytest.raises(ValueError):
+		with pytest.raises(ValueError, match=r"link_return_to_original expects a return \(is_return=1\) document"):
 			_link_return({**_return_doc((_A, "ITEM-A", "-1")), "is_return": 0})
 
 

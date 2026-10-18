@@ -231,7 +231,7 @@ class TestExemptions:
 		assert _check(doc, exempt=frozenset({"uom", "customer"})) is None
 
 	def test_an_unknown_exemption_is_refused(self):
-		with pytest.raises(ValueError):
+		with pytest.raises(ValueError, match=r"cannot exempt \['rate'\] from the representation check"):
 			expected_from_payload(_payload(), exempt=frozenset({"rate"}))
 
 
