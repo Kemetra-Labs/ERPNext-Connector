@@ -83,6 +83,9 @@ from .uom import (
 )
 from .warehouse_policy import FrozenWarehouseRejected, assert_postable_warehouse
 
+_SALES_INVOICE = "Sales Invoice"
+_OUTCOME_RECOVERED = "posting.recovered"
+
 
 def _ack_key(work_item: PostingWorkItem, outcome: str) -> str:
     """The connectorAckOutcome Idempotency-Key — required on EVERY ack (012, F-004).
@@ -213,7 +216,7 @@ def _invoice_snapshot(document_ref: ErpnextDocumentRef) -> InvoiceSnapshot:
     """
     missing = getattr(frappe, "DoesNotExistError", None)
     try:
-        doc = frappe.get_doc("Sales Invoice", document_ref.name)
+        doc = frappe.get_doc(_SALES_INVOICE, document_ref.name)
     except Exception as exc:
         if missing is not None and isinstance(exc, missing):
             return InvoiceSnapshot(docstatus=0, items=())
@@ -257,7 +260,7 @@ def _replay_company(work_item: PostingWorkItem) -> str | None:
     if work_item.kind != "reversal":
         return None
     original = _resolve_original_invoice(work_item)
-    return frappe.db.get_value("Sales Invoice", original, "company") if original else None
+    return frappe.db.get_value(_SALES_INVOICE, original, "company") if original else None
 
 
 def _replay_expected(work_item: PostingWorkItem, company: str | None) -> ExpectedInvoice:
@@ -447,7 +450,7 @@ def _ack_submitted(
     so the in-memory check after insert is not proof. A mismatch acks ``reconciliation_required`` and
     the document stays as ERPNext holds it (684). An unreadable invoice acks ``failed_transient``.
     """
-    document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
+    document_ref = ErpnextDocumentRef(doctype=_SALES_INVOICE, name=sinv.name)
     try:
         sinv.reload()
         mismatch = check_representation(expected, persisted_from_doc(sinv))
@@ -470,7 +473,7 @@ def _find_posted_invoice(work_item: PostingWorkItem) -> ErpnextDocumentRef | Non
     or None if no submitted SI exists.
     """
     name = frappe.db.get_value(
-        "Sales Invoice",
+        _SALES_INVOICE,
         {
             "rt_source_system": work_item.source_system,
             "rt_external_id": provenance_id(work_item),
@@ -480,7 +483,7 @@ def _find_posted_invoice(work_item: PostingWorkItem) -> ErpnextDocumentRef | Non
     )
     if not name:
         return None
-    return ErpnextDocumentRef(doctype="Sales Invoice", name=name)
+    return ErpnextDocumentRef(doctype=_SALES_INVOICE, name=name)
 
 
 # Sale build errors that are a non-retryable ``validation`` rejection (never a guessed value).
@@ -585,7 +588,7 @@ def post_work_item(
         doc_payload = {**doc_payload, "company": company}
         expected = expected_from_payload(doc_payload)  # what ERPNext must persist
         sinv = _submit_atomically(doc_payload, expected)
-        document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
+        document_ref = ErpnextDocumentRef(doctype=_SALES_INVOICE, name=sinv.name)
     except _transient_exceptions() as exc:
         # T051 — transient (timeout/lock) → failed_transient; DP2 re-offers (no self-retry).
         client.ack_outcome(
@@ -628,7 +631,7 @@ def post_work_item(
             store.record_posted(key, document_ref)  # back-fill the missing Posting Log row
         except IdempotencyConflict as conflict:
             document_ref = conflict.existing
-        return _ack_existing(client, work_item, document_ref, correlation_id, "posting.recovered")
+        return _ack_existing(client, work_item, document_ref, correlation_id, _OUTCOME_RECOVERED)
     except frappe.ValidationError as exc:  # type: ignore[attr-defined]
         # T051 — validation failure → permanently_rejected / validation.
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
@@ -669,7 +672,7 @@ def _resolve_original_invoice(work_item: PostingWorkItem) -> str | None:
     if work_item.reversal_of is None:  # an upstream contract violation for kind=reversal.
         return None
     return frappe.db.get_value(
-        "Sales Invoice",
+        _SALES_INVOICE,
         {
             "rt_source_system": work_item.reversal_of.source_system,
             "rt_external_id": work_item.reversal_of.external_id,
@@ -818,7 +821,7 @@ def _post_reversal(
     try:
         expected = expected_from_payload(doc_payload)  # RT-378: company = the original's (linked)
         sinv = _submit_atomically(doc_payload, expected)
-        document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
+        document_ref = ErpnextDocumentRef(doctype=_SALES_INVOICE, name=sinv.name)
     except _transient_exceptions() as exc:
         client.ack_outcome(
             work_item.work_item_ref,
@@ -845,7 +848,7 @@ def _post_reversal(
             store.record_posted(key, document_ref)
         except IdempotencyConflict as conflict:
             document_ref = conflict.existing
-        return _ack_existing(client, work_item, document_ref, correlation_id, "posting.recovered")
+        return _ack_existing(client, work_item, document_ref, correlation_id, _OUTCOME_RECOVERED)
     except frappe.ValidationError as exc:  # type: ignore[attr-defined]
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
     except Exception as exc:  # any OTHER error is non-retryable (F-005), not transient.
@@ -888,7 +891,7 @@ def _recover_or_reject_unsupported(
         store.record_posted(key, document_ref)
     except IdempotencyConflict as conflict:
         document_ref = conflict.existing
-    return _ack_existing(client, work_item, document_ref, correlation_id, "posting.recovered")
+    return _ack_existing(client, work_item, document_ref, correlation_id, _OUTCOME_RECOVERED)
 
 
 _SUBMIT_SAVEPOINT = "rt_posting_submit"
@@ -984,7 +987,7 @@ def _read_original_posting(name: str) -> tuple[object, object]:
     ⏳ BENCH-VALIDATION. ``posting_time`` comes back from MariaDB as a ``timedelta``;
     ``posting_time.raise_to_original`` normalises it.
     """
-    row = frappe.db.get_value("Sales Invoice", name, ["posting_date", "posting_time"], as_dict=True)
+    row = frappe.db.get_value(_SALES_INVOICE, name, ["posting_date", "posting_time"], as_dict=True)
     if not row:
         raise ValueError(f"original Sales Invoice {name!r} not readable for its posting time")
     return row["posting_date"], row["posting_time"]
@@ -1079,20 +1082,20 @@ def _read_original_invoice(name: str) -> dict:
     ⏳ BENCH-VALIDATION.
     """
     flags = frappe.db.get_value(
-        "Sales Invoice",
+        _SALES_INVOICE,
         name,
         ["update_stock", "disable_rounded_total", "is_pos", "customer", "company"],
         as_dict=True,
     ) or {}
     rows = frappe.get_all(
         "Sales Invoice Item",
-        filters={"parent": name, "parenttype": "Sales Invoice"},
+        filters={"parent": name, "parenttype": _SALES_INVOICE},
         fields=["name", "item_code", "qty", "idx", "warehouse", "rt_line_ref", "uom", "conversion_factor"],
         order_by="idx asc",
     )
     payments = frappe.get_all(
         "Sales Invoice Payment",
-        filters={"parent": name, "parenttype": "Sales Invoice"},
+        filters={"parent": name, "parenttype": _SALES_INVOICE},
         fields=["mode_of_payment", "amount", "idx"],
         order_by="idx asc",
     )

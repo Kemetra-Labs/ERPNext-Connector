@@ -40,13 +40,16 @@ from .compatibility_profile import REQUIRED_CUSTOM_FIELDS, MappedRecord, SiteSna
 
 _SETTINGS = "Connector Settings"
 _LOGGER = "retail_tower_posting"
+_MODE_OF_PAYMENT = "Mode of Payment"
+_ACCOUNTS_SETTINGS = "Accounts Settings"
+_TAXES_TEMPLATE = "Sales Taxes and Charges Template"
 
 # doctype -> (flag field, flag means "enabled")
 _FLAGS = {
 	"UOM": ("enabled", True),
 	"Warehouse": ("disabled", False),
 	"Customer": ("disabled", False),
-	"Mode of Payment": ("enabled", True),
+	_MODE_OF_PAYMENT: ("enabled", True),
 }
 
 
@@ -165,9 +168,9 @@ _ACCOUNTS_FLAGS = {
 
 def _accounts_flag(field: str) -> bool | None:
 	"""An Accounts Settings flag, or ``None`` when this ERPNext minor does not have the field."""
-	if not frappe.get_meta("Accounts Settings").has_field(field):
+	if not frappe.get_meta(_ACCOUNTS_SETTINGS).has_field(field):
 		return None
-	return _flag("Accounts Settings", field)
+	return _flag(_ACCOUNTS_SETTINGS, field)
 
 
 def _unsupported() -> tuple[str, ...]:
@@ -180,7 +183,7 @@ def _mapped_names(maps: Mapping[str, Mapping]) -> dict[str, set[str]]:
 		"UOM": set((maps.get("uom") or {}).values()),
 		"Warehouse": warehouses,
 		"Customer": set((maps.get("customer") or {}).values()),
-		"Mode of Payment": set((maps.get("tender") or {}).values()),
+		_MODE_OF_PAYMENT: set((maps.get("tender") or {}).values()),
 	}
 
 
@@ -200,7 +203,7 @@ def _read_record(doctype: str, name: str, company: str | None) -> MappedRecord:
 	fields = [_FLAGS[doctype][0], *_EXTRA_FIELDS.get(doctype, [])]
 	row = frappe.db.get_value(doctype, name, fields, as_dict=True)
 	record = _record_for(doctype, name, row)
-	if doctype == "Mode of Payment" and record.exists:
+	if doctype == _MODE_OF_PAYMENT and record.exists:
 		record = dataclasses.replace(record, has_company_account=_has_company_account(name, company))
 	if doctype == "Customer" and record.exists:
 		record = dataclasses.replace(record, frozen_blocked=_frozen_blocked(row))
@@ -212,7 +215,7 @@ def _frozen_blocked(row) -> bool:
 	has the ``frozen_accounts_modifier`` role (always, when that role is not configured)."""
 	if not int(row.get("is_frozen") or 0):
 		return False
-	modifier = frappe.db.get_single_value("Accounts Settings", "frozen_accounts_modifier")
+	modifier = frappe.db.get_single_value(_ACCOUNTS_SETTINGS, "frozen_accounts_modifier")
 	return modifier not in frappe.get_roles()
 
 
@@ -223,7 +226,7 @@ def _has_tax_rows(template: str | None) -> bool:
 	return bool(
 		frappe.get_all(
 			"Sales Taxes and Charges",
-			filters={"parent": template, "parenttype": "Sales Taxes and Charges Template"},
+			filters={"parent": template, "parenttype": _TAXES_TEMPLATE},
 			pluck="parent",
 		)
 	)
@@ -295,7 +298,7 @@ def _default_templates(company: str) -> tuple[str, ...]:
 	"""Default Sales Taxes and Charges Templates (a warning: v15/v16 do not apply them on insert)."""
 	return tuple(
 		frappe.get_all(
-			"Sales Taxes and Charges Template",
+			_TAXES_TEMPLATE,
 			filters={"is_default": 1, "disabled": 0, "company": company},
 			pluck="name",
 		)
@@ -399,7 +402,7 @@ def _template_problem(template: str) -> str | None:
 
 	A deleted template fails link validation; a disabled one fails ``validate_enabled_taxes_and_charges``.
 	"""
-	disabled = frappe.db.get_value("Sales Taxes and Charges Template", template, "disabled")
+	disabled = frappe.db.get_value(_TAXES_TEMPLATE, template, "disabled")
 	if disabled is None:
 		return "does not exist"
 	return "is disabled" if int(disabled or 0) else None
