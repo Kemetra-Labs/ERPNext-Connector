@@ -76,11 +76,11 @@ Principle I). At concept level (field-level posting is spec 006):
   the frozen resolution (RT-331, posting feed 012 `Sale.warehouseRef`), a work item carries its
   Warehouse on the feed and the Connector posts to it.
 - **Local fallback only.** The Connector Settings warehouse map (`RT Warehouse Map Row`) applies
-  only to a work item with no `warehouseRef`, that is, an intent created before the freeze. It is
-  retired once no pre-freeze intents remain; do not treat it as a second source of truth.
+  only to a work item with no `warehouseRef`, that is, an intent created before the freeze. It will
+  be retired once no pre-freeze intents remain; do not treat it as a second source of truth.
 - **One store per Warehouse.** A Warehouse belongs to at most one store. The local map rejects a
   Warehouse listed for two stores (`config.parse_warehouse_map` raises a `ConfigError` naming the
-  stores, and the poll tick is skipped). Backend-Core enforces the same rule on its map (RT-433).
+  stores, and the poll tick is skipped). RT-433 (pending) adds the same rule to Backend-Core's map.
 - **Feed refs are checked per item.** The compatibility preflight checks the local map's
   Warehouses before a poll tick. A feed `warehouseRef` is checked for each sale before insert with
   the same rules (`warehouse_policy`): a group Warehouse, a Warehouse of another company or a missing
