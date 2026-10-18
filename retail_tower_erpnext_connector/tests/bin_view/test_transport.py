@@ -98,7 +98,7 @@ def test_pull_requests_caps_limit_at_500():
 
 def test_pull_requests_missing_cursor_raises():
     fake = FakeTransport({"items": [], "cursor": "", "next_page_token": None})
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"bin-view feed page missing required non-empty cursor"):
         _client(fake).pull_requests(since=None)
 
 

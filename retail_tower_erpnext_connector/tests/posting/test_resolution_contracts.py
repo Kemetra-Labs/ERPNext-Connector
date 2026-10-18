@@ -69,7 +69,7 @@ class TestWorkItemFrozenResolution:
 
 	@pytest.mark.parametrize("bad", [0, -1, "2", 1.5, True])
 	def test_rejects_a_non_positive_or_non_integer_version(self, bad):
-		with pytest.raises(ValueError):
+		with pytest.raises(ValueError, match=r"resolutionVersion must be a positive integer"):
 			c.PostingWorkItem.from_wire(_wire(resolutionVersion=bad))
 
 	@pytest.mark.parametrize(
@@ -77,18 +77,20 @@ class TestWorkItemFrozenResolution:
 		[{"doctype": "Item", "name": "WH"}, {"doctype": "Warehouse", "name": ""}, {"doctype": "Warehouse"}],
 	)
 	def test_rejects_a_malformed_warehouse_ref(self, bad):
-		with pytest.raises(ValueError):
+		with pytest.raises(
+			ValueError, match=r"Sale\.warehouseRef(\.name)? must be a (Warehouse reference|non-empty string)"
+		):
 			c.PostingWorkItem.from_wire(_wire(sale_extra={"warehouseRef": bad}))
 
 	def test_rejects_an_explicit_null_version(self):
 		# Omission is the legacy (pre-freeze) shape; an explicit null is malformed and must not
 		# silently disable the replay verification (PR #60 review).
-		with pytest.raises(ValueError):
+		with pytest.raises(ValueError, match=r"resolutionVersion must be a positive integer, got None"):
 			c.PostingWorkItem.from_wire(_wire(resolutionVersion=None))
 
 	def test_rejects_an_explicit_null_warehouse_ref(self):
 		# An explicit null must not fall back to the mutable local warehouse map (PR #60 review).
-		with pytest.raises(ValueError):
+		with pytest.raises(ValueError, match=r"Sale\.warehouseRef must be a Warehouse reference, got None"):
 			c.PostingWorkItem.from_wire(_wire(resolutionVersion=2, sale_extra={"warehouseRef": None}))
 
 
