@@ -11,6 +11,7 @@ Money: every monetary field is exact-decimal string + ISO-4217 (FR-009). No frap
 import pytest
 
 from retail_tower_erpnext_connector.connector.posting import builder as b
+from retail_tower_erpnext_connector.connector.posting import contracts as c
 from retail_tower_erpnext_connector.connector.posting import uom as u
 
 
@@ -88,7 +89,10 @@ class TestStoreCustomerMap:
 class TestAsciiDigitsOnly:
     """RT-468 (S6353): the money/quantity patterns use a digit class with re.ASCII (ASCII only)."""
 
-    @pytest.mark.parametrize("pattern", [u._DECIMAL_RE, u._QUANTITY_RE])
+    @pytest.mark.parametrize(
+        "pattern",
+        [u._DECIMAL_RE, u._QUANTITY_RE, c._NON_NEGATIVE_DECIMAL_RE, c._RETURN_QUANTITY_RE],
+    )
     def test_non_ascii_digits_rejected(self, pattern):
         assert pattern.match("12.50")
         assert not pattern.match(f"{chr(0x661)}{chr(0x662)}.{chr(0x665)}{chr(0x660)}")  # Arabic-Indic digits
