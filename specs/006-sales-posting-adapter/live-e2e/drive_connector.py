@@ -17,8 +17,9 @@
 # (The `if __name__ == "__main__"` guard below also lets it run as a plain script under a
 #  frappe-initialised interpreter; it does NOT fire on the `bench execute` import path.)
 #
-# RT_E2E_MODE env: "reject" (faithful, default) or "posted" (injects customer/company into the
-# payload AFTER build_sales_invoice runs — harness-only; the connector builder stays untouched).
+# RT_E2E_MODE env: "reject" (faithful, default: empty store->Customer map, so the post fails closed
+# on UnmappedStore -> validation) or "posted" (maps the seeded store to RT_E2E_CUSTOMER; F-009: the
+# customer comes from the operator map, the company is the site default set by post_work_item).
 
 import os
 
@@ -27,7 +28,12 @@ import requests
 from retail_tower_erpnext_connector.connector.posting import frappe_glue
 from retail_tower_erpnext_connector.connector.posting.transport import PostingFeedClient
 from retail_tower_erpnext_connector.connector.posting.frappe_store import FrappePostingLogStore
-from retail_tower_erpnext_connector.connector.posting.uom import UomMap, PreResolvedWarehouse
+from retail_tower_erpnext_connector.connector.posting.tender import TenderModeMap
+from retail_tower_erpnext_connector.connector.posting.uom import (
+    PreResolvedWarehouse,
+    StoreCustomerMap,
+    UomMap,
+)
 
 # NOTE: a temporary _shim_dp2_erpnext_item_ref() used to wrap DP2's bare-string `erpnextItemRef`
 # into the 012 object {doctype,name} (issue #506). REMOVED once DP2 PR #508 merged — DP2 now serves
@@ -81,24 +87,19 @@ def main():
     client = PostingFeedClient(transport, correlation_id=correlation_id)
     store = FrappePostingLogStore()
     # "each" must map (else build fails as UnmappedUnit before reaching submit). Use a UOM that
-    # exists on the bench if any; on a bare bench the SI submit fails on Customer/Company first,
-    # which is exactly the faithful reject-path we want to observe.
+    # exists on the bench. In reject-mode the store->Customer map below is empty, so the connector
+    # fails closed on UnmappedStore before any Sales Invoice is submitted: the faithful reject path.
     uom_map = UomMap({"each": "Nos"})
     warehouses = PreResolvedWarehouse({STORE_ID: {"doctype": "Warehouse", "name": "Stores - E2E"}})
 
-    # --- Posted-mode: monkeypatch the builder to inject customer/company AFTER it builds. -------
-    # This lives ONLY in the harness; the connector's builder.build_sales_invoice is unchanged.
-    if MODE == "posted":
-        _orig_build = frappe_glue.build_sales_invoice
-
-        def _build_with_customer(work_item, *, uom_for, warehouse_for):
-            doc = _orig_build(work_item, uom_for=uom_for, warehouse_for=warehouse_for)
-            doc["customer"] = os.environ.get("RT_E2E_CUSTOMER", "E2E Customer")
-            doc["company"] = os.environ.get("RT_E2E_COMPANY", "E2E Co")
-            return doc
-
-        frappe_glue.build_sales_invoice = _build_with_customer
-        print("[posted-mode] builder wrapped to inject customer/company (harness-only)")
+    # Customer resolution (F-009): the builder needs a store->Customer map and never fabricates one.
+    # Posted-mode maps the seeded store to a bench Customer; reject-mode leaves the map empty so
+    # the post fails closed on UnmappedStore (the faithful reject path). The company is the site
+    # default (Global Defaults), set by post_work_item itself (RT-378) -- no harness injection.
+    customer = os.environ.get("RT_E2E_CUSTOMER", "E2E Customer")
+    customers = StoreCustomerMap({STORE_ID: customer} if MODE == "posted" else {})
+    # The seeded sale carries no tenders; the map is only consulted for a tender-bearing sale.
+    tenders = TenderModeMap({"cash": os.environ.get("RT_E2E_CASH_MODE_OF_PAYMENT", "Cash")})
 
     # --- Pull one page, post the single work-item, observe the outcome. ------------------------
     page = client.pull_postings(since=None, limit=100)
@@ -122,6 +123,8 @@ def main():
         store=store,
         uom_map=uom_map,
         warehouses=warehouses,
+        customers=customers,
+        tenders=tenders,
         correlation_id=correlation_id,
     )
     print("OUTCOME=%s" % outcome)
@@ -138,7 +141,8 @@ def main():
             raise SystemExit("FAILED: posted-mode first post returned %r, expected 'posted'" % outcome)
         replay_outcome = frappe_glue.post_work_item(
             wi, client=client, store=store, uom_map=uom_map,
-            warehouses=warehouses, correlation_id=correlation_id,
+            warehouses=warehouses, customers=customers, tenders=tenders,
+            correlation_id=correlation_id,
         )
         print("REPLAY_OUTCOME=%s" % replay_outcome)
         if replay_outcome != "posted":

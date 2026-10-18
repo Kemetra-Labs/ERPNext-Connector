@@ -23,7 +23,12 @@ import frappe
 from retail_tower_erpnext_connector.connector.posting import frappe_glue
 from retail_tower_erpnext_connector.connector.posting.transport import PostingFeedClient
 from retail_tower_erpnext_connector.connector.posting.frappe_store import FrappePostingLogStore
-from retail_tower_erpnext_connector.connector.posting.uom import UomMap, PreResolvedWarehouse
+from retail_tower_erpnext_connector.connector.posting.tender import TenderModeMap
+from retail_tower_erpnext_connector.connector.posting.uom import (
+    PreResolvedWarehouse,
+    StoreCustomerMap,
+    UomMap,
+)
 
 DP2_BASE = os.environ.get("RT_E2E_DP2_BASE", "http://172.20.0.1:3000")
 TOKEN = os.environ.get("RT_E2E_TOKEN", "rt_e2e_connector_token_0123456789abcdefghijABCD")
@@ -57,26 +62,17 @@ class RequestsTransport:
         return _Resp(requests.post(self._base + path, json=json, headers={**self._auth, **headers}, timeout=15))
 
 
-def _inject_customer():
-    _orig = frappe_glue.build_sales_invoice
-
-    def _wrapped(work_item, *, uom_for, warehouse_for):
-        doc = _orig(work_item, uom_for=uom_for, warehouse_for=warehouse_for)
-        doc["customer"] = os.environ.get("RT_E2E_CUSTOMER", "E2E Customer")
-        doc["company"] = os.environ.get("RT_E2E_COMPANY", "E2E Co")
-        return doc
-
-    frappe_glue.build_sales_invoice = _wrapped
-
-
 def main():
     print("=== F-002 crash-window probe | expect=%s ===" % EXPECT)
-    _inject_customer()
     transport = RequestsTransport(DP2_BASE, TOKEN)
     client = PostingFeedClient(transport, correlation_id="f002-probe")
     store = FrappePostingLogStore()
     uom_map = UomMap({"each": "Nos"})
     warehouses = PreResolvedWarehouse({STORE_ID: {"doctype": "Warehouse", "name": "Stores - E2E"}})
+    # F-009: the customer comes from the store->Customer map; the company is the site default
+    # (set by post_work_item, RT-378). No builder wrapping.
+    customers = StoreCustomerMap({STORE_ID: os.environ.get("RT_E2E_CUSTOMER", "E2E Customer")})
+    tenders = TenderModeMap({"cash": os.environ.get("RT_E2E_CASH_MODE_OF_PAYMENT", "Cash")})
 
     page = client.pull_postings(since=None, limit=100)
     if not page.items:
@@ -88,7 +84,8 @@ def main():
     def post():
         return frappe_glue.post_work_item(
             wi, client=client, store=store, uom_map=uom_map,
-            warehouses=warehouses, correlation_id="f002-probe",
+            warehouses=warehouses, customers=customers, tenders=tenders,
+            correlation_id="f002-probe",
         )
 
     # 1st post — the legitimate one.
