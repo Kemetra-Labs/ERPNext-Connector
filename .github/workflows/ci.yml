@@ -29,11 +29,25 @@ jobs:
         with:
           python-version: "3.11"
 
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.32"
+          enable-cache: false
+          # A fresh .venv on PATH for the later steps, so lint and tests see only the locked set.
+          python-version: "3.11"
+          activate-environment: true
+
+      # RT-690 / RT-467: the CI tool set is declared in pyproject.toml [dependency-groups].ci and
+      # locked, with sha256 hashes and wheels only, in pylock.toml. --require-hashes refuses any
+      # wheel without a matching hash; --no-build refuses sdists (no setup scripts run). The venv starts
+      # empty, so installing the locked set equals syncing to it.
       # RT-635: sentry-sdk is not an app dependency (Frappe v15/v16 ship sentry-sdk~=1.45.1); it is
-      # pinned here so the Connector Sentry client tests run against the real SDK, not only on a bench.
-      - name: Install test tools
-        run: |
-          python -m pip install --only-binary :all: pytest==9.1.1 pytest-cov==7.1.0 ruff==0.15.20 sentry-sdk==1.45.1
+      # in the ci group so the Connector Sentry client tests run against the real SDK, not only on a bench.
+      # Refresh: bump a pin in [dependency-groups].ci, then re-run and commit both files in one PR:
+      #   uv pip compile pyproject.toml --group ci --python-version 3.11 \
+      #     --python-platform x86_64-manylinux_2_28 --only-binary :all: -o pylock.toml
+      - name: Install test tools (hash-locked)
+        run: uv pip install --require-hashes --no-build -r pylock.toml
 
       - name: Lint
         run: python -m ruff check retail_tower_erpnext_connector

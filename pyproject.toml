@@ -12,6 +12,16 @@ dependencies = [
     # ERPNext is a hard runtime dependency declared via required_apps in hooks.py.
 ]
 
+# RT-690 / RT-467: CI-only tool set, locked in pylock.toml. bench does not install dependency
+# groups, so the production install path is unchanged.
+[dependency-groups]
+ci = [
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "ruff==0.15.20",
+    "sentry-sdk==1.45.1",  # Frappe v15/v16 pin; see the RT-635 comment in ci.yml
+]
+
 [build-system]
 requires = ["flit_core >=3.4,<4"]
 build-backend = "flit_core.buildapi"
