@@ -86,6 +86,7 @@ _REDACTED = "[redacted]"
 _SCRUB = "scrub"
 _MASK = "mask"
 _KEY_SEPARATOR = "key-separator"
+_NEXT_RANK = {_SCRUB: 0, _KEY_SEPARATOR: 1, _MASK: 2}
 # HTTP auth schemes: after ``Authorization:``, the scheme AND the credential that follows are masked.
 _AUTH_SCHEMES = frozenset({"bearer", "basic", "digest", "token", "apikey", "negotiate", "ntlm"})
 # OBS-1 §3.2 phones: E.164 is ``+`` and 8-15 digits not starting with 0; an Egyptian mobile is
@@ -252,13 +253,23 @@ def _scrub_tokens(text: str) -> Iterator[str]:
 
 
 def _scrub_word(token: str, state: str) -> tuple[str, str]:
-    """One whitespace-free token, scrubbed as the word before it asks; and how to treat the NEXT one."""
+    """One whitespace-free token, scrubbed as the word before it asks; and how to treat the NEXT one.
+
+    A token masked or read as a separator value still passes on its own signal (``[Bearer]
+    Authorization: <x>``), so nothing is masked less than before.
+    """
     if state == _MASK:
         # "Authorization: Basic <x>" → both masked
-        return _REDACTED, _MASK if _is_auth_scheme(token) else _SCRUB
+        return _REDACTED, _MASK if _is_auth_scheme(token) else _scrub_token(token)[1]
     if state == _KEY_SEPARATOR and token[0] in "=:":
-        return _value_after(token, 0)  # "Authorization : Basic <x>" (RT-694)
+        separated, next_word = _value_after(token, 0)  # "Authorization : Basic <x>" (RT-694)
+        return separated, _stricter(next_word, _scrub_token(token)[1])
     return _scrub_token(token)
+
+
+def _stricter(first: str, second: str) -> str:
+    """The stricter of two next-token states (mask, then key-separator, then scrub)."""
+    return first if _NEXT_RANK[first] >= _NEXT_RANK[second] else second
 
 
 def _scrub_token(token: str) -> tuple[str, str]:

@@ -412,6 +412,22 @@ class TestObs1GoldenVectors(unittest.TestCase):
 			with self.subTest(text):
 				self.assertEqual(sanitize_message(text), expected)
 
+	def test_a_masked_word_keeps_its_own_next_word_signal(self):
+		# A word masked because of the word before it, or read as a separator value, still passes on its
+		# own Bearer/credential signal, so RT-694 never masks less than the RT-682 baseline.
+		cases = {
+			"Authorization :a,Authorization: S1": "Authorization :[redacted] [redacted]",
+			"Authorization =x,Proxy-Authorization:Bearer S1": "Authorization =[redacted] [redacted]",
+			"[Bearer] Authorization: S1": "[redacted] [redacted] [redacted]",
+			"(Bearer) ?authorization= S1": "[redacted] [redacted] [redacted]",
+			"Authorization: (Bearer) Authorization: S1": "Authorization: [redacted] [redacted] [redacted]",
+			# The wider credential-key set must not mask less than Backend-Core does.
+			"token :a,Authorization: S1": "token :[redacted] [redacted]",
+		}
+		for text, expected in cases.items():
+			with self.subTest(text):
+				self.assertEqual(sanitize_message(text), expected)
+
 	def test_separator_word_edges_follow_the_contract_text(self):
 		# RT-694: a bare Authorization key takes a following word's leading `:`/`=` as its separator.
 		cases = {
