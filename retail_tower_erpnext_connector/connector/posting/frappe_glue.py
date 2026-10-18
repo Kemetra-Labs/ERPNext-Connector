@@ -84,7 +84,7 @@ from .uom import (
 from .warehouse_policy import FrozenWarehouseRejected, assert_postable_warehouse
 
 _SALES_INVOICE = "Sales Invoice"
-_OUTCOME_RECOVERED = "posting.recovered"
+_SIGNAL_RECOVERED = "posting.recovered"
 
 
 def _ack_key(work_item: PostingWorkItem, outcome: str) -> str:
@@ -910,7 +910,7 @@ def _recover_duplicate_provenance(
         store.record_posted(key, document_ref)  # back-fill the missing Posting Log row
     except IdempotencyConflict as conflict:
         document_ref = conflict.existing
-    return _ack_existing(client, work_item, document_ref, correlation_id, _OUTCOME_RECOVERED)
+    return _ack_existing(client, work_item, document_ref, correlation_id, _SIGNAL_RECOVERED)
 
 
 def _ack_awaiting_original(client: PostingFeedClient, work_item: PostingWorkItem, correlation_id: str) -> str:
@@ -957,7 +957,7 @@ def _recover_or_reject_unsupported(
         store.record_posted(key, document_ref)
     except IdempotencyConflict as conflict:
         document_ref = conflict.existing
-    return _ack_existing(client, work_item, document_ref, correlation_id, _OUTCOME_RECOVERED)
+    return _ack_existing(client, work_item, document_ref, correlation_id, _SIGNAL_RECOVERED)
 
 
 _SUBMIT_SAVEPOINT = "rt_posting_submit"
