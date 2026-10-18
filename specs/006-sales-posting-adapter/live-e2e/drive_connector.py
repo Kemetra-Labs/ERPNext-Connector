@@ -17,8 +17,9 @@
 # (The `if __name__ == "__main__"` guard below also lets it run as a plain script under a
 #  frappe-initialised interpreter; it does NOT fire on the `bench execute` import path.)
 #
-# RT_E2E_MODE env: "reject" (faithful, default) or "posted" (injects customer/company into the
-# store->Customer map entry (F-009: customer comes from the operator map, never from the builder).
+# RT_E2E_MODE env: "reject" (faithful, default: empty store->Customer map, so the post fails closed
+# on UnmappedStore -> validation) or "posted" (maps the seeded store to RT_E2E_CUSTOMER; F-009: the
+# customer comes from the operator map, the company is the site default set by post_work_item).
 
 import os
 
@@ -86,8 +87,8 @@ def main():
     client = PostingFeedClient(transport, correlation_id=correlation_id)
     store = FrappePostingLogStore()
     # "each" must map (else build fails as UnmappedUnit before reaching submit). Use a UOM that
-    # exists on the bench if any; on a bare bench the SI submit fails on Customer/Company first,
-    # which is exactly the faithful reject-path we want to observe.
+    # exists on the bench. In reject-mode the store->Customer map below is empty, so the connector
+    # fails closed on UnmappedStore before any Sales Invoice is submitted: the faithful reject path.
     uom_map = UomMap({"each": "Nos"})
     warehouses = PreResolvedWarehouse({STORE_ID: {"doctype": "Warehouse", "name": "Stores - E2E"}})
 
