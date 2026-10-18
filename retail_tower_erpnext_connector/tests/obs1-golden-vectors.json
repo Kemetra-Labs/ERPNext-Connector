@@ -87,6 +87,21 @@
       "expected": "Authorization :[redacted] [redacted]"
     },
     {
+      "id": "B18",
+      "input": "[Bearer] Authorization: opaque-1",
+      "expected": "[redacted] [redacted] [redacted]"
+    },
+    {
+      "id": "B19",
+      "input": "Authorization :a,Authorization: opaque-1",
+      "expected": "Authorization :[redacted] [redacted]"
+    },
+    {
+      "id": "B20",
+      "input": "Authorization: (Bearer) Authorization: opaque-1",
+      "expected": "Authorization: [redacted] [redacted] [redacted]"
+    },
+    {
       "id": "P1",
       "input": "customer phone +201000000638 not reachable",
       "expected": "customer phone [phone] not reachable"
