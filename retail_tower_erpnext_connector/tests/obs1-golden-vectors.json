@@ -1,5 +1,5 @@
 {
-  "contract": "OBS-1 §3.5 golden vectors (Confluence 42926084 v2, RT-682). Copy this file unchanged into every repository's scrubber tests.",
+  "contract": "OBS-1 §3.5 golden vectors (Confluence 42926084, RT-682 as revised by RT-694). Copy this file unchanged into every repository's scrubber tests.",
   "vectors": [
     {
       "id": "B1",
@@ -60,6 +60,31 @@
       "id": "B12",
       "input": "BEARER xyz",
       "expected": "[redacted] [redacted]"
+    },
+    {
+      "id": "B13",
+      "input": "Authorization: (Bearer) x",
+      "expected": "Authorization: [redacted] [redacted]"
+    },
+    {
+      "id": "B14",
+      "input": "Authorization : Basic x",
+      "expected": "Authorization : [redacted] [redacted]"
+    },
+    {
+      "id": "B15",
+      "input": "[Bearer] x",
+      "expected": "[redacted] [redacted]"
+    },
+    {
+      "id": "B16",
+      "input": "Authorization = opaque-1",
+      "expected": "Authorization = [redacted]"
+    },
+    {
+      "id": "B17",
+      "input": "Authorization :Basic x",
+      "expected": "Authorization :[redacted] [redacted]"
     },
     {
       "id": "P1",
@@ -182,6 +207,11 @@
       "expected": "token count exceeded the [redacted] [redacted]"
     },
     {
+      "id": "N16",
+      "input": "see (bearer) docs and : notes",
+      "expected": "see [redacted] [redacted] and : notes"
+    },
+    {
       "id": "X1",
       "input": "user jane@example.invalid with Bearer abc and 01012345678",
       "expected": "user [email] with [redacted] [redacted] and [phone]"
@@ -214,6 +244,10 @@
       {
         "pattern": "01",
         "repeat": 2500
+      },
+      {
+        "pattern": "Authorization : ",
+        "repeat": 200
       }
     ]
   }
