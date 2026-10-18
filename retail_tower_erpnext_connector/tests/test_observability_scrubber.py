@@ -417,3 +417,19 @@ class TestObs1GoldenVectors(unittest.TestCase):
 			out = sanitize_message(item["pattern"] * item["repeat"])
 			self.assertLessEqual(len(out), linear["maxOutputLength"])
 		self.assertLess((time.perf_counter() - started) * 1000, linear["maxTotalMs"])
+
+	def test_long_phone_scans_under_the_cap_stay_linear(self):
+		# The contract's long inputs exceed MAX_SCAN_LENGTH with no whitespace, so the cap empties them
+		# before the phone scan runs. These stay under the cap so the digit-run scan itself is timed.
+		under_cap = [
+			"1" * 1999,
+			"+1" * 999,
+			"01" * 999,
+			"+201000000638 " * 140,
+			"a01012345678" * 166,
+		]
+		started = time.perf_counter()
+		for text in under_cap:
+			self.assertLessEqual(len(sanitize_message(text)), MAX_MESSAGE_LENGTH)
+		self.assertLess(time.perf_counter() - started, 0.5)
+		self.assertTrue(sanitize_message("+201000000638 " * 140).startswith("[phone] [phone] "))
