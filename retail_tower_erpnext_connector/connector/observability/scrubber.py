@@ -9,8 +9,8 @@ adds (request, user, extra, contexts, breadcrumbs, frame vars, source lines) nev
 
 :func:`sanitize_message` masks, anywhere in an exception message (§3.2 / §3.3): JWTs, URL userinfo,
 query and fragment, emails, Postgres row detail, the MariaDB ``Duplicate entry`` value (the
-Connector's own database echoes the provenance key there), ``Bearer`` tokens and credential
-``key=value`` pairs. Input is capped before scanning and the result truncated. Only index scans and
+Connector's own database echoes the provenance key there), ``Bearer`` tokens, credential
+``key=value`` pairs and phone numbers (RT-686, OBS-1 §3.2 as amended by RT-682). Input is capped before scanning and the result truncated. Only index scans and
 whitespace splits run on the text — no regex — so the work stays linear on untrusted input.
 
 Mirrors Backend-Core's reference scrubber (``packages/shared/src/observability/sentry.ts``, RT-609).
@@ -83,6 +83,14 @@ _CREDENTIAL_SUFFIXES = (
 _REDACTED = "[redacted]"
 # HTTP auth schemes: after ``Authorization:``, the scheme AND the credential that follows are masked.
 _AUTH_SCHEMES = frozenset({"bearer", "basic", "digest", "token", "apikey", "negotiate", "ntlm"})
+# OBS-1 §3.2 phones: E.164 is ``+`` and 8-15 digits not starting with 0; an Egyptian mobile is
+# ``1[0125]`` + 8 digits behind a national (``0``) or country (``20``, ``0020``) prefix.
+_PHONE = "[phone]"
+_DIGITS = frozenset(string.digits)
+_ASCII_ALNUM = frozenset(string.ascii_letters + string.digits)
+_E164_DIGITS = range(8, 16)
+_EGYPT_MOBILE_PREFIX_BY_LENGTH = {11: "0", 12: "20", 14: "0020"}
+_EGYPT_MOBILE_OPERATORS = frozenset({"10", "11", "12", "15"})
 
 
 # --- §3.1 allowlist rebuild ------------------------------------------------------------------
@@ -247,12 +255,62 @@ def _scrub_token(token: str) -> tuple[str, bool]:
     if _is_bearer(token):
         return _REDACTED, True
     masked, redact_next = _without_credential(_without_relative_query(_without_url(token)))
-    return _without_jwt_or_email(masked), redact_next
+    return _without_phones(_without_jwt_or_email(masked)), redact_next
 
 
 def _without_jwt_or_email(token: str) -> str:
     masked = _without_jwt(token)
     return "[email]" if _is_email_like(masked) else masked
+
+
+def _without_phones(token: str) -> str:
+    """Every phone-shaped digit run → ``[phone]`` (OBS-1 §3.2). One pass over the token."""
+    out: list[str] = []
+    at = 0
+    while at < len(token):
+        if token[at] not in _DIGITS:
+            out.append(token[at])
+            at += 1
+            continue
+        end = at
+        while end < len(token) and token[end] in _DIGITS:
+            end += 1
+        kind = _phone_kind(token, at, end)
+        if kind == "e164":
+            out.pop()  # the "+" in front of the run
+        out.append(token[at:end] if kind is None else _PHONE)
+        at = end
+    return "".join(out)
+
+
+def _phone_kind(token: str, start: int, end: int) -> str | None:
+    """``"e164"`` (the ``+`` is masked too), ``"national"`` or ``None`` for the run ``token[start:end]``.
+
+    The run must have no ASCII letter or digit on either side.
+    """
+    if _char_at(token, end) in _ASCII_ALNUM:
+        return None
+    run = token[start:end]
+    before = _char_at(token, start - 1)
+    if before == "+" and _char_at(token, start - 2) not in _ASCII_ALNUM and _is_e164(run):
+        return "e164"
+    return "national" if before not in _ASCII_ALNUM and _is_egyptian_mobile(run) else None
+
+
+def _char_at(text: str, index: int) -> str:
+    """The character at ``index``, or ``""`` past either end (never a negative-index wrap)."""
+    return text[index] if 0 <= index < len(text) else ""
+
+
+def _is_e164(run: str) -> bool:
+    return run[0] != "0" and len(run) in _E164_DIGITS
+
+
+def _is_egyptian_mobile(run: str) -> bool:
+    prefix = _EGYPT_MOBILE_PREFIX_BY_LENGTH.get(len(run))
+    if prefix is None or not run.startswith(prefix):
+        return False
+    return run[len(prefix) : len(prefix) + 2] in _EGYPT_MOBILE_OPERATORS
 
 
 def _is_bearer(token: str) -> bool:
