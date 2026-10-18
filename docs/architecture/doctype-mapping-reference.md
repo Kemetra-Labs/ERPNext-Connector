@@ -70,6 +70,23 @@ Principle I). At concept level (field-level posting is spec 006):
 - **Source**: `packages/db/src/schema/catalog/erpnext-item-map.ts`,
   `packages/db/drizzle/0017_erpnext_item_map.sql`.
 
+### Store → ERPNext Warehouse authority (RT-290 M-2/M-3/M-10, RT-434)
+
+- **Authority.** Backend-Core's `erpnext_warehouse_map` is the warehouse mapping authority. Since
+  the frozen resolution (RT-331, posting feed 012 `Sale.warehouseRef`), a work item carries its
+  Warehouse on the feed and the Connector posts to it.
+- **Local fallback only.** The Connector Settings warehouse map (`RT Warehouse Map Row`) applies
+  only to a work item with no `warehouseRef`, that is, an intent created before the freeze. It will
+  be retired once no pre-freeze intents remain; do not treat it as a second source of truth.
+- **One store per Warehouse.** A Warehouse belongs to at most one store. The local map rejects a
+  Warehouse listed for two stores (`config.parse_warehouse_map` raises a `ConfigError` naming the
+  stores, and the poll tick is skipped). RT-433 (pending) adds the same rule to Backend-Core's map.
+- **Feed refs are checked per item.** The compatibility preflight checks the local map's
+  Warehouses before a poll tick. A feed `warehouseRef` is checked for each sale before insert with
+  the same rules (`warehouse_policy`): a group Warehouse, a Warehouse of another company or a missing
+  Warehouse is rejected as `validation`, and no ERP document is created. A void or return uses the
+  original invoice rows' warehouses and is not re-checked.
+
 ### ERPNext document addressing
 
 ERPNext documents (the *result* of posting) are referenced only via the generic

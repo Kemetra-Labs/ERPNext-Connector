@@ -81,6 +81,7 @@ from .uom import (
     UnresolvedWarehouse,
     UomMap,
 )
+from .warehouse_policy import FrozenWarehouseRejected, assert_postable_warehouse
 
 
 def _ack_key(work_item: PostingWorkItem, outcome: str) -> str:
@@ -151,6 +152,21 @@ def _warehouse_for(work_item: PostingWorkItem, warehouses: PreResolvedWarehouse)
     if frozen is None:
         return warehouses.for_store
     return lambda _store_id: dict(frozen)
+
+
+def _assert_frozen_warehouse(work_item: PostingWorkItem, company: str) -> None:
+    """⏳ BENCH-VALIDATION. RT-434: a feed ``warehouseRef`` must be a leaf Warehouse of ``company``.
+
+    The preflight checks only the local map's Warehouses; a frozen one arrives per item, so it is
+    checked here, before insert (:mod:`warehouse_policy`). A work item without one (pre-freeze, local
+    map) reads nothing. A transient read error propagates and acks ``failed_transient``.
+    """
+    frozen = work_item.sale.warehouse_ref
+    if frozen is None:
+        return
+    name = frozen["name"]
+    row = frappe.db.get_value("Warehouse", name, ["company", "is_group"], as_dict=True)
+    assert_postable_warehouse(name, row, company)
 
 
 class _NotCompared:
@@ -564,7 +580,9 @@ def post_work_item(
     try:
         # RT-378 finding 2: the explicit company (site default). Read here, so a transient DB error is
         # failed_transient and a blank default is validation (RepresentationMismatch), before insert.
-        doc_payload = {**doc_payload, "company": _sale_company()}
+        company = _sale_company()
+        _assert_frozen_warehouse(work_item, company)  # RT-434: a feed warehouseRef, before insert
+        doc_payload = {**doc_payload, "company": company}
         expected = expected_from_payload(doc_payload)  # what ERPNext must persist
         sinv = _submit_atomically(doc_payload, expected)
         document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
@@ -577,6 +595,13 @@ def post_work_item(
         )
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
         return "failed_transient"
+    except FrozenWarehouseRejected as exc:
+        # RT-434 — the feed warehouseRef is a group / other-company / missing Warehouse: nothing was
+        # inserted. An invoice already submitted under this provenance (a crash before record_posted,
+        # then the Warehouse changed) is recovered, never rejected; otherwise reject as validation.
+        return _recover_or_reject_unsupported(
+            work_item, key, exc, client=client, store=store, correlation_id=correlation_id
+        )
     except (SettlementDrift, RepresentationMismatch, SiteCompanyNotConfigured) as exc:
         # RT-78 — ERPNext's computed totals left change/outstanding/write-off on a settled invoice.
         # RT-378 / D1 — ERPNext holds a value Retail Tower did not send ("representation: ...");
@@ -838,7 +863,7 @@ def _post_reversal(
 def _recover_or_reject_unsupported(
     work_item: PostingWorkItem,
     key,
-    exc: UnsupportedReversal,
+    exc: Exception,
     *,
     client: PostingFeedClient,
     store: IdempotencyStore,
@@ -852,6 +877,8 @@ def _recover_or_reject_unsupported(
     ``re_post`` could credit the sale twice. So resolve that invoice first and ack it ``posted``
     (back-filling the Posting Log), exactly like the duplicate-provenance recovery. Otherwise nothing
     was posted, and the reversal is rejected as ``validation``.
+
+    RT-434 reuses it for a sale whose feed warehouseRef fails :func:`_assert_frozen_warehouse`.
     """
     existing = _find_posted_invoice(work_item)
     if existing is None:

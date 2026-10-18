@@ -76,6 +76,41 @@ class TestParseWarehouseMap:
                 ]
             )
 
+    def test_one_warehouse_for_two_stores_is_rejected_naming_the_stores(self):
+        # RT-434 / RT-290 M-2, M-3: a Warehouse belongs to at most one store.
+        with pytest.raises(cfg.ConfigError) as err:
+            cfg.parse_warehouse_map(
+                [
+                    {"store_id": "s2", "warehouse": "WH-A"},
+                    {"store_id": "s3", "warehouse": "WH-B"},
+                    {"store_id": "s1", "warehouse": "WH-A"},
+                ]
+            )
+        assert str(err.value) == (
+            "warehouse map has warehouse 'WH-A' for more than one store: ['s1', 's2'] — a Warehouse "
+            "belongs to at most one store (RT-290 M-2/M-3); map each store to its own Warehouse"
+        )
+
+    def test_a_warehouse_differing_only_in_case_is_the_same_warehouse(self):
+        # Frappe document names are case-insensitive on MariaDB: both rows address one Warehouse.
+        with pytest.raises(cfg.ConfigError, match=r"for more than one store: \['s1', 's2'\]"):
+            cfg.parse_warehouse_map(
+                [
+                    {"store_id": "s1", "warehouse": "Stores - RT"},
+                    {"store_id": "s2", "warehouse": "stores - rt"},
+                ]
+            )
+
+    def test_distinct_warehouses_for_several_stores_parse(self):
+        rows = [
+            {"store_id": "s1", "warehouse": "WH-A"},
+            {"store_id": "s2", "warehouse": "WH-B"},
+        ]
+        assert cfg.parse_warehouse_map(rows) == {
+            "s1": {"doctype": "Warehouse", "name": "WH-A"},
+            "s2": {"doctype": "Warehouse", "name": "WH-B"},
+        }
+
 
 class TestRequireConfiguredMaps:
     # Codex PR #23 P1: a half-configured connector (creds saved, a required map still empty) must

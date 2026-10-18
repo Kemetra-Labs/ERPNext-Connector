@@ -68,8 +68,25 @@ def parse_warehouse_map(rows: Iterable | None) -> dict[str, dict]:
     """Child rows ``{store_id, warehouse}`` → ``{store_id: {doctype, name}}`` for the applier.
 
     Addresses the warehouse generically as ``{doctype:"Warehouse", name}`` (Principle II, FR-002).
+
+    RT-434 (RT-290 M-2/M-3): a Warehouse belongs to at most one store. One Warehouse mapped for two
+    stores would post both stores' stock into one Bin, so it is a config error naming the stores.
+    Names compare case-insensitively: Frappe document names are case-insensitive on MariaDB.
     """
     pairs = _parse_pairs(rows, "store_id", "warehouse", "warehouse map")
+    stores_by_warehouse: dict[str, list[str]] = {}
+    first_spelling: dict[str, str] = {}
+    for store, name in pairs.items():
+        stores_by_warehouse.setdefault(name.casefold(), []).append(store)
+        first_spelling.setdefault(name.casefold(), name)
+    for key, stores in stores_by_warehouse.items():
+        if len(stores) > 1:
+            name = first_spelling[key]
+            raise ConfigError(
+                f"warehouse map has warehouse {name!r} for more than one store: {sorted(stores)} — a "
+                "Warehouse belongs to at most one store (RT-290 M-2/M-3); map each store to its own "
+                "Warehouse"
+            )
     return {store: {"doctype": "Warehouse", "name": name} for store, name in pairs.items()}
 
 
