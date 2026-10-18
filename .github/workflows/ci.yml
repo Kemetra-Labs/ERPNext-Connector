@@ -44,7 +44,8 @@ jobs:
       #   uv pip compile pyproject.toml --group ci --python-version 3.11 \
       #     --python-platform x86_64-manylinux_2_28 --only-binary :all: -o pylock.toml
       - name: Install test tools (hash-locked)
-        run: uv pip sync --system --require-hashes --only-binary :all: pylock.toml
+        run: |
+          uv pip sync --system --require-hashes --only-binary :all: pylock.toml
 
       - name: Lint
         run: python -m ruff check retail_tower_erpnext_connector
