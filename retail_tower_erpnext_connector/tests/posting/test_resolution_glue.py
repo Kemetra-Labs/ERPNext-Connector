@@ -37,6 +37,7 @@ _STORE = "33333333-3333-4333-8333-333333333333"
 _A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 _REF = "18181818-1818-4181-8181-181818181818"
 _EXISTING = c.ErpnextDocumentRef(doctype="Sales Invoice", name="ACC-SINV-2026-18000")
+_LEAF = {"company": "RT Company", "is_group": 0}  # RT-434: a postable Warehouse
 
 
 class _Logger:
@@ -111,8 +112,22 @@ class _Existing:
 class _Frappe(types.ModuleType):
 	"""``invoice`` is what the EXISTING Sales Invoice holds: docstatus + item rows."""
 
-	def __init__(self, *, docstatus=1, items=(), unreadable=False, missing=False, company="RT Company", flag=1):
+	def __init__(
+		self,
+		*,
+		docstatus=1,
+		items=(),
+		unreadable=False,
+		missing=False,
+		company="RT Company",
+		flag=1,
+		warehouses=None,
+		provenance=None,
+	):
 		super().__init__("frappe")
+		# RT-434: the Warehouse rows the posting check reads (name -> row; a callable raises).
+		self.warehouses = {"Frozen WH": _LEAF} if warehouses is None else warehouses
+		self.warehouse_reads, self.provenance = [], provenance
 		self.ValidationError = type("ValidationError", (Exception,), {})
 		self.DoesNotExistError = type("DoesNotExistError", (self.ValidationError,), {})
 		self.missing, self.flag = missing, flag
@@ -134,8 +149,12 @@ class _Frappe(types.ModuleType):
 		self.utils = types.SimpleNamespace(get_system_timezone=lambda: "UTC")
 
 	def _get_value(self, doctype, filters, fields=None, **_):
+		if doctype == "Warehouse":  # RT-434: the feed warehouseRef is checked before insert
+			self.warehouse_reads.append(filters)
+			row = self.warehouses.get(filters)
+			return row() if callable(row) else row
 		assert isinstance(filters, dict), "the existing invoice is read with get_doc (RT-378)"
-		return None  # no provenance hit for a fresh post
+		return self.provenance  # no provenance hit for a fresh post, unless a test sets one
 
 	def _read(self, name):
 		self.reads.append(name)
@@ -266,6 +285,69 @@ class TestFreshPost:
 		glue = load_glue(fake)
 		_post(glue, _work_item(warehouse=None), _Store())
 		assert {item["warehouse"] for item in fake.payloads[0]["items"]} == {"Map WH"}
+
+
+class TestFrozenWarehouseIsChecked:
+	"""RT-434: a feed ``warehouseRef`` meets the preflight's leaf / same-company rules, or nothing posts."""
+
+	def test_a_postable_frozen_warehouse_is_read_once_and_posts(self, load_glue):
+		fake = _Frappe()
+		outcome, _client = _post(load_glue(fake), _work_item(), _Store())
+		assert outcome == "posted"
+		assert fake.warehouse_reads == ["Frozen WH"]
+
+	def test_without_a_frozen_warehouse_no_warehouse_is_read(self, load_glue):
+		fake = _Frappe()
+		outcome, _client = _post(load_glue(fake), _work_item(warehouse=None), _Store())
+		assert outcome == "posted"
+		assert fake.warehouse_reads == []
+
+	@pytest.mark.parametrize(
+		("row", "message"),
+		[
+			({"company": "RT Company", "is_group": 1}, "is a group warehouse"),
+			({"company": "Other Co", "is_group": 0}, "belongs to company 'Other Co'"),
+			(None, "does not exist on this site"),
+		],
+		ids=["group", "other-company", "missing"],
+	)
+	def test_an_unpostable_frozen_warehouse_is_rejected_before_insert(self, load_glue, row, message):
+		fake = _Frappe(warehouses={"Frozen WH": row})
+		store = _Store()
+		outcome, client = _post(load_glue(fake), _work_item(), store)
+		assert outcome == "permanently_rejected"
+		ack = client.acks[0]
+		assert ack["key"] == f"{_REF}:permanently_rejected:v2"
+		assert ack["ack"]["reason"]["category"] == "validation"
+		assert message in ack["ack"]["reason"]["message"]
+		assert fake.payloads == []  # no ERP document is built into ERPNext
+		assert fake.events == []
+		assert store.writes == []
+
+	def test_an_unreadable_warehouse_acks_failed_transient(self, load_glue):
+		def _timeout():
+			raise TimeoutError("Lock wait timeout exceeded")
+
+		fake = _Frappe(warehouses={"Frozen WH": _timeout})
+		outcome, client = _post(load_glue(fake), _work_item(), _Store())
+		assert outcome == "failed_transient"
+		assert client.acks[0]["key"] == f"{_REF}:failed_transient:9"
+		assert fake.payloads == []
+
+	def test_an_already_submitted_invoice_is_recovered_not_rejected(self, load_glue):
+		# Crash window: the invoice was submitted, then the Warehouse became a group before the
+		# Posting Log row was written. The re-offer resolves the existing invoice, never rejects it.
+		fake = _Frappe(
+			warehouses={"Frozen WH": {"company": "RT Company", "is_group": 1}},
+			provenance=_EXISTING.name,
+			items=[{"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A}],
+		)
+		store = _Store()
+		outcome, client = _post(load_glue(fake), _work_item(), store)
+		assert outcome == "posted"
+		assert client.acks[0]["ack"]["documentRef"] == {"doctype": "Sales Invoice", "name": _EXISTING.name}
+		assert store.writes[0][1] == _EXISTING
+		assert fake.payloads == []
 
 
 class TestReplayVerification:

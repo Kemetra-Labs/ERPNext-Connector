@@ -161,6 +161,9 @@ class _Frappe(types.ModuleType):
 			raise self.scenario.commit_error
 
 	def _get_value(self, doctype, filters, fields=None, **_):
+		if doctype == "Warehouse":  # RT-434: the feed warehouseRef is a leaf of the sale company
+			assert filters == "Frozen WH"
+			return {"company": "RT Company", "is_group": 0}
 		assert isinstance(filters, dict) and filters.get("rt_external_id") == "POS-45801"
 		return _EXISTING.name if self.scenario.provenance_hit else None
 
