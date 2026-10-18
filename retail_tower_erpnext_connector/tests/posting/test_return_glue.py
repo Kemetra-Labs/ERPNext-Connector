@@ -532,4 +532,5 @@ class TestReversalHelperBranches:
 		outcome, client, store = _post(glue, _return())
 		assert outcome == "permanently_rejected"
 		assert client.acks[0]["reason"] == {"category": "other", "message": "RuntimeError: original unreadable"}
-		assert fake.payloads == [] and store.writes == []
+		assert fake.payloads == []
+		assert store.writes == []
