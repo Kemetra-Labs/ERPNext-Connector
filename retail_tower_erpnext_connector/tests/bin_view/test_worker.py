@@ -66,7 +66,9 @@ def test_build_report_empty_is_valid():
 
 
 def test_idempotency_key_deterministic_per_request():
-    assert w.derive_idempotency_key("req-1") == w.derive_idempotency_key("req-1")
+    # Independent expected value: the key is the request ref under the "binview-" prefix, so a
+    # re-report of the same request reuses it and a different request gets a different one.
+    assert w.derive_idempotency_key("req-1") == "binview-req-1"
     assert w.derive_idempotency_key("req-1") != w.derive_idempotency_key("req-2")
 
 
