@@ -65,7 +65,7 @@ _DUPLICATE_KEY = "' for key "
 _SCHEME_CHARS = frozenset(string.ascii_letters + string.digits + "+.-")
 _TRAILING_PUNCTUATION = frozenset("\"')],;.>")
 _QUOTES = "\"'"
-_WRAPPERS = "\"'{[(,:"
+_WRAPPERS = "\"'{[(,:)]}"  # OBS-1 §3.2: ignored around ``Bearer`` and scheme words (RT-694 adds ``)]}``)
 _IDENTIFIER_CHARS = frozenset(string.ascii_letters + string.digits + "_-")
 # A credential key matches as the END of an identifier: ``dp2_token``, ``client_secret``, ``api-key``.
 _CREDENTIAL_SUFFIXES = (
@@ -81,6 +81,12 @@ _CREDENTIAL_SUFFIXES = (
     "dsn",
 )
 _REDACTED = "[redacted]"
+# How to treat the next word: scrub it as usual, mask it as a credential, or (after a bare credential
+# key such as ``Authorization``, RT-694) take a leading ``:``/``=`` in it as that key's separator.
+_SCRUB = "scrub"
+_MASK = "mask"
+_KEY_SEPARATOR = "key-separator"
+_NEXT_RANK = {_SCRUB: 0, _KEY_SEPARATOR: 1, _MASK: 2}
 # HTTP auth schemes: after ``Authorization:``, the scheme AND the credential that follows are masked.
 _AUTH_SCHEMES = frozenset({"bearer", "basic", "digest", "token", "apikey", "negotiate", "ntlm"})
 # OBS-1 §3.2 phones: E.164 is ``+`` and 8-15 digits not starting with 0; an Egyptian mobile is
@@ -237,25 +243,47 @@ def _split_keeping_whitespace(text: str) -> Iterator[str]:
 
 
 def _scrub_tokens(text: str) -> Iterator[str]:
-    redact_next = False
+    next_word = _SCRUB
     for token in _split_keeping_whitespace(text):
         if token.isspace():
             yield token
             continue
-        if redact_next:
-            redact_next = _is_auth_scheme(token)  # "Authorization: Basic <x>" → both masked
-            yield _REDACTED
-            continue
-        scrubbed, redact_next = _scrub_token(token)
+        scrubbed, next_word = _scrub_word(token, next_word)
         yield scrubbed
 
 
-def _scrub_token(token: str) -> tuple[str, bool]:
-    """One whitespace-free token, masked; and whether the NEXT token is a secret value."""
+def _scrub_word(token: str, state: str) -> tuple[str, str]:
+    """One whitespace-free token, scrubbed as the word before it asks; and how to treat the NEXT one.
+
+    A token masked or read as a separator value still passes on its own signal (``[Bearer]
+    Authorization: <x>``), so nothing is masked less than before.
+    """
+    if state == _MASK:
+        # "Authorization: Basic <x>" → both masked
+        return _REDACTED, _MASK if _is_auth_scheme(token) else _scrub_token(token)[1]
+    if state == _KEY_SEPARATOR and token[0] in "=:":
+        separated, next_word = _value_after(token, 0)  # "Authorization : Basic <x>" (RT-694)
+        return separated, _stricter(next_word, _scrub_token(token)[1])
+    return _scrub_token(token)
+
+
+def _stricter(first: str, second: str) -> str:
+    """The stricter of two next-token states (mask, then key-separator, then scrub)."""
+    return first if _NEXT_RANK[first] >= _NEXT_RANK[second] else second
+
+
+def _scrub_token(token: str) -> tuple[str, str]:
+    """One whitespace-free token, masked; and how to treat the NEXT token."""
     if _is_bearer(token):
-        return _REDACTED, True
-    masked, redact_next = _without_credential(_without_relative_query(_without_url(token)))
-    return _without_phones(_without_jwt_or_email(masked)), redact_next
+        return _REDACTED, _MASK
+    url_free = _without_relative_query(_without_url(token))
+    masked, next_word = _without_credential(url_free) or (url_free, _next_after_key(token))
+    return _without_phones(_without_jwt_or_email(masked)), next_word
+
+
+def _next_after_key(token: str) -> str:
+    """A token ending in a credential key (as written, quotes ignored) waits for a separator word."""
+    return _KEY_SEPARATOR if _credential_key_before(token, len(token)) else _SCRUB
 
 
 def _without_jwt_or_email(token: str) -> str:
@@ -291,10 +319,14 @@ def _phone_kind(token: str, start: int, end: int) -> str | None:
     if _char_at(token, end) in _ASCII_ALNUM:
         return None
     run = token[start:end]
-    before = _char_at(token, start - 1)
-    if before == "+" and _char_at(token, start - 2) not in _ASCII_ALNUM and _is_e164(run):
+    if _has_bare_plus_before(token, start) and _is_e164(run):
         return "e164"
-    return "national" if before not in _ASCII_ALNUM and _is_egyptian_mobile(run) else None
+    return "national" if _char_at(token, start - 1) not in _ASCII_ALNUM and _is_egyptian_mobile(run) else None
+
+
+def _has_bare_plus_before(token: str, start: int) -> bool:
+    """A ``+`` right before ``start``, with no ASCII letter or digit before the ``+``."""
+    return _char_at(token, start - 1) == "+" and _char_at(token, start - 2) not in _ASCII_ALNUM
 
 
 def _char_at(text: str, index: int) -> str:
@@ -370,20 +402,26 @@ def _without_relative_query(token: str) -> str:
     return token[:cut] + token[end:]
 
 
-def _without_credential(token: str) -> tuple[str, bool]:
+def _without_credential(token: str) -> tuple[str, str] | None:
     """``key=value`` / ``key:value`` with a credential key → the value masked (or the next token).
 
     Every separator is checked, so ``headers={'dp2_token':`` matches too. The backward scan only
-    covers the identifier in front of each separator, so the work stays linear.
+    covers the identifier in front of each separator, so the work stays linear. ``None`` when no
+    credential separator is in the token.
     """
     for sep, char in enumerate(token):
         if char in "=:" and _credential_key_before(token, sep):
-            value = token[sep + 1 :]
-            if not value:
-                return token, True  # `"password":` — the value is the next token
-            # `Authorization:Basic <x>` — the inline value is the scheme; the credential is next.
-            return token[: sep + 1] + _REDACTED, _is_auth_scheme(value)
-    return token, False
+            return _value_after(token, sep)
+    return None
+
+
+def _value_after(token: str, sep: int) -> tuple[str, str]:
+    """The value after the separator at ``sep`` masked; and how to treat the next token."""
+    value = token[sep + 1 :]
+    if not value:
+        return token, _MASK  # `"password":` — the value is the next token
+    # `Authorization:Basic <x>` — the inline value is the scheme; the credential is next.
+    return token[: sep + 1] + _REDACTED, _MASK if _is_auth_scheme(value) else _SCRUB
 
 
 def _credential_key_before(token: str, sep: int) -> bool:

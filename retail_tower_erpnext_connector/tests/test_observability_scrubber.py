@@ -375,6 +375,8 @@ class TestBoundsAndLinearity(unittest.TestCase):
 			"token=" * 5000,
 			"Bearer " * 5000,
 			"@." * 5000,
+			"Authorization : " * 5000,
+			"password = " * 5000,
 		]
 		started = time.perf_counter()
 		for text in adversarial:
@@ -386,7 +388,7 @@ _GOLDEN = json.loads((Path(__file__).parent / "obs1-golden-vectors.json").read_t
 
 
 class TestObs1GoldenVectors(unittest.TestCase):
-	"""RT-686 — the OBS-1 §3.5 golden vectors (RT-682), copied unchanged from Backend-Core.
+	"""RT-686 — the OBS-1 §3.5 golden vectors (RT-682, RT-694), copied unchanged from Backend-Core.
 
 	Every repository's scrubber gives exactly these outputs: Bearer/Authorization credentials and
 	phone numbers (E.164, Egyptian mobiles) masked; UUIDs, SHA12, trace ids, timestamps, prices,
@@ -405,6 +407,38 @@ class TestObs1GoldenVectors(unittest.TestCase):
 			# (a) fails (letter before the `+`) but (c) still applies.
 			"x+201000000638 kept": "x+[phone] kept",
 			"missing Authorization:": "missing Authorization:",
+		}
+		for text, expected in cases.items():
+			with self.subTest(text):
+				self.assertEqual(sanitize_message(text), expected)
+
+	def test_a_masked_word_keeps_its_own_next_word_signal(self):
+		# A word masked because of the word before it, or read as a separator value, still passes on its
+		# own Bearer/credential signal, so RT-694 never masks less than the RT-682 baseline.
+		cases = {
+			"Authorization :a,Authorization: S1": "Authorization :[redacted] [redacted]",
+			"Authorization =x,Proxy-Authorization:Bearer S1": "Authorization =[redacted] [redacted]",
+			"[Bearer] Authorization: S1": "[redacted] [redacted] [redacted]",
+			"(Bearer) ?authorization= S1": "[redacted] [redacted] [redacted]",
+			"Authorization: (Bearer) Authorization: S1": "Authorization: [redacted] [redacted] [redacted]",
+			# The wider credential-key set must not mask less than Backend-Core does.
+			"token :a,Authorization: S1": "token :[redacted] [redacted]",
+		}
+		for text, expected in cases.items():
+			with self.subTest(text):
+				self.assertEqual(sanitize_message(text), expected)
+
+	def test_separator_word_edges_follow_the_contract_text(self):
+		# RT-694: a bare Authorization key takes a following word's leading `:`/`=` as its separator.
+		cases = {
+			"Authorization\n:\nBearer x y": "Authorization\n:\n[redacted] [redacted] y",
+			"headers={'Authorization' : 'Bearer x'} y": "headers={'Authorization' : [redacted] [redacted] y",
+			"missing Authorization": "missing Authorization",
+			# Known gaps, listed in §3.2: a key not directly before the separator word; a separator value.
+			"Authorization ok : x": "Authorization ok : x",
+			"Authorization : : x y": "Authorization : [redacted] x y",
+			# Stricter than the contract (allowed): any credential key, as for `key=value`.
+			"password = hunter2 ok": "password = [redacted] ok",
 		}
 		for text, expected in cases.items():
 			with self.subTest(text):
