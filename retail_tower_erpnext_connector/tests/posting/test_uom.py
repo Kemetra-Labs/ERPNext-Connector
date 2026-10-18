@@ -85,6 +85,16 @@ class TestStoreCustomerMap:
             resolver.for_store("store-a")
 
 
+class TestAsciiDigitsOnly:
+    """RT-468 (S6353): the money/quantity patterns use a digit class with re.ASCII (ASCII only)."""
+
+    @pytest.mark.parametrize("pattern", [u._DECIMAL_RE, u._QUANTITY_RE])
+    def test_non_ascii_digits_rejected(self, pattern):
+        assert pattern.match("12.50")
+        assert not pattern.match(f"{chr(0x661)}{chr(0x662)}.{chr(0x665)}{chr(0x660)}")  # Arabic-Indic digits
+        assert not pattern.match(f"{chr(0xFF11)}{chr(0xFF12)}")  # fullwidth digits
+
+
 class TestMoneyConformance:
     def test_passes_clean_invoice(self):
         doc = {

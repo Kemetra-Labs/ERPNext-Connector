@@ -25,11 +25,11 @@ from collections.abc import Mapping
 from .builder import UnmappedUnit
 
 # Money fields mirror the 012 DecimalAmount pattern — at most 4 fractional digits (F-006).
-_DECIMAL_RE = re.compile(r"^-?[0-9]{1,15}(\.[0-9]{1,4})?$")
+_DECIMAL_RE = re.compile(r"^-?\d{1,15}(\.\d{1,4})?$", re.ASCII)
 # Quantity mirrors the 012 SaleLine.quantity pattern — up to SIX fractional digits (weighed
 # goods, e.g. "1.234567" kg) and unsigned. It must NOT be validated under the 4-digit money
 # regex, which would false-reject a valid sale (a Principle VI inversion).
-_QUANTITY_RE = re.compile(r"^[0-9]{1,15}(\.[0-9]{1,6})?$")
+_QUANTITY_RE = re.compile(r"^\d{1,15}(\.\d{1,6})?$", re.ASCII)
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 
 

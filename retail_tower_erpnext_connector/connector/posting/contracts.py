@@ -43,7 +43,7 @@ REVERSAL_KINDS: frozenset[str] = frozenset({"void", "refund", "return"})
 TENDER_METHODS: frozenset[str] = frozenset({"cash", "card_external"})
 
 # 012 NonNegativeDecimalAmount and SaleTender.reference patterns (posting-feed.yaml, verbatim).
-_NON_NEGATIVE_DECIMAL_RE = re.compile(r"^[0-9]{1,15}(\.[0-9]{1,4})?$")
+_NON_NEGATIVE_DECIMAL_RE = re.compile(r"^\d{1,15}(\.\d{1,4})?$", re.ASCII)
 _TENDER_REFERENCE_RE = re.compile(r"^[A-Z0-9]{1,6}$")
 # RFC 3339 ``date-time`` (full-date "T" full-time with seconds and an offset); fromisoformat alone
 # also accepts forms without seconds or in basic format, and some Pythons normalize 24:00 to the next
@@ -54,7 +54,7 @@ _RFC3339_DATE_TIME_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt]([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d+)?([Zz]|[+-]([01]\d|2[0-3]):[0-5]\d)$"
 )
 # 012 ReturnLine.quantity pattern (verbatim); the connector additionally requires > 0.
-_RETURN_QUANTITY_RE = re.compile(r"^[0-9]{1,13}(\.[0-9]{1,6})?$")
+_RETURN_QUANTITY_RE = re.compile(r"^\d{1,13}(\.\d{1,6})?$", re.ASCII)
 
 
 class MissingErpnextItemRef(Exception):
