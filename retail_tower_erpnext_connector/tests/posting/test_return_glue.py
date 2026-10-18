@@ -499,3 +499,38 @@ class TestReversalCommitsBeforeItsAck:
 		outcome, _client, _store = _post(load_glue(fake), _return())
 		assert outcome == "permanently_rejected"
 		assert fake.events == ["savepoint", "insert", "rollback"]  # nothing committed
+
+
+class TestReversalHelperBranches:
+	"""RT-468: characterization of the reversal-leg branches the extracted helpers carry."""
+
+	def test_a_duplicate_provenance_whose_back_fill_loses_a_race_echoes_the_recorded_return(self, load_glue):
+		fake = _Frappe()
+		fake.duplicate = True
+		outcome, client, _store = _post(load_glue(fake), _return(version=3), store=_ConflictStore())
+		assert outcome == "posted"
+		assert client.acks[0]["outcome"] == "posted"
+
+	def test_a_duplicate_provenance_with_no_invoice_found_is_rejected_as_other(self, load_glue, monkeypatch):
+		fake = _Frappe()
+		fake.duplicate = True
+		glue = load_glue(fake)
+		monkeypatch.setattr(glue, "_find_posted_invoice", lambda work_item: None)
+		outcome, client, store = _post(glue, _return())
+		assert outcome == "permanently_rejected"
+		assert client.acks[0]["reason"]["category"] == "other"
+		assert store.writes == []
+
+	def test_an_original_that_cannot_be_read_is_rejected_as_other(self, load_glue, monkeypatch):
+		fake = _Frappe()
+		glue = load_glue(fake)
+
+		def _unreadable(name):
+			raise RuntimeError("original unreadable")
+
+		monkeypatch.setattr(glue, "_read_original_invoice", _unreadable)
+		outcome, client, store = _post(glue, _return())
+		assert outcome == "permanently_rejected"
+		assert client.acks[0]["reason"] == {"category": "other", "message": "RuntimeError: original unreadable"}
+		assert fake.payloads == []
+		assert store.writes == []

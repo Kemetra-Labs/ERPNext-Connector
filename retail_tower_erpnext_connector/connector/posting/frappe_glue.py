@@ -83,6 +83,9 @@ from .uom import (
 )
 from .warehouse_policy import FrozenWarehouseRejected, assert_postable_warehouse
 
+_SALES_INVOICE = "Sales Invoice"
+_SIGNAL_RECOVERED = "posting.recovered"
+
 
 def _ack_key(work_item: PostingWorkItem, outcome: str) -> str:
     """The connectorAckOutcome Idempotency-Key — required on EVERY ack (012, F-004).
@@ -213,7 +216,7 @@ def _invoice_snapshot(document_ref: ErpnextDocumentRef) -> InvoiceSnapshot:
     """
     missing = getattr(frappe, "DoesNotExistError", None)
     try:
-        doc = frappe.get_doc("Sales Invoice", document_ref.name)
+        doc = frappe.get_doc(_SALES_INVOICE, document_ref.name)
     except Exception as exc:
         if missing is not None and isinstance(exc, missing):
             return InvoiceSnapshot(docstatus=0, items=())
@@ -257,7 +260,7 @@ def _replay_company(work_item: PostingWorkItem) -> str | None:
     if work_item.kind != "reversal":
         return None
     original = _resolve_original_invoice(work_item)
-    return frappe.db.get_value("Sales Invoice", original, "company") if original else None
+    return frappe.db.get_value(_SALES_INVOICE, original, "company") if original else None
 
 
 def _replay_expected(work_item: PostingWorkItem, company: str | None) -> ExpectedInvoice:
@@ -447,7 +450,7 @@ def _ack_submitted(
     so the in-memory check after insert is not proof. A mismatch acks ``reconciliation_required`` and
     the document stays as ERPNext holds it (684). An unreadable invoice acks ``failed_transient``.
     """
-    document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
+    document_ref = ErpnextDocumentRef(doctype=_SALES_INVOICE, name=sinv.name)
     try:
         sinv.reload()
         mismatch = check_representation(expected, persisted_from_doc(sinv))
@@ -470,7 +473,7 @@ def _find_posted_invoice(work_item: PostingWorkItem) -> ErpnextDocumentRef | Non
     or None if no submitted SI exists.
     """
     name = frappe.db.get_value(
-        "Sales Invoice",
+        _SALES_INVOICE,
         {
             "rt_source_system": work_item.source_system,
             "rt_external_id": provenance_id(work_item),
@@ -480,7 +483,7 @@ def _find_posted_invoice(work_item: PostingWorkItem) -> ErpnextDocumentRef | Non
     )
     if not name:
         return None
-    return ErpnextDocumentRef(doctype="Sales Invoice", name=name)
+    return ErpnextDocumentRef(doctype=_SALES_INVOICE, name=name)
 
 
 # Sale build errors that are a non-retryable ``validation`` rejection (never a guessed value).
@@ -490,6 +493,19 @@ _SALE_BUILD_VALIDATION_ERRORS = (
     UnmappedStore,
     UnmappedTender,
     TenderMismatch,
+)
+
+
+# Reversal build errors that are a non-retryable ``validation`` rejection (never a guessed value).
+_REVERSAL_BUILD_VALIDATION_ERRORS = (
+    MoneyConformanceError,
+    UnresolvedWarehouse,
+    UnmappedStore,
+    UnmappedTender,
+    TenderMismatch,
+    MissingRefundTenders,
+    ReturnPricingMismatch,
+    ReturnTaxNotPosted,
 )
 
 
@@ -585,7 +601,7 @@ def post_work_item(
         doc_payload = {**doc_payload, "company": company}
         expected = expected_from_payload(doc_payload)  # what ERPNext must persist
         sinv = _submit_atomically(doc_payload, expected)
-        document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
+        document_ref = ErpnextDocumentRef(doctype=_SALES_INVOICE, name=sinv.name)
     except _transient_exceptions() as exc:
         # T051 — transient (timeout/lock) → failed_transient; DP2 re-offers (no self-retry).
         client.ack_outcome(
@@ -618,17 +634,9 @@ def post_work_item(
         # through to the normal `posted` ack. Catching this BEFORE frappe.ValidationError is load-
         # bearing — UniqueValidationError ⊂ ValidationError, so the generic handler would otherwise
         # FALSELY reject a legitimately-posted sale (Principle VI inversion).
-        existing = _find_posted_invoice(work_item)
-        if existing is None:
-            # Dup index fired but no SI found under our provenance — genuinely unexpected; do not
-            # fabricate success. Treat as a non-retryable error (never a silent partial).
-            return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
-        document_ref = existing
-        try:
-            store.record_posted(key, document_ref)  # back-fill the missing Posting Log row
-        except IdempotencyConflict as conflict:
-            document_ref = conflict.existing
-        return _ack_existing(client, work_item, document_ref, correlation_id, "posting.recovered")
+        return _recover_duplicate_provenance(
+            work_item, key, exc, client=client, store=store, correlation_id=correlation_id
+        )
     except frappe.ValidationError as exc:  # type: ignore[attr-defined]
         # T051 — validation failure → permanently_rejected / validation.
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
@@ -669,7 +677,7 @@ def _resolve_original_invoice(work_item: PostingWorkItem) -> str | None:
     if work_item.reversal_of is None:  # an upstream contract violation for kind=reversal.
         return None
     return frappe.db.get_value(
-        "Sales Invoice",
+        _SALES_INVOICE,
         {
             "rt_source_system": work_item.reversal_of.source_system,
             "rt_external_id": work_item.reversal_of.external_id,
@@ -724,29 +732,18 @@ def _post_reversal(
     # Build the reversing payload from the pure core (no frappe in the build). Same fail-closed
     # mapping as the forward path: unmapped unit → unmapped_unit; money/warehouse/store → validation;
     # anything else → other. A final `except Exception` guarantees the terminal-outcome invariant.
-    try:
-        # RT-16 / RT-63: the reversal's own recordedAt + businessDate (RT-49 fallback when absent).
-        stamp = stamp_for(*reversal_stamp_source(work_item), _posting_clock())
-        doc_payload = _build_reversal(
-            work_item, stamp, uom_map=uom_map, warehouses=warehouses, customers=customers, tenders=tenders
-        )
-    except UnmappedUnit as exc:
-        return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, _exception_message(exc))
-    except (
-        MoneyConformanceError,
-        UnresolvedWarehouse,
-        UnmappedStore,
-        UnmappedTender,
-        TenderMismatch,
-        MissingRefundTenders,
-        ReturnPricingMismatch,
-        ReturnTaxNotPosted,
-    ) as exc:
-        # RT-16: a return without refundTenders, or priced other than unitPrice x qty, is rejected
-        # like an unmapped store — never posted as an outstanding credit note or at a guessed amount.
-        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
-    except Exception as exc:  # any other build error is non-retryable — never let it escape.
-        return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
+    built = _build_reversal_or_reject(
+        work_item,
+        client=client,
+        uom_map=uom_map,
+        warehouses=warehouses,
+        customers=customers,
+        tenders=tenders,
+        correlation_id=correlation_id,
+    )
+    if isinstance(built, str):
+        return built  # the rejection outcome
+    stamp, doc_payload = built
 
     # Resolve the original SI for `return_against`. The pure builder cannot do this lookup (no DB
     # hit there), so it is applied here, on the bench leg, before insert. A reversal work-item with
@@ -766,18 +763,7 @@ def _post_reversal(
         # VI), but rejecting it would strand a reversal that merely arrived first. Nothing is built
         # into ERPNext: ack `failed_transient` (per-offer key, RT-171) so DP2 re-offers it; DP2's
         # POSTING_RETRY_BUDGET bounds the wait and ends it as retry_budget_exhausted, not validation.
-        client.ack_outcome(
-            work_item.work_item_ref,
-            OutcomeAckRequest.failed_transient(resolution_version=work_item.resolution_version),
-            idempotency_key=_ack_key(work_item, "failed_transient"),
-        )
-        _log_signal(
-            "posting.reversal.awaiting_original",
-            work_item,
-            correlation_id,
-            reversal_kind=work_item.reversal_of.reversal_kind,
-        )
-        return "failed_transient"
+        return _ack_awaiting_original(client, work_item, correlation_id)
     doc_payload["return_against"] = original_name
 
     # RT-49 (decision 10312) — ERPNext rejects a return timestamped EARLIER than its original. An
@@ -798,14 +784,12 @@ def _post_reversal(
     # line semantics belong to RT-14/RT-16). Any line mismatch fails closed.
     # RT-16 / RT-14 D6 — a partial return links each row to the original row with the same
     # rt_line_ref (identity), restores to that row's warehouse and mirrors update_stock.
-    kind = work_item.reversal_of.reversal_kind if work_item.reversal_of is not None else None
-    if kind in ("void", "return"):
-        try:
-            doc_payload = _link_to_original(kind, doc_payload, _read_original_invoice(original_name))
-        except ReturnLineMismatch as exc:
-            return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
-        except Exception as exc:  # a read failure must not escape the terminal-outcome invariant.
-            return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
+    linked = _link_original_or_reject(
+        work_item, doc_payload, original_name, client=client, correlation_id=correlation_id
+    )
+    if isinstance(linked, str):
+        return linked  # the rejection outcome
+    doc_payload = linked
 
     rejected = _guard_tracked_items(doc_payload, work_item, client, correlation_id)
     if rejected is not None:
@@ -818,7 +802,7 @@ def _post_reversal(
     try:
         expected = expected_from_payload(doc_payload)  # RT-378: company = the original's (linked)
         sinv = _submit_atomically(doc_payload, expected)
-        document_ref = ErpnextDocumentRef(doctype="Sales Invoice", name=sinv.name)
+        document_ref = ErpnextDocumentRef(doctype=_SALES_INVOICE, name=sinv.name)
     except _transient_exceptions() as exc:
         client.ack_outcome(
             work_item.work_item_ref,
@@ -837,15 +821,9 @@ def _post_reversal(
         # Crash-window recovery, keyed on the reversal's work_item_ref provenance (#28 re-key): a
         # re-offer whose second submit hits the unique index resolves to the already-posted
         # reversing doc (via _find_posted_invoice, which reads the same provenance_id discriminator).
-        recovered = _find_posted_invoice(work_item)
-        if recovered is None:
-            return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
-        document_ref = recovered
-        try:
-            store.record_posted(key, document_ref)
-        except IdempotencyConflict as conflict:
-            document_ref = conflict.existing
-        return _ack_existing(client, work_item, document_ref, correlation_id, "posting.recovered")
+        return _recover_duplicate_provenance(
+            work_item, key, exc, client=client, store=store, correlation_id=correlation_id
+        )
     except frappe.ValidationError as exc:  # type: ignore[attr-defined]
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
     except Exception as exc:  # any OTHER error is non-retryable (F-005), not transient.
@@ -858,6 +836,97 @@ def _post_reversal(
         return _ack_existing(client, work_item, conflict.existing, correlation_id, "posting.conflict")
 
     return _ack_submitted(client, work_item, sinv, expected, correlation_id)  # RT-378 read-back
+
+
+def _build_reversal_or_reject(
+    work_item: PostingWorkItem,
+    *,
+    client: PostingFeedClient,
+    uom_map: UomMap,
+    warehouses: PreResolvedWarehouse,
+    customers: StoreCustomerMap,
+    tenders: TenderModeMap,
+    correlation_id: str,
+) -> tuple[PostingStamp, dict] | str:
+    """Build the reversing payload; a build error returns its rejection outcome string instead."""
+    try:
+        # RT-16 / RT-63: the reversal's own recordedAt + businessDate (RT-49 fallback when absent).
+        stamp = stamp_for(*reversal_stamp_source(work_item), _posting_clock())
+        doc_payload = _build_reversal(
+            work_item, stamp, uom_map=uom_map, warehouses=warehouses, customers=customers, tenders=tenders
+        )
+    except UnmappedUnit as exc:
+        return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, _exception_message(exc))
+    except _REVERSAL_BUILD_VALIDATION_ERRORS as exc:
+        # RT-16: a return without refundTenders, or priced other than unitPrice x qty, is rejected
+        # like an unmapped store — never posted as an outstanding credit note or at a guessed amount.
+        return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
+    except Exception as exc:  # any other build error is non-retryable — never let it escape.
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
+    return stamp, doc_payload
+
+
+def _link_original_or_reject(
+    work_item: PostingWorkItem,
+    doc_payload: dict,
+    original_name: str,
+    *,
+    client: PostingFeedClient,
+    correlation_id: str,
+) -> dict | str:
+    """Link a void/return to its original invoice rows; a failure returns its rejection outcome."""
+    kind = work_item.reversal_of.reversal_kind if work_item.reversal_of is not None else None
+    if kind in ("void", "return"):
+        try:
+            doc_payload = _link_to_original(kind, doc_payload, _read_original_invoice(original_name))
+        except ReturnLineMismatch as exc:
+            return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
+        except Exception as exc:  # a read failure must not escape the terminal-outcome invariant.
+            return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
+
+    return doc_payload
+
+
+def _recover_duplicate_provenance(
+    work_item: PostingWorkItem,
+    key,
+    exc: Exception,
+    *,
+    client: PostingFeedClient,
+    store: IdempotencyStore,
+    correlation_id: str,
+) -> str:
+    """Crash-window recovery after the ``unique_rt_si_provenance`` index rejected a second submit.
+
+    Resolves to the already-submitted invoice (via :func:`_find_posted_invoice`), back-fills the
+    Posting Log row, and acks it. No matching invoice is a non-retryable ``other`` rejection —
+    never a fabricated success.
+    """
+    existing = _find_posted_invoice(work_item)
+    if existing is None:
+        return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
+    document_ref = existing
+    try:
+        store.record_posted(key, document_ref)  # back-fill the missing Posting Log row
+    except IdempotencyConflict as conflict:
+        document_ref = conflict.existing
+    return _ack_existing(client, work_item, document_ref, correlation_id, _SIGNAL_RECOVERED)
+
+
+def _ack_awaiting_original(client: PostingFeedClient, work_item: PostingWorkItem, correlation_id: str) -> str:
+    """RT-172: the reversed sale has no submitted invoice yet — ack ``failed_transient``."""
+    client.ack_outcome(
+        work_item.work_item_ref,
+        OutcomeAckRequest.failed_transient(resolution_version=work_item.resolution_version),
+        idempotency_key=_ack_key(work_item, "failed_transient"),
+    )
+    _log_signal(
+        "posting.reversal.awaiting_original",
+        work_item,
+        correlation_id,
+        reversal_kind=work_item.reversal_of.reversal_kind,
+    )
+    return "failed_transient"
 
 
 def _recover_or_reject_unsupported(
@@ -888,7 +957,7 @@ def _recover_or_reject_unsupported(
         store.record_posted(key, document_ref)
     except IdempotencyConflict as conflict:
         document_ref = conflict.existing
-    return _ack_existing(client, work_item, document_ref, correlation_id, "posting.recovered")
+    return _ack_existing(client, work_item, document_ref, correlation_id, _SIGNAL_RECOVERED)
 
 
 _SUBMIT_SAVEPOINT = "rt_posting_submit"
@@ -984,7 +1053,7 @@ def _read_original_posting(name: str) -> tuple[object, object]:
     ⏳ BENCH-VALIDATION. ``posting_time`` comes back from MariaDB as a ``timedelta``;
     ``posting_time.raise_to_original`` normalises it.
     """
-    row = frappe.db.get_value("Sales Invoice", name, ["posting_date", "posting_time"], as_dict=True)
+    row = frappe.db.get_value(_SALES_INVOICE, name, ["posting_date", "posting_time"], as_dict=True)
     if not row:
         raise ValueError(f"original Sales Invoice {name!r} not readable for its posting time")
     return row["posting_date"], row["posting_time"]
@@ -1079,20 +1148,20 @@ def _read_original_invoice(name: str) -> dict:
     ⏳ BENCH-VALIDATION.
     """
     flags = frappe.db.get_value(
-        "Sales Invoice",
+        _SALES_INVOICE,
         name,
         ["update_stock", "disable_rounded_total", "is_pos", "customer", "company"],
         as_dict=True,
     ) or {}
     rows = frappe.get_all(
         "Sales Invoice Item",
-        filters={"parent": name, "parenttype": "Sales Invoice"},
+        filters={"parent": name, "parenttype": _SALES_INVOICE},
         fields=["name", "item_code", "qty", "idx", "warehouse", "rt_line_ref", "uom", "conversion_factor"],
         order_by="idx asc",
     )
     payments = frappe.get_all(
         "Sales Invoice Payment",
-        filters={"parent": name, "parenttype": "Sales Invoice"},
+        filters={"parent": name, "parenttype": _SALES_INVOICE},
         fields=["mode_of_payment", "amount", "idx"],
         order_by="idx asc",
     )

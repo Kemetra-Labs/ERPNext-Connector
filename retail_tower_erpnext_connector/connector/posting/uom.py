@@ -25,11 +25,11 @@ from collections.abc import Mapping
 from .builder import UnmappedUnit
 
 # Money fields mirror the 012 DecimalAmount pattern — at most 4 fractional digits (F-006).
-_DECIMAL_RE = re.compile(r"^-?[0-9]{1,15}(\.[0-9]{1,4})?$")
+_DECIMAL_RE = re.compile(r"^-?\d{1,15}(\.\d{1,4})?$", re.ASCII)
 # Quantity mirrors the 012 SaleLine.quantity pattern — up to SIX fractional digits (weighed
 # goods, e.g. "1.234567" kg) and unsigned. It must NOT be validated under the 4-digit money
 # regex, which would false-reject a valid sale (a Principle VI inversion).
-_QUANTITY_RE = re.compile(r"^[0-9]{1,15}(\.[0-9]{1,6})?$")
+_QUANTITY_RE = re.compile(r"^\d{1,15}(\.\d{1,6})?$", re.ASCII)
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 
 
@@ -126,30 +126,36 @@ def assert_money_conformance(doc: Mapping[str, object]) -> None:
 
     items = doc.get("items") or []
     for idx, item in enumerate(items):  # type: ignore[assignment]
-        # rate/price_list_rate/amount → DecimalAmount (≤4 fractional); qty → quantity (≤6
-        # fractional). All must be exact-decimal STRINGS, never float (FR-009).
-        for field, pattern in (
-            ("rate", _DECIMAL_RE),
-            ("price_list_rate", _DECIMAL_RE),
-            ("amount", _DECIMAL_RE),
-            ("qty", _QUANTITY_RE),
-        ):
-            if field not in item:
-                continue
-            value = item[field]
-            if isinstance(value, float):
-                raise MoneyConformanceError(f"items[{idx}].{field} is a float ({value!r}) — FR-009")
-            if not isinstance(value, str) or not pattern.match(value):
-                raise MoneyConformanceError(
-                    f"items[{idx}].{field} must be an exact-decimal string, got {value!r}"
-                )
+        _assert_item_money(idx, item)
 
     # RT-78: settlement payment amounts are money too — exact-decimal strings, never float.
     for idx, payment in enumerate(doc.get("payments") or []):  # type: ignore[assignment]
-        value = payment.get("amount")
+        _assert_payment_money(idx, payment)
+
+
+def _assert_item_money(idx: int, item: Mapping[str, object]) -> None:
+    """One item's money fields (``rate``/``price_list_rate``/``amount``) and ``qty`` conform."""
+    # rate/price_list_rate/amount → DecimalAmount (≤4 fractional); qty → quantity (≤6
+    # fractional). All must be exact-decimal STRINGS, never float (FR-009).
+    for field, pattern in (
+        ("rate", _DECIMAL_RE),
+        ("price_list_rate", _DECIMAL_RE),
+        ("amount", _DECIMAL_RE),
+        ("qty", _QUANTITY_RE),
+    ):
+        if field not in item:
+            continue
+        value = item[field]
         if isinstance(value, float):
-            raise MoneyConformanceError(f"payments[{idx}].amount is a float ({value!r}) — FR-009")
-        if not isinstance(value, str) or not _DECIMAL_RE.match(value):
-            raise MoneyConformanceError(
-                f"payments[{idx}].amount must be an exact-decimal string, got {value!r}"
-            )
+            raise MoneyConformanceError(f"items[{idx}].{field} is a float ({value!r}) — FR-009")
+        if not isinstance(value, str) or not pattern.match(value):
+            raise MoneyConformanceError(f"items[{idx}].{field} must be an exact-decimal string, got {value!r}")
+
+
+def _assert_payment_money(idx: int, payment: Mapping[str, object]) -> None:
+    """One settlement payment's ``amount`` is an exact-decimal string."""
+    value = payment.get("amount")
+    if isinstance(value, float):
+        raise MoneyConformanceError(f"payments[{idx}].amount is a float ({value!r}) — FR-009")
+    if not isinstance(value, str) or not _DECIMAL_RE.match(value):
+        raise MoneyConformanceError(f"payments[{idx}].amount must be an exact-decimal string, got {value!r}")
