@@ -36,16 +36,15 @@ jobs:
 
       # RT-690 / RT-467: the CI tool set is declared in pyproject.toml [dependency-groups].ci and
       # locked, with sha256 hashes and wheels only, in pylock.toml. --require-hashes refuses any
-      # wheel without a matching hash; --only-binary :all: (uv: same as --no-build) refuses sdists, so
-      # no setup scripts run.
+      # wheel without a matching hash; --no-build refuses sdists (no setup scripts run). The runner is
+      # fresh, so installing the locked set equals syncing to it.
       # RT-635: sentry-sdk is not an app dependency (Frappe v15/v16 ship sentry-sdk~=1.45.1); it is
       # in the ci group so the Connector Sentry client tests run against the real SDK, not only on a bench.
       # Refresh: bump a pin in [dependency-groups].ci, then re-run and commit both files in one PR:
       #   uv pip compile pyproject.toml --group ci --python-version 3.11 \
       #     --python-platform x86_64-manylinux_2_28 --only-binary :all: -o pylock.toml
       - name: Install test tools (hash-locked)
-        run: |
-          uv pip sync --system --require-hashes --only-binary :all: pylock.toml
+        run: uv pip install --system --require-hashes --no-build -r pylock.toml
 
       - name: Lint
         run: python -m ruff check retail_tower_erpnext_connector
