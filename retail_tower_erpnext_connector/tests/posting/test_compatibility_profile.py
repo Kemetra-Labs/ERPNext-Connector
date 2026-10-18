@@ -8,6 +8,7 @@ recorded and posting continues. The fingerprint drives the ``compatibility.drift
 """
 
 import dataclasses
+import re
 
 import pytest
 
@@ -180,7 +181,12 @@ class TestWarnings:
 
 class TestFingerprint:
 	def test_the_same_site_has_the_same_fingerprint(self):
-		assert cp.evaluate(_snapshot()).fingerprint == cp.evaluate(_snapshot()).fingerprint
+		# Two separate evaluations of two separately built (equal) snapshots must agree, and the
+		# fingerprint must be a real sha256 digest (not empty / constant per call).
+		first = cp.evaluate(_snapshot()).fingerprint
+		second = cp.evaluate(_snapshot()).fingerprint
+		assert first == second
+		assert re.fullmatch(r"[0-9a-f]{64}", first)
 
 	def test_it_does_not_depend_on_collection_order(self):
 		snap = _snapshot()

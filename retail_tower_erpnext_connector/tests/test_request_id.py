@@ -309,7 +309,10 @@ def test_bin_view_tick_keeps_the_request_ref_idempotency_key(frappe_stub, monkey
 
 
 def test_each_bin_view_tick_mints_its_own_request_id(frappe_stub, monkeypatch):
-	assert _request_ids(_bin_view_tick(monkeypatch)) != _request_ids(_bin_view_tick(monkeypatch))
+	first = _request_ids(_bin_view_tick(monkeypatch))
+	second = _request_ids(_bin_view_tick(monkeypatch))
+	assert len(first) == len(second) == 1
+	assert first != second
 
 
 # --- RT-635 (OBS-6): an unhandled tick error reaches Sentry tagged with the SAME request id ------
