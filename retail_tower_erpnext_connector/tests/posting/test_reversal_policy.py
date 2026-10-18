@@ -91,7 +91,7 @@ class TestGlueOrdering:
 		body = self._reversal_source()
 		replay = body.index("store.get_document_ref(key)")
 		policy = body.index("assert_reversal_supported(work_item)")
-		build = body.index("_build_reversal(")  # RT-16: the builder dispatch (void/refund or return)
+		build = body.index("_build_reversal_or_reject(")  # RT-16: the builder dispatch (RT-468: via helper)
 		assert replay < policy < build
 		# The validation rejection and the crash-window recovery are exercised in
 		# test_refund_containment_glue.py (the real glue against a frappe stand-in).
