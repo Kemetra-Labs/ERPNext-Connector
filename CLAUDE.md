@@ -499,6 +499,10 @@ Exactly one recommended next action.
 Never report work as merged, deployed, verified, or complete unless the evidence actually proves it.
 <!-- RT-OPERATING-INSTRUCTIONS END -->
 
+## RT Jira Issues - Operating System Contract
+
+Before creating, modifying, or reviewing any RT Jira issue, read and apply section 4A of the Retail Tower Project Operating System in Confluence. Do not proceed with issue changes that violate this contract.
+
 # Retail Tower ERPNext Connector — Agent Context
 
 Custom Frappe / ERPNext connector app integrating Retail Tower OS (via Data-Pulse-2, i.e.
