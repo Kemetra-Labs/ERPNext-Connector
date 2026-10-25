@@ -467,3 +467,44 @@ class TestObs1GoldenVectors(unittest.TestCase):
 			self.assertLessEqual(len(sanitize_message(text)), MAX_MESSAGE_LENGTH)
 		self.assertLess(time.perf_counter() - started, 0.5)
 		self.assertTrue(sanitize_message("+201000000638 " * 140).startswith("[phone] [phone] "))
+
+
+_UNION = json.loads((Path(__file__).parent / "rt879-redaction-vectors.json").read_text(encoding="utf-8"))
+
+
+class TestRt879RedactionVectors(unittest.TestCase):
+	"""RT-879 — the union of the rules any runtime masks, shared unchanged by all four scrubbers.
+
+	A vector names what must not survive (and, for negatives, what must be kept), so a runtime may still
+	mask more. The exact §3.2 outputs stay pinned by the OBS-1 golden vectors above.
+	"""
+
+	def test_message_vectors_leak_nothing_and_keep_what_they_name(self):
+		for vector in _UNION["messages"]:
+			with self.subTest(vector["id"]):
+				event = {"exception": {"values": [{"type": "Error", "value": vector["input"]}]}}
+				value = scrub_event(event)["exception"]["values"][0]["value"]
+				for secret in vector["mustNotContain"]:
+					self.assertNotIn(secret, value)
+				for kept in vector["mustContain"]:
+					self.assertIn(kept, value)
+
+	def test_event_vectors_are_dropped_or_rebuilt_without_the_secrets(self):
+		allowed = set(_UNION["topLevelAllowlist"])
+		for vector in _UNION["events"]:
+			with self.subTest(vector["id"]):
+				out = scrub_event(copy.deepcopy(vector["event"]))
+				if vector.get("drop"):
+					self.assertIsNone(out)
+					continue
+				self.assertLessEqual(set(out), allowed)
+				serialized = json.dumps(out)
+				for secret in vector["mustNotContain"]:
+					self.assertNotIn(secret, serialized)
+
+	def test_linear_time_inputs(self):
+		linear = _UNION["linearTime"]
+		started = time.perf_counter()
+		for item in linear["inputs"]:
+			self.assertLessEqual(len(sanitize_message(item["pattern"] * item["repeat"])), linear["maxOutputLength"])
+		self.assertLess((time.perf_counter() - started) * 1000, linear["maxTotalMs"])

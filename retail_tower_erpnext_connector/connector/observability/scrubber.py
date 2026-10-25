@@ -10,8 +10,10 @@ adds (request, user, extra, contexts, breadcrumbs, frame vars, source lines) nev
 :func:`sanitize_message` masks, anywhere in an exception message (§3.2 / §3.3): JWTs, URL userinfo,
 query and fragment, emails, Postgres row detail, the MariaDB ``Duplicate entry`` value (the
 Connector's own database echoes the provenance key there), ``Bearer`` tokens, credential
-``key=value`` pairs and phone numbers (RT-686, OBS-1 §3.2 as amended by RT-682). Input is capped before scanning and the result truncated. Only index scans and
-whitespace splits run on the text — no regex — so the work stays linear on untrusted input.
+``key=value`` pairs and phone numbers (RT-686, OBS-1 §3.2 as amended by RT-682). RT-879 keeps these
+rules equal to the union of the four runtimes' rules (``tests/rt879-redaction-vectors.json``). Input
+is capped before scanning and the result truncated. Only index scans and whitespace splits run on the
+text — no regex — so the work stays linear on untrusted input.
 
 Mirrors Backend-Core's reference scrubber (``packages/shared/src/observability/sentry.ts``, RT-609).
 Pure Python: no frappe, no sentry_sdk.
@@ -276,8 +278,13 @@ def _scrub_token(token: str) -> tuple[str, str]:
     """One whitespace-free token, masked; and how to treat the NEXT token."""
     if _is_bearer(token):
         return _REDACTED, _MASK
-    url_free = _without_relative_query(_without_url(token))
+    url_only = _without_url(token)
+    url_free = _without_relative_query(url_only)
     masked, next_word = _without_credential(url_free) or (url_free, _next_after_key(token))
+    # A credential key inside the dropped query (``?authorization=``) still passes its signal on.
+    hidden = _without_credential(url_only)
+    if hidden is not None:
+        next_word = _stricter(next_word, hidden[1])
     return _without_phones(_without_jwt_or_email(masked)), next_word
 
 
@@ -394,12 +401,32 @@ def _has_valid_port(parts) -> bool:
 
 
 def _without_relative_query(token: str) -> str:
-    """A path-shaped token (``/v1/feed?since=…``, as urllib3 prints it) without its query/fragment."""
-    cut = min((at for at in (token.find("?"), token.find("#")) if at != -1), default=-1)
-    if cut == -1 or token.find("/", 0, cut) == -1:
+    """A token without the query/fragment of a scheme-less URL or path (``/v1/feed?since=…``, as urllib3
+    prints it; ``search?q=…``; ``host#token=…``), trailing punctuation kept.
+
+    RT-879, the Admin-Console rule: a ``?`` or ``#`` inside the token cuts it; one that opens the token
+    cuts only when a ``key=value`` follows, and one that ends it never does (``why?``, ``#42`` stay).
+    """
+    cut = _query_start(token)
+    if cut == -1:
         return token
     end = _scan_back(token, len(token), _TRAILING_PUNCTUATION, floor=cut)
     return token[:cut] + token[end:]
+
+
+def _query_start(token: str) -> int:
+    """Where the query or fragment starts, or ``-1`` (see :func:`_without_relative_query`)."""
+    if token[:1] in ("?", "#") and "=" in token:
+        return 0
+    return _first_query_mark(token, 1)
+
+
+def _first_query_mark(token: str, start: int) -> int:
+    """The first ``?`` or ``#`` from ``start`` that is not the token's last character, or ``-1``."""
+    for at in range(start, len(token) - 1):
+        if token[at] in "?#":
+            return at
+    return -1
 
 
 def _without_credential(token: str) -> tuple[str, str] | None:
@@ -431,9 +458,9 @@ def _credential_key_before(token: str, sep: int) -> bool:
 
 
 def _without_jwt(token: str) -> str:
-    """Mask a JWT (``eyJ…`` with three dot-separated segments) and everything after it."""
+    """Mask a JWT (``eyJ…`` and a dot, so a header.payload without signature too, RT-879) and the rest."""
     at = token.find("eyJ")
-    if at == -1 or token.count(".", at) < 2:
+    if at == -1 or token.find(".", at) == -1:
         return token
     return token[:at] + "[jwt]"
 
