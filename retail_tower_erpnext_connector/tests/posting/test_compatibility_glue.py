@@ -274,7 +274,8 @@ class TestReadSnapshot:
 		fake = _Frappe(_site())
 		glue = load_glue(fake)
 		snapshot = glue.read_snapshot(_Settings(), _MAPS)
-		assert snapshot.frappe_version == "16.52.0" and snapshot.erpnext_version == "16.51.0"
+		assert snapshot.frappe_version == "16.52.0"
+		assert snapshot.erpnext_version == "16.51.0"
 		assert snapshot.custom_fields == frozenset(_CUSTOM_FIELDS)
 		assert (snapshot.default_company, snapshot.company_currency) == ("RT Co", "EGP")
 		assert snapshot.currency_precision == 2 and snapshot.tax_sources == ()
