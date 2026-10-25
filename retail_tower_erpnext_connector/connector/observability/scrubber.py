@@ -225,14 +225,23 @@ def _mask_postgres_rows(text: str) -> str:
 
 
 def _mask_duplicate_entry(text: str) -> str:
-    """``Duplicate entry '<value>' for key 'x'`` → ``Duplicate entry '...' for key 'x'``."""
+    """``Duplicate entry '<value>' for key 'x'`` → ``Duplicate entry '...' for key 'x'``, for every occurrence.
+
+    A wrapped or aggregated error can carry several (RT-879). Each search starts where the previous one
+    ended, so the scan stays linear.
+    """
+    out: list[str] = []
+    start = 0
     at = text.find(_DUPLICATE_ENTRY)
-    if at == -1:
-        return text
-    value_start = at + len(_DUPLICATE_ENTRY)
-    key_at = text.find(_DUPLICATE_KEY, value_start)
-    tail = text[key_at:] if key_at != -1 else "'"
-    return text[:value_start] + "..." + tail
+    while at != -1:
+        value_start = at + len(_DUPLICATE_ENTRY)
+        out.append(text[start:value_start] + "...")
+        key_at = text.find(_DUPLICATE_KEY, value_start)
+        if key_at == -1:
+            return "".join(out) + "'"
+        start = key_at
+        at = text.find(_DUPLICATE_ENTRY, start)
+    return "".join(out) + text[start:]
 
 
 def _split_keeping_whitespace(text: str) -> Iterator[str]:

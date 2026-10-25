@@ -69,6 +69,13 @@
       "mustContain": ["Duplicate entry '", "' for key 'provenance'"]
     },
     {
+      "id": "D2",
+      "rule": "M6 every duplicate-entry value in one message, not only the first",
+      "input": "Duplicate entry 'POS-7-ext-998877' for key 'provenance'; caused by: Duplicate entry 'Jane Roe-776655' for key 'name'",
+      "mustNotContain": ["POS-7-ext-998877", "Jane Roe-776655"],
+      "mustContain": ["' for key 'provenance'", "' for key 'name'"]
+    },
+    {
       "id": "K1",
       "rule": "M8 credential key=value",
       "input": "login failed password=hunter2-998877",
