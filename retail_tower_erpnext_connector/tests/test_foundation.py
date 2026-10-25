@@ -112,6 +112,11 @@ class TestFoundationNoMutationNoFork(unittest.TestCase):
 		)
 		for dt in app_doctypes:
 			if dt in MAPPING_DOCTYPES:
+				# The exemption holds only while it stays a Connector Settings child table.
+				self.assertTrue(
+					frappe.get_meta(dt).istable,
+					f"Mapping DocType '{dt}' must stay a child table to be exempt (FR-005)",
+				)
 				continue
 			lowered = dt.lower()
 			for hint in BUSINESS_DOCTYPE_HINTS:
