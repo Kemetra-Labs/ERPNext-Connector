@@ -12,6 +12,9 @@ They enforce, as automated checks, the foundation guarantees from spec 001:
   - T008: the app introduces NO business mutation and does NOT fork ERPNext
           (FR-005, FR-006 — constitution principles VII and II)
   - T011: Connector Settings is a Single DocType resolving to one record (FR-004)
+
+Later specs (006 posting, 019 bin view, RT-321, RT-379) added reviewed configuration, mapping
+tables and a second poller. The checks below allow exactly those, by name, and nothing else.
 """
 
 import unittest
@@ -25,6 +28,43 @@ SETTINGS_DOCTYPE = "Connector Settings"
 # DocType field names that would indicate this app writes ERPNext business data.
 # The foundation must own NO DocType resembling these (spec FR-005).
 BUSINESS_DOCTYPE_HINTS = ("item", "stock", "price", "sales", "invoice", "warehouse", "bin")
+
+# Connector Settings child tables that MAP Retail Tower ids to ERPNext names (spec 006). They hold
+# configuration, not business records, so a hint in their name is expected. A new name here is a
+# reviewed decision, never a way to silence the check.
+MAPPING_DOCTYPES = frozenset({"RT Warehouse Map Row"})
+
+# The only scheduled jobs the app may register: the spec 006 posting poller and the spec 019
+# bin-view poller. Anything else is a new background writer and needs its own review.
+ALLOWED_SCHEDULED_JOBS = frozenset(
+	{
+		"retail_tower_erpnext_connector.connector.posting.poller.run_posting_poll",
+		"retail_tower_erpnext_connector.connector.bin_view.poller.run_bin_view_poll",
+	}
+)
+
+# Connector Settings fields approved by spec 006 (Data-Pulse-2 link, mapping tables), RT-321
+# (credential lifecycle) and RT-379 (compatibility profile). A field outside this set fails.
+APPROVED_SETTINGS_FIELDS = frozenset(
+	{
+		"dp2_base_url",
+		"dp2_token",
+		"dp2_connector_registration_id",
+		"dp2_credential_id",
+		"dp2_credential_issued_at",
+		"dp2_credential_expires_at",
+		"dp2_credential_warn_days",
+		"uom_map",
+		"warehouse_map",
+		"store_customer_map",
+		"tender_mode_map",
+		"posting_currency",
+		"compatibility_status",
+		"compatibility_checked_at",
+		"compatibility_fingerprint",
+		"compatibility_report",
+	}
+)
 
 
 class TestFoundationInstall(unittest.TestCase):
@@ -71,6 +111,13 @@ class TestFoundationNoMutationNoFork(unittest.TestCase):
 			pluck="name",
 		)
 		for dt in app_doctypes:
+			if dt in MAPPING_DOCTYPES:
+				# The exemption holds only while it stays a Connector Settings child table.
+				self.assertTrue(
+					frappe.get_meta(dt).istable,
+					f"Mapping DocType '{dt}' must stay a child table to be exempt (FR-005)",
+				)
+				continue
 			lowered = dt.lower()
 			for hint in BUSINESS_DOCTYPE_HINTS:
 				self.assertNotIn(
@@ -96,17 +143,21 @@ class TestFoundationNoMutationNoFork(unittest.TestCase):
 				f"Connector must register no '{forbidden}' (FR-005, constitution VII)",
 			)
 
-	def test_scheduler_events_only_register_the_posting_poller(self):
-		"""Spec 006: the only scheduled job is the documented posting poller — nothing else."""
+	def test_scheduler_events_only_register_the_reviewed_pollers(self):
+		"""Specs 006 and 019: only the posting poller and the bin-view poller are scheduled."""
 		hooks = frappe.get_hooks(app_name=APP_NAME)
 		scheduler = hooks.get("scheduler_events") or {}
 		registered = _flatten_scheduler_jobs(scheduler)
-		self.assertTrue(registered, "the posting poller scheduler_event must be registered (spec 006)")
+		self.assertIn(
+			"retail_tower_erpnext_connector.connector.posting.poller.run_posting_poll",
+			registered,
+			"the posting poller scheduler_event must be registered (spec 006)",
+		)
 		for job in registered:
 			self.assertIn(
-				"posting.poller",
 				job,
-				f"Unexpected scheduled job '{job}' — only the posting poller is allowed (spec 006)",
+				ALLOWED_SCHEDULED_JOBS,
+				f"Unexpected scheduled job '{job}' — only the reviewed pollers are allowed (specs 006, 019)",
 			)
 
 	def test_app_does_not_fork_erpnext(self):
@@ -142,18 +193,18 @@ class TestConnectorSettingsSingleton(unittest.TestCase):
 		doc = frappe.get_single(SETTINGS_DOCTYPE)
 		self.assertEqual(doc.name, SETTINGS_DOCTYPE)
 
-	def test_connector_settings_has_no_functional_fields(self):
-		"""Foundation placeholder: no functional configuration fields yet (data-model.md)."""
+	def test_connector_settings_has_only_approved_fields(self):
+		"""Every functional Connector Settings field is one a spec approved (006, RT-321, RT-379)."""
 		meta = frappe.get_meta(SETTINGS_DOCTYPE)
-		functional = [
+		functional = {
 			f.fieldname
 			for f in meta.fields
 			if f.fieldtype not in ("Section Break", "Column Break", "Tab Break", "HTML")
-		]
+		}
 		self.assertEqual(
-			functional,
+			sorted(functional - APPROVED_SETTINGS_FIELDS),
 			[],
-			"Connector Settings must have no functional fields at the foundation",
+			"Connector Settings has fields no spec approved",
 		)
 
 
