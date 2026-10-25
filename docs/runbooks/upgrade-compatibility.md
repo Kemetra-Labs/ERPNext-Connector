@@ -14,6 +14,7 @@ backup/restore, before any production change — never applied directly in produ
 |-------------------|--------|---------|--------|--------------|
 | 0.1.x (foundation) | v15 | v15 | >= 3.10 | v15.110.0 (rt9 lab) |
 | 0.2.x (RT-494) | v15, v16 (same major for both) | v15, v16 | >= 3.10 (v16 bench: >= 3.14) | v16.51.0 / Frappe 16.52.0, MariaDB 11.8 (RT-201) |
+| 0.3.x (v15 dropped, 2026-10-25) | v16 | v16 | >= 3.10 (v16 bench: >= 3.14) | v16.51.0 / Frappe 16.52.0, MariaDB 11.8 |
 
 A v15 → v16 move also needs the v16 bench prerequisites in the version policy:
 `scheduler_tick_interval: 60`, `mariadb-upgrade` for MariaDB 10.6 → 11.8, and the site timezone

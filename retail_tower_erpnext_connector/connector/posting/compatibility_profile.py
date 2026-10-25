@@ -39,8 +39,9 @@ import re
 from dataclasses import dataclass
 
 # D5: the Frappe/ERPNext majors the Connector is validated on. v16 added on RT-494 after the RT-201
-# verification (validated pin: Frappe 16.52.0 / ERPNext 16.51.0); v15 stays while sites migrate.
-SUPPORTED_MAJORS = frozenset({15, 16})
+# verification (validated pin: Frappe 16.52.0 / ERPNext 16.51.0). v15 dropped by the owner on
+# 2026-10-25 (no site runs it): a v15 site now pauses posting like any unsupported major.
+SUPPORTED_MAJORS = frozenset({16})
 _SUPPORTED_LABEL = ", ".join(f"v{major}" for major in sorted(SUPPORTED_MAJORS))
 
 # RT-494: the posting poller's cron is every minute (RT-45); Frappe v16's scheduler wakes every 240 s
