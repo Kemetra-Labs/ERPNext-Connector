@@ -1,0 +1,330 @@
+{
+  "contract": "RT-879 union redaction vectors (OBS-1 §3, RT-629). Every rule one runtime masks, checked in all four Sentry scrubbers. Copy this file unchanged; tools/contracts-check `identical:` keeps the copies equal. A message vector is the exception value of {exception: {values: [{type: 'Error', value: input}]}}: the scrubbed value must contain no `mustNotContain` string and every `mustContain` string. An event vector passes when the scrubber drops it (`drop: true`) or when its JSON output contains no `mustNotContain` string and its top-level keys are in `topLevelAllowlist`. The exact §3.2 outputs stay pinned by obs1-golden-vectors.json.",
+  "topLevelAllowlist": [
+    "event_id",
+    "timestamp",
+    "platform",
+    "level",
+    "environment",
+    "release",
+    "server_name",
+    "tags",
+    "exception"
+  ],
+  "messages": [
+    {
+      "id": "J1",
+      "rule": "M1b two-segment JWT (header.payload, no signature)",
+      "input": "session eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6ImphbmVAZXhhbXBsZS5pbnZhbGlkIn0 expired",
+      "mustNotContain": ["eyJlbWFpbCI6ImphbmVAZXhhbXBsZS5pbnZhbGlkIn0"],
+      "mustContain": ["session ", " expired"]
+    },
+    {
+      "id": "Q1",
+      "rule": "M3 query of a path",
+      "input": "lookup /v1/customers?name=jane-doe failed",
+      "mustNotContain": ["jane-doe"],
+      "mustContain": ["lookup /v1/customers", " failed"]
+    },
+    {
+      "id": "Q2",
+      "rule": "M3 query of a word without a slash",
+      "input": "search?q=jane-doe failed",
+      "mustNotContain": ["jane-doe"],
+      "mustContain": [" failed"]
+    },
+    {
+      "id": "Q3",
+      "rule": "M3 a word that is itself a query",
+      "input": "bad params ?name=jane-doe&page=2",
+      "mustNotContain": ["jane-doe"],
+      "mustContain": ["bad params"]
+    },
+    {
+      "id": "Q4",
+      "rule": "M3 fragment of a scheme-less URL",
+      "input": "open api.example.invalid/app#access_token=frag-998877 now",
+      "mustNotContain": ["frag-998877"],
+      "mustContain": ["open api.example.invalid/app", " now"]
+    },
+    {
+      "id": "Q6",
+      "rule": "M3 query of a word without a slash or key=value",
+      "input": "lookup host?opaque-998877 failed",
+      "mustNotContain": ["opaque-998877"],
+      "mustContain": ["lookup host", " failed"]
+    },
+    {
+      "id": "Q5",
+      "rule": "M3 negative: a sentence-ending ? and a bare #42 are not queries",
+      "input": "Is it valid? row #42 ok",
+      "mustNotContain": [],
+      "mustContain": ["Is it valid? row #42 ok"]
+    },
+    {
+      "id": "D1",
+      "rule": "M6 MariaDB duplicate-entry value",
+      "input": "Duplicate entry 'POS-7-ext-998877' for key 'provenance'",
+      "mustNotContain": ["POS-7-ext-998877"],
+      "mustContain": ["Duplicate entry '", "' for key 'provenance'"]
+    },
+    {
+      "id": "K1",
+      "rule": "M8 credential key=value",
+      "input": "login failed password=hunter2-998877",
+      "mustNotContain": ["hunter2-998877"],
+      "mustContain": ["login failed password="]
+    },
+    {
+      "id": "K2",
+      "rule": "M8 credential key in a dict repr, value in the next word",
+      "input": "settings {'dp2_token': 'tok-998877'} rejected",
+      "mustNotContain": ["tok-998877"],
+      "mustContain": [" rejected"]
+    },
+    {
+      "id": "K3",
+      "rule": "M8 credential key with a colon, value in the next word",
+      "input": "client_secret: cs-998877 invalid",
+      "mustNotContain": ["cs-998877"],
+      "mustContain": ["client_secret:", " invalid"]
+    },
+    {
+      "id": "K4",
+      "rule": "M8 hyphenated credential key",
+      "input": "api-key=ak-998877 expired",
+      "mustNotContain": ["ak-998877"],
+      "mustContain": ["api-key=", " expired"]
+    },
+    {
+      "id": "K5",
+      "rule": "M8 DSN value (after URL masking)",
+      "input": "dsn=https://pubkey998877@o1.ingest.de.sentry.io/42 rejected",
+      "mustNotContain": ["pubkey998877", "o1.ingest"],
+      "mustContain": ["dsn=", " rejected"]
+    },
+    {
+      "id": "K6",
+      "rule": "M8 negative: prose and non-credential key=value are kept",
+      "input": "password reset sent, retry=3 times",
+      "mustNotContain": [],
+      "mustContain": ["password reset sent, retry=3 times"]
+    },
+    {
+      "id": "C1",
+      "rule": "M10 the 2,000-char scan cap does not split a word (a cut email would dodge M4)",
+      "input": "https://a.example/p?q=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa jane@example.invalid rest",
+      "mustNotContain": ["jane"],
+      "mustContain": ["https://a.example/p"]
+    }
+  ],
+  "events": [
+    {
+      "id": "V1",
+      "rule": "E1 everything outside the allowlist is dropped",
+      "event": {
+        "event_id": "0123456789abcdef0123456789abcdef",
+        "timestamp": 1760745600,
+        "platform": "javascript",
+        "level": "error",
+        "environment": "staging",
+        "release": "0123456789ab",
+        "request": {
+          "url": "https://api.example.invalid/x?token=req-998877",
+          "headers": {
+            "Authorization": "Bearer hdr-998877",
+            "Cookie": "sid=cookie-998877"
+          },
+          "data": {
+            "sale": "body-998877"
+          }
+        },
+        "user": {
+          "email": "jane@example.invalid",
+          "ip_address": "10.1.2.3",
+          "id": "user-998877"
+        },
+        "extra": {
+          "payload": "extra-998877"
+        },
+        "contexts": {
+          "device": {
+            "name": "jane-laptop-998877"
+          }
+        },
+        "breadcrumbs": {
+          "values": [
+            {
+              "message": "crumb-998877"
+            }
+          ]
+        },
+        "transaction": "/customers/txn-998877",
+        "fingerprint": ["fp-998877"],
+        "modules": {
+          "mod-998877": "1.0.0"
+        },
+        "exception": {
+          "values": [
+            {
+              "type": "Error",
+              "value": "boom",
+              "stacktrace": {
+                "frames": [
+                  {
+                    "filename": "app.js",
+                    "function": "handler",
+                    "lineno": 10,
+                    "colno": 2,
+                    "in_app": true,
+                    "abs_path": "/home/jane-doe/app.js",
+                    "vars": {
+                      "password": "pw-998877"
+                    },
+                    "pre_context": ["const card = '4111111111111111'"],
+                    "context_line": "throw new Error(card)",
+                    "post_context": ["// cvv 998877-cvv"]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "mustNotContain": [
+        "req-998877",
+        "hdr-998877",
+        "cookie-998877",
+        "body-998877",
+        "jane@example.invalid",
+        "10.1.2.3",
+        "user-998877",
+        "extra-998877",
+        "jane-laptop-998877",
+        "crumb-998877",
+        "txn-998877",
+        "fp-998877",
+        "mod-998877",
+        "jane-doe",
+        "pw-998877",
+        "4111111111111111",
+        "Error(card)",
+        "998877-cvv"
+      ]
+    },
+    {
+      "id": "V2",
+      "rule": "E1 an event without an exception is dropped",
+      "event": {
+        "level": "info",
+        "message": "user jane@example.invalid signed in"
+      },
+      "drop": true
+    },
+    {
+      "id": "V3",
+      "rule": "E3 exception type is masked like a message",
+      "event": {
+        "exception": {
+          "values": [
+            {
+              "type": "LookupError jane@example.invalid",
+              "value": "boom"
+            }
+          ]
+        }
+      },
+      "mustNotContain": ["jane@example.invalid"]
+    },
+    {
+      "id": "V4",
+      "rule": "E4 frame filename keeps no URL query",
+      "event": {
+        "exception": {
+          "values": [
+            {
+              "type": "Error",
+              "value": "boom",
+              "stacktrace": {
+                "frames": [
+                  {
+                    "filename": "https://console.example.invalid/assets/index.js?token=frame-998877",
+                    "lineno": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "mustNotContain": ["frame-998877"]
+    },
+    {
+      "id": "V5",
+      "rule": "E7 id and free-text tags never leave",
+      "event": {
+        "tags": {
+          "tenant_id": "tenant-998877",
+          "store_id": "store-998877",
+          "user_id": "user-998877",
+          "actor_id": "actor-998877",
+          "device_id": "device-998877",
+          "sale_id": "sale-998877",
+          "email": "jane@example.invalid"
+        },
+        "exception": {
+          "values": [
+            {
+              "type": "Error",
+              "value": "boom"
+            }
+          ]
+        }
+      },
+      "mustNotContain": [
+        "tenant_id",
+        "store_id",
+        "user_id",
+        "actor_id",
+        "device_id",
+        "sale_id",
+        "998877",
+        "jane@example.invalid"
+      ]
+    }
+  ],
+  "linearTime": {
+    "maxTotalMs": 500,
+    "maxOutputLength": 300,
+    "inputs": [
+      {
+        "pattern": "password=",
+        "repeat": 250
+      },
+      {
+        "pattern": "dsn: ",
+        "repeat": 450
+      },
+      {
+        "pattern": "?a=",
+        "repeat": 700
+      },
+      {
+        "pattern": "a?",
+        "repeat": 1100
+      },
+      {
+        "pattern": "eyJ.",
+        "repeat": 550
+      },
+      {
+        "pattern": "Duplicate entry '",
+        "repeat": 130
+      },
+      {
+        "pattern": "a",
+        "repeat": 5000
+      }
+    ]
+  }
+}
