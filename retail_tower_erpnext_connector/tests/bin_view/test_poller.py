@@ -19,6 +19,7 @@ retry set by the NEXT tick.
 """
 
 import importlib
+import json
 import pickle
 import sys
 import types
@@ -90,6 +91,25 @@ class _Cache:
         return _Pipe(self.redis)
 
 
+class _Db:
+    """Connector Settings single values (``tabSingles``) + commits (RT-883)."""
+
+    def __init__(self):
+        self.singles = {}
+        self.commits = 0
+
+    def get_single_value(self, doctype, field):
+        assert doctype == "Connector Settings"
+        return self.singles.get(field)
+
+    def set_single_value(self, doctype, field, value, update_modified=True):
+        assert doctype == "Connector Settings" and update_modified is False
+        self.singles[field] = value
+
+    def commit(self):
+        self.commits += 1
+
+
 @pytest.fixture
 def frappe_stub():
     before = set(sys.modules)
@@ -100,6 +120,7 @@ def frappe_stub():
     fake.logger = lambda *_a, **_k: fake.log
     fake.cache_obj = _Cache()
     fake.cache = lambda: fake.cache_obj
+    fake.db = _Db()
     fake.jobs = []  # enqueued, not yet run (i.e. "in flight")
 
     def _enqueue(method, **kwargs):
@@ -382,6 +403,37 @@ def test_v1_transport_failure_is_retried_with_the_same_v1_key(frappe_stub):
     second = _tick(frappe_stub, dp2, reader)
     assert [p["key"] for p in first + second] == [f"binview-{_REF}"] * 2
     assert len(_retry_state(frappe_stub)) == 0
+
+
+# --- RT-883: the cursor and the retry set survive a cache flush ----------------------------------
+
+
+def test_a_cache_flush_resumes_from_the_persisted_cursor_and_retry_set(frappe_stub):
+    dp2 = _Dp2([_page(_wire(max_windows=None))], post_outcomes=[ConnectionError("down")])
+    reader = _Reader(3)
+    first = _tick(frappe_stub, dp2, reader)
+    assert frappe_stub.db.singles["bin_view_feed_cursor"] == "c-1"
+    assert _REF in r.RetrySet(json.loads(frappe_stub.db.singles["bin_view_retry_state"]))
+
+    frappe_stub.cache_obj = _Cache()  # Redis flushed between ticks
+    second = _tick(frappe_stub, dp2, reader)
+
+    assert dp2.gets == [None, "c-1"]  # resumed from the persisted cursor, not the start of the feed
+    # The failed request came back with the persisted retry set and was retried (same v1 key).
+    assert [p["key"] for p in first + second] == [f"binview-{_REF}"] * 2
+    assert len(_retry_state(frappe_stub)) == 0
+    assert frappe_stub.cache_obj.values["rt_bin_view_cursor"] == "c-1"  # the cache is warm again
+
+
+def test_every_cache_checkpoint_is_persisted_and_committed_first(frappe_stub):
+    dp2 = _Dp2([_page(_wire(max_windows=None), cursor="c-7")], post_outcomes=[ConnectionError("down")])
+    _tick(frappe_stub, dp2, _Reader(3))
+    assert frappe_stub.db.singles["bin_view_feed_cursor"] == "c-7"
+    persisted = json.loads(frappe_stub.db.singles["bin_view_retry_state"])
+    assert persisted == frappe_stub.cache_obj.values["rt_bin_view_retry"]
+    assert frappe_stub.db.commits == len(
+        [key for key, _ in frappe_stub.cache_obj.writes if key in ("rt_bin_view_cursor", "rt_bin_view_retry")]
+    )
 
 
 # --- frappe_glue: keyset page read --------------------------------------------------------------
@@ -841,7 +893,9 @@ def test_a_paged_retry_job_is_told_it_is_a_retry(frappe_stub):
     _tick(frappe_stub, _Dp2([]), _Reader(3), run_jobs=False)
     (job,) = frappe_stub.jobs
     assert job["retried"] is True
-    frappe_stub.cache_obj.values.pop("rt_bin_view_cursor")  # the next feed starts from scratch
+    # The next feed starts from scratch (the cursor is cleared in the cache AND in its field).
+    frappe_stub.cache_obj.values.pop("rt_bin_view_cursor")
+    frappe_stub.db.singles.pop("bin_view_feed_cursor")
     _tick(frappe_stub, _FeedDp2([_wire(_ref(7))]), _Reader(3), run_jobs=False)
     (first,) = [job for job in frappe_stub.jobs if job["job_id"] == f"rt_bin_view_paged::{_ref(7)}"]
     assert first["retried"] is False

@@ -13,7 +13,7 @@ They enforce, as automated checks, the foundation guarantees from spec 001:
           (FR-005, FR-006 — constitution principles VII and II)
   - T011: Connector Settings is a Single DocType resolving to one record (FR-004)
 
-Later specs (006 posting, 019 bin view, RT-321, RT-379) added reviewed configuration, mapping
+Later specs (006 posting, 019 bin view, RT-321, RT-379, RT-883) added reviewed configuration, mapping
 tables and a second poller. The checks below allow exactly those, by name, and nothing else.
 """
 
@@ -44,7 +44,8 @@ ALLOWED_SCHEDULED_JOBS = frozenset(
 )
 
 # Connector Settings fields approved by spec 006 (Data-Pulse-2 link, mapping tables), RT-321
-# (credential lifecycle) and RT-379 (compatibility profile). A field outside this set fails.
+# (credential lifecycle), RT-379 (compatibility profile) and RT-883 (the pollers' feed state). A
+# field outside this set fails.
 APPROVED_SETTINGS_FIELDS = frozenset(
 	{
 		"dp2_base_url",
@@ -63,6 +64,9 @@ APPROVED_SETTINGS_FIELDS = frozenset(
 		"compatibility_checked_at",
 		"compatibility_fingerprint",
 		"compatibility_report",
+		"posting_feed_cursor",
+		"bin_view_feed_cursor",
+		"bin_view_retry_state",
 	}
 )
 
@@ -194,7 +198,7 @@ class TestConnectorSettingsSingleton(unittest.TestCase):
 		self.assertEqual(doc.name, SETTINGS_DOCTYPE)
 
 	def test_connector_settings_has_only_approved_fields(self):
-		"""Every functional Connector Settings field is one a spec approved (006, RT-321, RT-379)."""
+		"""Every functional Connector Settings field is one a spec approved (006, RT-321, RT-379, RT-883)."""
 		meta = frappe.get_meta(SETTINGS_DOCTYPE)
 		functional = {
 			f.fieldname
@@ -206,6 +210,26 @@ class TestConnectorSettingsSingleton(unittest.TestCase):
 			[],
 			"Connector Settings has fields no spec approved",
 		)
+
+	def test_feed_state_survives_a_cache_miss(self):
+		"""RT-883: a persisted cursor and retry set are read back from the database after a cache miss."""
+		from retail_tower_erpnext_connector.connector import feed_state
+
+		fields = ("posting_feed_cursor", "bin_view_retry_state")
+		before = {f: frappe.db.get_single_value(SETTINGS_DOCTYPE, f) for f in fields}
+		cursor_key, retry_key = "rt_test_rt883_cursor", "rt_test_rt883_retry"
+		retry_set = {"r-2": {"failures": 2}, "r-1": {"failures": 1}}
+		try:
+			feed_state.save(cursor_key, "posting_feed_cursor", "rt883-cursor")
+			feed_state.save_json(retry_key, "bin_view_retry_state", retry_set)
+			frappe.cache().delete_value([cursor_key, retry_key])
+			self.assertEqual(feed_state.load(cursor_key, "posting_feed_cursor"), "rt883-cursor")
+			self.assertEqual(list(feed_state.load_json(retry_key, "bin_view_retry_state")), ["r-2", "r-1"])
+		finally:
+			frappe.cache().delete_value([cursor_key, retry_key])
+			for field, value in before.items():
+				frappe.db.set_single_value(SETTINGS_DOCTYPE, field, value, update_modified=False)
+			frappe.db.commit()
 
 
 def _first(value):

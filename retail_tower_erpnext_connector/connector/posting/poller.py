@@ -30,6 +30,8 @@ _LOGGER = "retail_tower_posting"
 # A bounded number of pages per tick — the scheduler re-enters on the next cron; idempotency
 # makes a mid-loop interruption safe (already-posted items resolve to their recorded documentRef).
 _MAX_PAGES_PER_TICK = 20
+_CURSOR_KEY = "rt_posting_cursor"
+_CURSOR_FIELD = "posting_feed_cursor"
 
 
 def run_posting_poll() -> None:
@@ -303,11 +305,16 @@ def _load_tender_mode_map(settings) -> dict:
 
 
 def _load_cursor() -> str | None:
-    return frappe.cache().get_value("rt_posting_cursor")
+    # RT-883: persisted in Connector Settings; the cache is a read-through fast path.
+    from ..feed_state import load
+
+    return load(_CURSOR_KEY, _CURSOR_FIELD)
 
 
 def _save_cursor(cursor: str) -> None:
-    frappe.cache().set_value("rt_posting_cursor", cursor)
+    from ..feed_state import save
+
+    save(_CURSOR_KEY, _CURSOR_FIELD, cursor)
 
 
 def _safe(message: str) -> str:

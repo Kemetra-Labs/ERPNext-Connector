@@ -1,7 +1,7 @@
 {
  "actions": [],
  "creation": "2026-06-04 00:00:00.000000",
- "description": "Retail Tower connector configuration (spec 006 — sales posting; spec 007 — credential lifecycle). The DP2 posting-feed endpoint + auth token, the operator-owned mapping tables (unit→UOM, store→warehouse, store→customer, tender→Mode of Payment) the scheduled poller reads each tick, and the registration-linked credential lifecycle (registration/credential refs + expiry) so the connector can warn before expiry instead of only reacting to a 401 (007 §5/§6). The token is a secret (Password field, Gate G4 — never logged); the lifecycle ids/timestamps are non-secret status.",
+ "description": "Retail Tower connector configuration (spec 006 — sales posting; spec 007 — credential lifecycle). The DP2 posting-feed endpoint + auth token, the operator-owned mapping tables (unit→UOM, store→warehouse, store→customer, tender→Mode of Payment) the scheduled poller reads each tick, and the registration-linked credential lifecycle (registration/credential refs + expiry) so the connector can warn before expiry instead of only reacting to a 401 (007 §5/§6), and the pollers' feed state (RT-883). The token is a secret (Password field, Gate G4 — never logged); the lifecycle ids/timestamps are non-secret status.",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
@@ -24,7 +24,11 @@
   "compatibility_status",
   "compatibility_checked_at",
   "compatibility_fingerprint",
-  "compatibility_report"
+  "compatibility_report",
+  "feed_state_section",
+  "posting_feed_cursor",
+  "bin_view_feed_cursor",
+  "bin_view_retry_state"
  ],
  "fields": [
   {
@@ -151,11 +155,38 @@
    "label": "Compatibility Report",
    "read_only": 1,
    "description": "RT-379: the latest findings, one per line. The connector never changes ERP settings to pass (Pricing 668)."
+  },
+  {
+   "fieldname": "feed_state_section",
+   "fieldtype": "Section Break",
+   "label": "Feed State (RT-883)",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "posting_feed_cursor",
+   "fieldtype": "Small Text",
+   "label": "Posting Feed Cursor",
+   "read_only": 1,
+   "description": "RT-883 (read-only, written by the posting poller): the opaque posting-feed cursor, persisted so a cache flush does not replay the feed from the start. The cache stays the fast path."
+  },
+  {
+   "fieldname": "bin_view_feed_cursor",
+   "fieldtype": "Small Text",
+   "label": "Bin-View Feed Cursor",
+   "read_only": 1,
+   "description": "RT-883 (read-only, written by the bin-view poller): the opaque bin-view pull-request cursor."
+  },
+  {
+   "fieldname": "bin_view_retry_state",
+   "fieldtype": "Long Text",
+   "label": "Bin-View Retry State",
+   "read_only": 1,
+   "description": "RT-883 (read-only, written by the bin-view poller): the RT-176 retry set as JSON. Persisted with the cursor, which passes a failed request only once the retry set holds it."
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-11 00:00:00.000000",
+ "modified": "2026-10-25 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Connector",
  "name": "Connector Settings",

@@ -37,6 +37,11 @@ class _Frappe(types.ModuleType):
 		self.cache = lambda: types.SimpleNamespace(
 			get_value=self._cache.get, set_value=lambda k, v: self._cache.__setitem__(k, v)
 		)
+		self.db = types.SimpleNamespace(
+			get_single_value=lambda doctype, field: None,
+			set_single_value=lambda *a, **k: None,
+			commit=lambda: None,
+		)
 		self._settings = settings
 		self.get_doc = lambda doctype: self._settings
 		self.exceptions = types.SimpleNamespace()

@@ -65,6 +65,7 @@ from dataclasses import dataclass
 
 import frappe
 
+from .. import feed_state
 from ..observability.sentry_client import report_unhandled
 from ..request_id import new_request_id
 from . import worker
@@ -85,6 +86,8 @@ _LOGGER = "retail_tower_bin_view"
 _MAX_PAGES_PER_TICK = 20
 _CURSOR_KEY = "rt_bin_view_cursor"
 _RETRY_KEY = "rt_bin_view_retry"
+_CURSOR_FIELD = "bin_view_feed_cursor"
+_RETRY_FIELD = "bin_view_retry_state"
 _OUTCOME_KEY_PREFIX = "rt_bin_view_outcome::"
 _OUTCOME_TTL_S = 24 * 3600
 _JOB_ID_PREFIX = "rt_bin_view_paged::"
@@ -531,20 +534,26 @@ def _build_bin_view_path(correlation_id: str):
     return client, FrappeBinReader(), UtcClock()
 
 
+# RT-883: the cursor and the retry set are persisted in Connector Settings together, with the
+# cache as a read-through fast path. Both, because the cursor passes a failed request only once
+# the retry set holds it: a durable cursor beside a cache-only retry set would strand that request
+# after a Redis flush.
+
+
 def _load_cursor() -> str | None:
-    return frappe.cache().get_value(_CURSOR_KEY)
+    return feed_state.load(_CURSOR_KEY, _CURSOR_FIELD)
 
 
 def _save_cursor(cursor: str) -> None:
-    frappe.cache().set_value(_CURSOR_KEY, cursor)
+    feed_state.save(_CURSOR_KEY, _CURSOR_FIELD, cursor)
 
 
 def _load_retry_state():
-    return frappe.cache().get_value(_RETRY_KEY)
+    return feed_state.load_json(_RETRY_KEY, _RETRY_FIELD)
 
 
 def _save_retry_state(retries: RetrySet) -> None:
-    frappe.cache().set_value(_RETRY_KEY, retries.to_state())
+    feed_state.save_json(_RETRY_KEY, _RETRY_FIELD, retries.to_state())
 
 
 def _safe(message: str) -> str:
