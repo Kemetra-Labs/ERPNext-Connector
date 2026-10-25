@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> **This product moved to the monorepo.** Its canonical home is [`Kemetra-Labs/Retail-Tower-Erp`](https://github.com/Kemetra-Labs/Retail-Tower-Erp/tree/main/integrations/erpnext-connector), directory `integrations/erpnext-connector/` (RT-715 cutover, 2026-10-25). The standalone `Kemetra/ERPNext-Connector` repository is read-only and kept for history. Open new issues and pull requests in the monorepo.
+
 <div align="center">
 
 <h1 align="center">
