@@ -16,8 +16,8 @@
 </p>
 
 <p align="center">
-  <a href="docs/decisions/version-pin-upgrade-policy.md"><img alt="Frappe v15" src="https://img.shields.io/badge/Frappe-v15-0089ff?logo=frappe&logoColor=white&labelColor=0a0f24&style=flat-square"></a>
-  <a href="docs/decisions/version-pin-upgrade-policy.md"><img alt="ERPNext v15" src="https://img.shields.io/badge/ERPNext-v15-0e7490?labelColor=0a0f24&style=flat-square"></a>
+  <a href="docs/decisions/version-pin-upgrade-policy.md"><img alt="Frappe v16" src="https://img.shields.io/badge/Frappe-v16-0089ff?logo=frappe&logoColor=white&labelColor=0a0f24&style=flat-square"></a>
+  <a href="docs/decisions/version-pin-upgrade-policy.md"><img alt="ERPNext v16" src="https://img.shields.io/badge/ERPNext-v16-0e7490?labelColor=0a0f24&style=flat-square"></a>
   <a href="pyproject.toml"><img alt="Python 3.10+" src="https://img.shields.io/badge/python-%E2%89%A53.10-3776ab?logo=python&logoColor=white&labelColor=0a0f24&style=flat-square"></a>
   <a href="retail_tower_erpnext_connector/hooks.py"><img alt="Transport: pull feed and ack" src="https://img.shields.io/badge/transport-pull%20feed%20%2B%20ack-60a5fa?labelColor=0a0f24&style=flat-square"></a>
   <a href="#what-the-connector-posts-today"><img alt="ERP posting: Sales Invoice and returns" src="https://img.shields.io/badge/ERP%20posting-Sales%20Invoice%20%2B%20returns-b45309?labelColor=0a0f24&style=flat-square"></a>
@@ -196,7 +196,7 @@ Posting Log `(source_system, external_id)` and `unique_rt_si_provenance` on Sale
   (`/api/connector/v1/erpnext/postings`) and the bin-view requests
   (`/api/connector/v1/erpnext/bin-view-requests`); it implements no connector-health, product-master
   or reconciliation pollers.
-- **Bench-only validation.** Anything that imports `frappe` is validated on a staging ERPNext v15
+- **Bench-only validation.** Anything that imports `frappe` is validated on a staging ERPNext v16
   bench, not locally. Live cross-system validation against a staging ERPNext remains the external
   frontier.
 - **Documentation lag.** Several docs and spec headers still describe the original docs-only scaffold.
@@ -443,7 +443,7 @@ start from `origin/main` and keep changes to the issue's scope.
 
 ## Getting started
 
-**Install on a staging bench** (Frappe v15 / ERPNext v15; full steps in the
+**Install on a staging bench** (Frappe v16 / ERPNext v16; full steps in the
 [staging install runbook](docs/runbooks/staging-install.md)):
 
 ```bash

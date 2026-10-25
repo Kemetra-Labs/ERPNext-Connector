@@ -18,8 +18,8 @@ from retail_tower_erpnext_connector.connector.posting import compatibility_profi
 
 def _snapshot(**overrides):
 	base = cp.SiteSnapshot(
-		frappe_version="15.42.0",
-		erpnext_version="15.38.1",
+		frappe_version="16.52.0",
+		erpnext_version="16.51.0",
 		custom_fields=frozenset(cp.REQUIRED_CUSTOM_FIELDS),
 		posting_currency="EGP",
 		currency_precision=2,
@@ -34,6 +34,8 @@ def _snapshot(**overrides):
 		tax_sources=(),
 		validate_selling_price=False,
 		selling_pricing_rules=0,
+		# A v16 site configured per the policy (RT-494).
+		scheduler_tick_s=60,
 	)
 	return dataclasses.replace(base, **overrides)
 
@@ -52,14 +54,14 @@ class TestCompatibleSite:
 class TestVersion:
 	@pytest.mark.parametrize(
 		("frappe_version", "erpnext_version"),
-		[("14.80.0", "14.70.2"), ("17.0.0", "17.0.0")],
+		[("14.80.0", "14.70.2"), ("15.110.0", "15.110.0"), ("17.0.0", "17.0.0")],
 	)
 	def test_a_major_outside_the_supported_set_is_critical(self, frappe_version, erpnext_version):
 		critical = _critical(frappe_version=frappe_version, erpnext_version=erpnext_version)
 		assert len(critical) == 2
 		assert frappe_version in critical[0]
 		assert erpnext_version in critical[1]
-		assert all("v15, v16" in finding for finding in critical)
+		assert all("v16" in finding and "v15" not in finding for finding in critical)
 
 	def test_a_v16_site_is_ok(self):
 		# RT-494 (RT-201 decision): v16 is supported; the validated pin is Frappe 16.52.0 / ERPNext 16.51.0.
@@ -71,20 +73,19 @@ class TestVersion:
 		("frappe_version", "erpnext_version"), [("15.110.0", "16.51.0"), ("16.52.0", "15.110.0")]
 	)
 	def test_frappe_and_erpnext_on_different_majors_is_critical(self, frappe_version, erpnext_version):
-		# With one supported major a mismatch could not pass; with two it could, so it is checked explicitly.
+		# With v16 the only supported major, the v15 side of a mismatch is outside the supported set.
 		critical = _critical(frappe_version=frappe_version, erpnext_version=erpnext_version)
 		assert len(critical) == 1
-		assert frappe_version in critical[0]
-		assert erpnext_version in critical[0]
-		assert "major" in critical[0]
+		assert "15.110.0" in critical[0]
+		assert "outside the supported set v16" in critical[0]
 
 	@pytest.mark.parametrize("value", [None, "", "develop", "version-15"])
 	def test_an_unparseable_version_is_critical(self, value):
 		assert _critical(frappe_version=value)
 
-	def test_the_supported_set_is_v15_and_v16(self):
-		# D5 amended by the owner on RT-201/RT-494 (2026-10-15): v15 and v16, v15 kept for the transition.
-		assert frozenset({15, 16}) == cp.SUPPORTED_MAJORS
+	def test_the_supported_set_is_v16_only(self):
+		# D5 amended by the owner on 2026-10-25: v16 only; v15 dropped (no site runs it).
+		assert frozenset({16}) == cp.SUPPORTED_MAJORS
 
 
 class TestCustomFields:
@@ -219,7 +220,7 @@ class TestDriftEvent:
 
 	def test_a_changed_fingerprint_is_drift(self):
 		before = cp.evaluate(_snapshot())
-		after = cp.evaluate(_snapshot(erpnext_version="15.39.0"))
+		after = cp.evaluate(_snapshot(erpnext_version="16.51.1"))
 		event = cp.drift_event(before.fingerprint, after)
 		assert event["event"] == "compatibility.drift"
 		assert event["previous_fingerprint"] == before.fingerprint
@@ -358,11 +359,8 @@ class TestSchedulerTick:
 		assert result.ok
 		assert result.warnings == ()
 
-	def test_v15_never_warns_about_the_tick(self):
-		# v15's default tick is already 60 s.
-		assert cp.evaluate(_snapshot(scheduler_tick_s=None)).warnings == ()
-
 	def test_an_unset_tick_leaves_the_fingerprint_unchanged(self):
 		# No drift event on every existing site just because this field was added.
-		assert cp.evaluate(_snapshot()).fingerprint == cp.evaluate(_snapshot(scheduler_tick_s=None)).fingerprint
-		assert cp.evaluate(self._v16(scheduler_tick_s=60)).fingerprint != cp.evaluate(self._v16()).fingerprint
+		# An unset tick adds no key (compatibility_profile.fingerprint), so a set one moves it.
+		unset = cp.evaluate(self._v16(scheduler_tick_s=None)).fingerprint
+		assert cp.evaluate(self._v16(scheduler_tick_s=60)).fingerprint != unset

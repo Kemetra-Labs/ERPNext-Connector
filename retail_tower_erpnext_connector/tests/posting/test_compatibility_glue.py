@@ -89,7 +89,9 @@ def _site():
 class _Frappe(types.ModuleType):
 	def __init__(self, site, *, unreadable=False):
 		super().__init__("frappe")
-		self.__version__ = "15.42.0"
+		self.__version__ = "16.52.0"
+		# A v16 site configured per the policy (scheduler_tick_interval: 60, RT-494).
+		self.conf = {"scheduler_tick_interval": 60}
 		self._site, self.unreadable = site, unreadable
 		self._logger = _Logger()
 		self.logger = lambda name=None: self._logger
@@ -204,7 +206,7 @@ def load_glue():
 				"frappe.contacts.doctype": types.ModuleType("frappe.contacts.doctype"),
 				"frappe.contacts.doctype.address": types.ModuleType("frappe.contacts.doctype.address"),
 				"frappe.contacts.doctype.address.address": address,
-				"erpnext": types.SimpleNamespace(__version__="15.38.1"),
+				"erpnext": types.SimpleNamespace(__version__="16.51.0"),
 				"erpnext.accounts": types.ModuleType("erpnext.accounts"),
 				"erpnext.accounts.party": party,
 			}
@@ -272,7 +274,8 @@ class TestReadSnapshot:
 		fake = _Frappe(_site())
 		glue = load_glue(fake)
 		snapshot = glue.read_snapshot(_Settings(), _MAPS)
-		assert snapshot.frappe_version == "15.42.0" and snapshot.erpnext_version == "15.38.1"
+		assert snapshot.frappe_version == "16.52.0"
+		assert snapshot.erpnext_version == "16.51.0"
 		assert snapshot.custom_fields == frozenset(_CUSTOM_FIELDS)
 		assert (snapshot.default_company, snapshot.company_currency) == ("RT Co", "EGP")
 		assert snapshot.currency_precision == 2 and snapshot.tax_sources == ()

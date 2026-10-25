@@ -132,7 +132,7 @@ empirical evidence**.
   (`json.load`), TOML validity (`tomllib`), `ruff` if configured, the
   forbidden-path audit, `git diff --check`, and — for docs changes — DP2
   citation-locates-in-repo checks and acceptance-scenario review.
-- **Bench-validation (deferred to a staging ERPNext v15 site):**
+- **Bench-validation (deferred to a staging ERPNext v16 site, the only supported line):**
   `bench install-app`, `bench migrate`, `bench run-tests`. These are marked
   `⏳ BENCH-VALIDATION` in `tasks.md` and the Jira issue, NOT run locally, and
   NOT claimed as passing until executed on a real bench. (This is the pattern
