@@ -3,7 +3,7 @@
 
 """Frozen read-models for the fixed 012 posting-feed contract (T010).
 
-These mirror Data-Pulse-2's ``posting-feed.yaml`` 1:1 (1.1.0-draft, plus the RT-76 feed-1.2
+These mirror Data-Pulse-2's ``posting-feed.yaml`` 1:1 (1.10.0-draft, including the RT-76 feed-1.2
 ``Sale.tenders`` settlement field). The contract is
 DP2-owned and read-only (FR-015, Principle I) — these DTOs CITE it, never re-derive it.
 
@@ -42,7 +42,8 @@ REVERSAL_KINDS: frozenset[str] = frozenset({"void", "refund", "return"})
 # 012 SaleTender.method enum (RT-10 D2 pilot methods; vouchers are excluded).
 TENDER_METHODS: frozenset[str] = frozenset({"cash", "card_external"})
 
-# 012 NonNegativeDecimalAmount and SaleTender.reference patterns (posting-feed.yaml, verbatim).
+# 012 NonNegativeDecimalAmount and SaleTender.reference patterns (posting-feed.yaml, verbatim). Apply
+# them with fullmatch: under match, Python `$` also accepts a trailing "\n" (RT-875).
 _NON_NEGATIVE_DECIMAL_RE = re.compile(r"^\d{1,15}(\.\d{1,4})?$", re.ASCII)
 _TENDER_REFERENCE_RE = re.compile(r"^[A-Z0-9]{1,6}$")
 # RFC 3339 ``date-time`` (full-date "T" full-time with seconds and an offset); fromisoformat alone
@@ -151,7 +152,7 @@ def _require_object(wire: object, name: str) -> Mapping[str, object]:
 
 def _non_negative_amount(wire: Mapping[str, object], field: str, name: str) -> str:
     value = wire.get(field)
-    if not isinstance(value, str) or not _NON_NEGATIVE_DECIMAL_RE.match(value):
+    if not isinstance(value, str) or not _NON_NEGATIVE_DECIMAL_RE.fullmatch(value):
         raise ValueError(f"{name}.{field} must be a non-negative exact-decimal string, got {value!r}")
     return value
 
@@ -179,7 +180,7 @@ class ReturnLine:
         quantity = w.get("quantity")
         if (
             not isinstance(quantity, str)
-            or not _RETURN_QUANTITY_RE.match(quantity)
+            or not _RETURN_QUANTITY_RE.fullmatch(quantity)
             or Decimal(quantity) <= 0
         ):
             raise ValueError(f"ReturnLine.quantity must be a positive exact-decimal string, got {quantity!r}")
@@ -301,7 +302,7 @@ class SaleTender:
         if method not in TENDER_METHODS:
             raise ValueError(f"SaleTender.method must be one of {sorted(TENDER_METHODS)}, got {method!r}")
         amount = wire.get("amount")
-        if not isinstance(amount, str) or not _NON_NEGATIVE_DECIMAL_RE.match(amount):
+        if not isinstance(amount, str) or not _NON_NEGATIVE_DECIMAL_RE.fullmatch(amount):
             raise ValueError(
                 f"SaleTender.amount must be a non-negative exact-decimal string, got {amount!r}"
             )
@@ -309,7 +310,7 @@ class SaleTender:
         if reference is not None:
             if method == "cash":
                 raise ValueError("SaleTender.reference is only allowed on card_external (012)")
-            if not isinstance(reference, str) or not _TENDER_REFERENCE_RE.match(reference):
+            if not isinstance(reference, str) or not _TENDER_REFERENCE_RE.fullmatch(reference):
                 raise ValueError(
                     f"SaleTender.reference must match ^[A-Z0-9]{{1,6}}$, got {reference!r}"
                 )

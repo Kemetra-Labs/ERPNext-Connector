@@ -502,3 +502,39 @@ class TestReturnReversal:
         wire = _return_wire()
         wire["reversalOf"].pop("refundTenders")
         assert c.PostingWorkItem.from_wire(wire).reversal_of.refund_tenders == ()
+
+
+class TestTrailingNewlineRejected:
+    """RT-875: Python ``$`` under ``re.match`` also matches before a final "\\n"; the 012 patterns do not.
+
+    One case per reachable call site of ``_NON_NEGATIVE_DECIMAL_RE``, ``_RETURN_QUANTITY_RE`` and
+    ``_TENDER_REFERENCE_RE``.
+    """
+
+    def test_sale_tender_amount(self):
+        wire = _wire_work_item()
+        wire["sale"]["tenders"] = [{"method": "cash", "amount": "15.00\n"}]
+        with pytest.raises(ValueError, match="amount"):
+            c.PostingWorkItem.from_wire(wire)
+
+    def test_sale_tender_reference(self):
+        wire = _wire_work_item()
+        wire["sale"]["tenders"] = [{"method": "card_external", "amount": "5.00", "reference": "AB12C\n"}]
+        with pytest.raises(ValueError, match="reference"):
+            c.PostingWorkItem.from_wire(wire)
+
+    def test_return_line_quantity(self):
+        lines = [{"lineRef": _LINE_A, "quantity": "1\n", "lineAmount": "100.00", "taxAmount": None}]
+        with pytest.raises(ValueError, match="quantity"):
+            c.PostingWorkItem.from_wire(_return_wire(returnLines=lines))
+
+    @pytest.mark.parametrize("field", ["lineAmount", "taxAmount"])
+    def test_return_line_amounts(self, field):
+        line = {"lineRef": _LINE_A, "quantity": "1", "lineAmount": "100.00", "taxAmount": "0.00"}
+        line[field] = line[field] + "\n"
+        with pytest.raises(ValueError, match=field):
+            c.PostingWorkItem.from_wire(_return_wire(returnLines=[line]))
+
+    def test_refund_tender_amount(self):
+        with pytest.raises(ValueError, match="RefundTender"):
+            c.PostingWorkItem.from_wire(_return_wire(refundTenders=[{"method": "cash", "amount": "100.00\n"}]))

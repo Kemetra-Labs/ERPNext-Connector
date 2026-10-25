@@ -3,7 +3,7 @@
 
 """Frozen read-models for the fixed 019 stock-view (Bin) contract.
 
-These mirror Data-Pulse-2's ``stock-view.yaml`` (pinned to 1.2.0-draft, RT-174) 1:1. The
+These mirror Data-Pulse-2's ``stock-view.yaml`` (pinned to 1.4.0-draft, RT-875) 1:1. The
 contract is DP2-owned and read-only (Principle I/IV) — these DTOs CITE it, never re-derive it.
 
 Wire shapes consumed/produced here:
