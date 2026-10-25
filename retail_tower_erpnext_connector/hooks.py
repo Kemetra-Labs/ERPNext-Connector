@@ -3,7 +3,7 @@ app_title = "Retail Tower ERPNext Connector"
 app_publisher = "Retail Tower OS"
 app_description = (
 	"Integration layer between Retail Tower OS (via Data-Pulse-2) and ERPNext / Frappe. "
-	"Foundation only: app scaffold and Connector Settings placeholder. No business mutation."
+	"Posts Retail Tower sales to ERPNext and reports ERPNext Bin on-hand stock back."
 )
 app_email = "admin@rahmaqanater.org"
 app_license = "Apache-2.0"
