@@ -1,0 +1,11 @@
+# Backend-Core OpenAPI contracts the ERPNext-Connector consumes (RT-704): the posting feed
+# (connector/posting), the bin-view feed (connector/bin_view) and the heartbeat (connector/health).
+# Checked by tools/contracts-check (`pins`): a Backend-Core change that breaks a pinned file fails.
+# Repinned by hand, from this repository only: set `commit:` to the new commit and each blob to
+# `git rev-parse <commit>:services/backend-core/packages/contracts/openapi/<path>`.
+repo: Kemetra-Labs/Retail-Tower-Erp
+commit: 3bdcda6d138362e511aad1aa5a47255872121af0
+source: services/backend-core/packages/contracts/openapi
+file: erpnext-connector/connector-health.yaml b0cc7095899e3d6c3b9ec7aa60c595a53861470a
+file: erpnext-connector/posting-feed.yaml 589832818845812c1deb30370d5c6b0ab07ca0bf
+file: erpnext-connector/stock-view.yaml d955a3ea95e1366f234c672837ca77f5a267bac1
