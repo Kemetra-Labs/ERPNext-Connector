@@ -62,6 +62,11 @@ scheduler_events = {
 	"cron": {
 		"* * * * *": [
 			"retail_tower_erpnext_connector.connector.posting.poller.run_posting_poll",
+			# RT-564 — the spec 020 liveness heartbeat to Backend-Core (connectorReportHeartbeat).
+			# Its own scheduled job (Frappe runs each listed method as a separate job), so a
+			# failing heartbeat never touches posting. Every minute against Backend-Core's 5-minute
+			# staleness threshold. Read-only on the ERPNext side.
+			"retail_tower_erpnext_connector.connector.health.sender.run_heartbeat",
 		],
 		"*/5 * * * *": [
 			# The 019 bin-view poller — pulls wanted Bin-view reads from Data-Pulse-2,

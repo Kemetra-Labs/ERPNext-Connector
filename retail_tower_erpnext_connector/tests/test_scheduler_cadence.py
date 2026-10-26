@@ -13,6 +13,7 @@ from retail_tower_erpnext_connector import hooks
 
 POSTING_POLLER = "retail_tower_erpnext_connector.connector.posting.poller.run_posting_poll"
 BIN_VIEW_POLLER = "retail_tower_erpnext_connector.connector.bin_view.poller.run_bin_view_poll"
+HEARTBEAT = "retail_tower_erpnext_connector.connector.health.sender.run_heartbeat"
 
 
 def _cron_expressions_for(job: str) -> list[str]:
@@ -26,3 +27,9 @@ def test_posting_poller_runs_every_minute():
 
 def test_bin_view_poller_stays_every_five_minutes():
 	assert _cron_expressions_for(BIN_VIEW_POLLER) == ["*/5 * * * *"]
+
+
+def test_heartbeat_runs_every_minute():
+	# RT-564: Backend-Core marks an instance stale 5 minutes after its last heartbeat (spec 020),
+	# so the beat runs every minute, its own job beside the posting poller.
+	assert _cron_expressions_for(HEARTBEAT) == ["* * * * *"]

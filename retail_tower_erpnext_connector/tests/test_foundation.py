@@ -40,6 +40,8 @@ ALLOWED_SCHEDULED_JOBS = frozenset(
 	{
 		"retail_tower_erpnext_connector.connector.posting.poller.run_posting_poll",
 		"retail_tower_erpnext_connector.connector.bin_view.poller.run_bin_view_poll",
+		# RT-564 / spec 020: the liveness heartbeat to Backend-Core (connectorReportHeartbeat).
+		"retail_tower_erpnext_connector.connector.health.sender.run_heartbeat",
 	}
 )
 
@@ -148,7 +150,7 @@ class TestFoundationNoMutationNoFork(unittest.TestCase):
 			)
 
 	def test_scheduler_events_only_register_the_reviewed_pollers(self):
-		"""Specs 006 and 019: only the posting poller and the bin-view poller are scheduled."""
+		"""Specs 006, 019 and 020: only the posting and bin-view pollers and the heartbeat are scheduled."""
 		hooks = frappe.get_hooks(app_name=APP_NAME)
 		scheduler = hooks.get("scheduler_events") or {}
 		registered = _flatten_scheduler_jobs(scheduler)
@@ -161,7 +163,7 @@ class TestFoundationNoMutationNoFork(unittest.TestCase):
 			self.assertIn(
 				job,
 				ALLOWED_SCHEDULED_JOBS,
-				f"Unexpected scheduled job '{job}' — only the reviewed pollers are allowed (specs 006, 019)",
+				f"Unexpected scheduled job '{job}' — only the reviewed jobs are allowed (specs 006, 019, 020)",
 			)
 
 	def test_app_does_not_fork_erpnext(self):
