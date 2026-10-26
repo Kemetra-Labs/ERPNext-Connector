@@ -795,3 +795,108 @@ class TestLineDiscount:
 
         with pytest.raises(MoneyConformanceError):
             _build_line("100.00", "2", "1e2")
+
+
+def _batch_work_item(ref, *, mode="batch"):
+    line = {
+        "lineName": "Item A",
+        "unitPrice": "100.00",
+        "currencyCode": "EGP",
+        "quantity": "2",
+        "lineAmount": "200.00",
+        "unit": "each",
+        "erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
+        "trackingMode": mode,
+        "erpnextBatchRef": ref,
+    }
+    wi = _work_item()
+    return c.PostingWorkItem.from_wire(
+        {
+            "workItemRef": wi.work_item_ref,
+            "kind": "sale_post",
+            "sourceSystem": wi.source_system,
+            "externalId": wi.external_id,
+            "payloadHash": wi.payload_hash,
+            "businessDate": wi.business_date,
+            "itemCursor": wi.item_cursor,
+            "sale": {
+                "saleRef": wi.sale.sale_ref,
+                "storeId": wi.sale.store_id,
+                "currencyCode": "EGP",
+                "posTotal": "200.00",
+                "occurredAt": wi.sale.occurred_at,
+                "businessDate": wi.sale.business_date,
+                "sourceSystem": wi.source_system,
+                "externalId": wi.external_id,
+                "lines": [line],
+            },
+        }
+    )
+
+
+class TestBatchLine:
+    """RT-452 / G7-11: a batch line posts with its supplied Batch, set explicitly."""
+
+    def _build(self, work_item):
+        return b.build_sales_invoice(work_item, uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer)
+
+    def test_a_line_with_a_ref_sets_the_batch_and_the_row_flag(self):
+        (item,) = self._build(_batch_work_item({"doctype": "Batch", "name": "LOT-B1"}))["items"]
+        assert item["batch_no"] == "LOT-B1"
+        assert item["use_serial_batch_fields"] == 1
+
+    def test_a_line_without_a_ref_carries_no_batch_field(self):
+        (item,) = self._build(_batch_work_item(None, mode="none"))["items"]
+        assert "batch_no" not in item and "use_serial_batch_fields" not in item
+
+    def test_a_legacy_line_without_the_fields_builds_as_before(self):
+        (item,) = self._build(_work_item())["items"]
+        assert "batch_no" not in item and "use_serial_batch_fields" not in item
+
+    def test_a_reversal_never_carries_the_batch_of_its_sale_lines(self):
+        # A credit note row carries no Batch of its own: ERPNext rebuilds the original's (G7-10).
+        from retail_tower_erpnext_connector.connector.posting import reversal_builder as rb
+
+        sale = _batch_work_item({"doctype": "Batch", "name": "LOT-B1"})
+        void = c.PostingWorkItem.from_wire(
+            {
+                "workItemRef": "99999999-9999-4999-8999-999999999999",
+                "kind": "reversal",
+                "sourceSystem": sale.source_system,
+                "externalId": sale.external_id,
+                "payloadHash": "b" * 64,
+                "businessDate": sale.business_date,
+                "itemCursor": "cursor-2",
+                "reversalOf": {
+                    "sourceSystem": sale.source_system,
+                    "externalId": sale.external_id,
+                    "reversalKind": "void",
+                },
+                "sale": {
+                    "saleRef": sale.sale.sale_ref,
+                    "storeId": sale.sale.store_id,
+                    "currencyCode": "EGP",
+                    "posTotal": "200.00",
+                    "occurredAt": sale.sale.occurred_at,
+                    "businessDate": sale.sale.business_date,
+                    "sourceSystem": sale.source_system,
+                    "externalId": sale.external_id,
+                    "lines": [
+                        {
+                            "lineName": "Item A",
+                            "unitPrice": "100.00",
+                            "currencyCode": "EGP",
+                            "quantity": "2",
+                            "lineAmount": "200.00",
+                            "unit": "each",
+                            "erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
+                            "trackingMode": "batch",
+                            "erpnextBatchRef": {"doctype": "Batch", "name": "LOT-B1"},
+                        }
+                    ],
+                },
+            }
+        )
+        doc = rb.build_reversing_invoice(void, uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer)
+        (item,) = doc["items"]
+        assert "batch_no" not in item and "use_serial_batch_fields" not in item

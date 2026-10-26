@@ -4,7 +4,7 @@
 """Frozen read-models for the fixed 012 posting-feed contract (T010).
 
 These mirror Data-Pulse-2's ``posting-feed.yaml`` 1:1 (1.10.0-draft, including the RT-76 feed-1.2
-``Sale.tenders`` settlement field). The contract is
+``Sale.tenders`` settlement field and the RT-450 tracked-line fields). The contract is
 DP2-owned and read-only (FR-015, Principle I) — these DTOs CITE it, never re-derive it.
 
 Apply-only invariant (rider R2 / Q-CON-004): every offered ``SaleLine`` carries a
@@ -41,6 +41,9 @@ REVERSAL_KINDS: frozenset[str] = frozenset({"void", "refund", "return"})
 
 # 012 SaleTender.method enum (RT-10 D2 pilot methods; vouchers are excluded).
 TENDER_METHODS: frozenset[str] = frozenset({"cash", "card_external"})
+
+# 012 SaleLine.trackingMode enum (RT-450, 1.10.0-draft); null is "no profile determined".
+TRACKING_MODES: frozenset[str] = frozenset({"none", "batch", "serial"})
 
 # 012 NonNegativeDecimalAmount and SaleTender.reference patterns (posting-feed.yaml, verbatim). Apply
 # them with fullmatch: under match, Python `$` also accepts a trailing "\n" (RT-875).
@@ -397,6 +400,10 @@ class SaleLine:
     tenant_product_ref: str | None = None
     # RT-16 / RT-14 D6: stable line identity (= sale_lines.id) from feed 1.3; a return points at it.
     line_ref: str | None = None
+    # RT-452 (feed 1.10.0-draft, RT-450): the frozen ERPNext Batch name (``erpnextBatchRef.name``) and
+    # the Catalog Tracking Profile mode. Both None when omitted or null (an untracked or older feed).
+    erpnext_batch_ref: str | None = None
+    tracking_mode: str | None = None
 
     @classmethod
     def from_wire(cls, wire: Mapping[str, object]) -> SaleLine:
@@ -418,7 +425,35 @@ class SaleLine:
                 None if wire.get("tenantProductRef") is None else str(wire["tenantProductRef"])
             ),
             line_ref=None if wire.get("lineRef") is None else str(wire["lineRef"]),
+            erpnext_batch_ref=_parse_batch_ref(wire.get("erpnextBatchRef")),
+            tracking_mode=_parse_tracking_mode(wire.get("trackingMode")),
         )
+
+
+def _parse_batch_ref(raw: object) -> str | None:
+    """012 ``ErpnextBatchRef`` (RT-450): absent / null → None; else a strict ``{doctype: "Batch", name}``.
+
+    The Connector applies the name as given and never maps a lot code to a Batch (G7-11).
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping) or raw.get("doctype") != "Batch":
+        raise ValueError(f"SaleLine.erpnextBatchRef must be a Batch reference, got {raw!r}")
+    name = raw.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"SaleLine.erpnextBatchRef.name must be a non-empty string, got {name!r}")
+    return name
+
+
+def _parse_tracking_mode(raw: object) -> str | None:
+    """012 ``SaleLine.trackingMode`` (RT-450): absent / null → None; else one of :data:`TRACKING_MODES`."""
+    if raw is None:
+        return None
+    # isinstance first: `in` on a frozenset hashes ``raw``, and an object would raise TypeError, which
+    # the transport does not isolate per item (only ValueError is, Greptile PR #48).
+    if not isinstance(raw, str) or raw not in TRACKING_MODES:
+        raise ValueError(f"SaleLine.trackingMode must be one of {sorted(TRACKING_MODES)} or null, got {raw!r}")
+    return str(raw)
 
 
 @dataclass(frozen=True)

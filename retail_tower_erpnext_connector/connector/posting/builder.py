@@ -40,6 +40,10 @@ document payload the connector will submit. It:
     011-DR-POSTING-A1): ``is_pos = 1`` plus one ``payments`` row per tender (Mode of Payment from
     the injected tender map), so the invoice is Paid in the same exactly-once submit. A
     tender-unknown sale builds exactly as before: an unpaid invoice (R1 interim mode, RT-10 D8).
+  - posts a batch line with its frozen ``erpnextBatchRef`` (RT-452, G7-11): row ``batch_no`` plus
+    ``use_serial_batch_fields = 1``, so ERPNext creates the Serial and Batch Bundle for exactly that
+    Batch. Only on a ``sale_post``: the reversal builders compose on this one and a credit note row
+    carries no Batch. Whether the Item may carry it is ``batch_policy``'s decision, before insert.
 
 This module imports NO frappe — it builds a plain dict the bench glue submits. There is never a
 Payment Entry here: a paid sale carries its own payments; a tender-unknown one stays outstanding AR.
@@ -214,6 +218,12 @@ def build_sales_invoice(
         if line.line_ref is not None:
             # RT-16 / RT-14 D6: the sale-line identity a later partial return is matched on.
             item["rt_line_ref"] = line.line_ref
+        if line.erpnext_batch_ref is not None and work_item.kind == "sale_post":
+            # RT-452 / G7-11: the supplied Batch, set explicitly; ERPNext builds the row's Serial and
+            # Batch Bundle from it and never auto-picks. A credit note carries no Batch of its own:
+            # ERPNext rebuilds it from the original row (``sales_invoice_item``, G7-10).
+            item["batch_no"] = line.erpnext_batch_ref
+            item["use_serial_batch_fields"] = 1
         items.append(item)
 
     # F-009 CLOSED: the customer is resolved from the operator-configured store→Customer map

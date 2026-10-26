@@ -4,9 +4,9 @@
 """RT-48 — local unit tests for the pure stock-posting policy (no frappe).
 
 Owner decisions (RT-47 comment 10287, RT-48 comment 10291):
-  - D4: the technical pilot moves stock only for non-batch / non-serial items. ERPNext would
-    otherwise AUTO-PICK a batch (``auto_create_serial_and_batch_bundle_for_outward`` defaults on),
-    i.e. guess one, so a batch/serial line on a stock-moving document fails CLOSED.
+  - D4: ERPNext would otherwise AUTO-PICK a batch (``auto_create_serial_and_batch_bundle_for_outward``
+    defaults on), i.e. guess one. The per-row tracked-line matrix (serial fail-closed, batch only with
+    the feed's Batch, RT-452) is covered in ``test_batch_policy.py``.
   - D5: a full void's return invoice mirrors the ORIGINAL invoice's ``update_stock`` (a legacy
     update_stock=0 invoice never fabricates a stock restoration) and references each original line
     via ``sales_invoice_item`` so ERPNext's per-line over-return cap applies.
@@ -30,30 +30,8 @@ def _doc(*, update_stock=1, is_return=0, items=None):
 	}
 
 
-_PLAIN = {"has_batch_no": 0, "has_serial_no": 0}
-
 
 class TestTrackedItemGuard:
-	def test_plain_items_pass(self):
-		sp.assert_no_tracked_items(_doc(), {"ITEM-A": _PLAIN, "ITEM-B": _PLAIN})
-
-	def test_batch_item_on_stock_moving_doc_fails_closed(self):
-		tracking = {"ITEM-A": _PLAIN, "ITEM-B": {"has_batch_no": 1, "has_serial_no": 0}}
-		with pytest.raises(sp.UnsupportedTrackedItem) as exc:
-			sp.assert_no_tracked_items(_doc(), tracking)
-		assert "ITEM-B" in str(exc.value)
-
-	def test_serial_item_on_stock_moving_doc_fails_closed(self):
-		tracking = {"ITEM-A": {"has_batch_no": 0, "has_serial_no": 1}, "ITEM-B": _PLAIN}
-		with pytest.raises(sp.UnsupportedTrackedItem):
-			sp.assert_no_tracked_items(_doc(), tracking)
-
-	def test_non_stock_moving_doc_is_not_checked(self):
-		# A refund credit note / legacy-mirrored return posts update_stock=0: no Serial and Batch
-		# Bundle is involved, so batch flags are irrelevant there.
-		tracking = {"ITEM-A": {"has_batch_no": 1, "has_serial_no": 1}, "ITEM-B": _PLAIN}
-		sp.assert_no_tracked_items(_doc(update_stock=0), tracking)
-
 	def test_tracking_item_codes_lists_each_code_once_in_order(self):
 		items = [
 			{"item_code": "A", "qty": "1"},

@@ -624,3 +624,59 @@ class TestTrailingNewlineRejected:
     def test_refund_tender_amount(self):
         with pytest.raises(ValueError, match="RefundTender"):
             c.PostingWorkItem.from_wire(_return_wire(refundTenders=[{"method": "cash", "amount": "100.00\n"}]))
+
+
+class TestSaleLineTracking:
+    """RT-452 (feed 1.10.0-draft, RT-450): the nullable ``erpnextBatchRef`` and ``trackingMode``."""
+
+    def _line(self, **fields):
+        wire = dict(_wire_work_item()["sale"]["lines"][0])
+        wire.update(fields)
+        return wire
+
+    def test_omitted_fields_parse_as_none(self):
+        line = c.SaleLine.from_wire(self._line())
+        assert (line.erpnext_batch_ref, line.tracking_mode) == (None, None)
+
+    def test_explicit_nulls_parse_as_none(self):
+        line = c.SaleLine.from_wire(self._line(erpnextBatchRef=None, trackingMode=None))
+        assert (line.erpnext_batch_ref, line.tracking_mode) == (None, None)
+
+    def test_a_batch_line_carries_its_batch_name_and_mode(self):
+        line = c.SaleLine.from_wire(
+            self._line(erpnextBatchRef={"doctype": "Batch", "name": "LOT-B1"}, trackingMode="batch")
+        )
+        assert (line.erpnext_batch_ref, line.tracking_mode) == ("LOT-B1", "batch")
+
+    @pytest.mark.parametrize("mode", ["none", "batch", "serial"])
+    def test_every_contract_mode_parses(self, mode):
+        assert c.SaleLine.from_wire(self._line(trackingMode=mode)).tracking_mode == mode
+
+    @pytest.mark.parametrize("mode", ["", "Batch", "lot", 1, True, {"mode": "batch"}])
+    def test_an_unknown_mode_is_malformed(self, mode):
+        with pytest.raises(ValueError, match="trackingMode"):
+            c.SaleLine.from_wire(self._line(trackingMode=mode))
+
+    @pytest.mark.parametrize(
+        "ref",
+        [
+            "LOT-B1",
+            {"doctype": "Item", "name": "LOT-B1"},
+            {"name": "LOT-B1"},
+            {"doctype": "Batch"},
+            {"doctype": "Batch", "name": ""},
+            {"doctype": "Batch", "name": 7},
+        ],
+    )
+    def test_a_malformed_batch_ref_is_rejected(self, ref):
+        with pytest.raises(ValueError, match="erpnextBatchRef"):
+            c.SaleLine.from_wire(self._line(erpnextBatchRef=ref))
+
+    def test_tracking_modes_mirror_the_contract_enum(self):
+        assert c.TRACKING_MODES == frozenset({"none", "batch", "serial"})
+
+    def test_a_work_item_carries_the_fields_through_to_its_lines(self):
+        wire = _wire_work_item()
+        wire["sale"]["lines"][0].update(erpnextBatchRef={"doctype": "Batch", "name": "B1"}, trackingMode="batch")
+        (line,) = c.PostingWorkItem.from_wire(wire).sale.lines
+        assert (line.erpnext_batch_ref, line.tracking_mode) == ("B1", "batch")

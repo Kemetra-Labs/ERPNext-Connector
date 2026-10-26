@@ -31,6 +31,17 @@ from datetime import datetime, timezone
 
 import frappe
 
+from .batch_policy import (
+    BatchPostingMismatch,
+    TrackedLineRejected,
+    assert_batches_belong,
+    assert_tracking_postable,
+    is_batch_item,
+    line_tracking,
+    return_batch_intents,
+    sale_batch_intents,
+    verify_batch_postings,
+)
 from .builder import LineDiscountNotPostable, UnmappedUnit, build_sales_invoice
 from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
@@ -57,7 +68,6 @@ from .reversal_policy import UnsupportedReversal, assert_reversal_supported
 from .stock_policy import (
     ReturnLineMismatch,
     UnsupportedTrackedItem,
-    assert_no_tracked_items,
     link_return_to_original,
     link_void_to_original,
     mirror_company,
@@ -606,11 +616,12 @@ def post_work_item(
 
     _log_stamp_adjustments(stamp, work_item, correlation_id)
 
-    # RT-48 / RT-47 D4 — the sale moves stock, so a batch/serial Item fails closed (ERPNext would
-    # otherwise auto-pick a batch, i.e. guess one). After the replay guard, before insert.
-    rejected = _guard_tracked_items(doc_payload, work_item, client, correlation_id)
-    if rejected is not None:
-        return rejected
+    # RT-48 / RT-47 D4 — the sale moves stock, so a serial Item fails closed and a batch Item posts
+    # only with its feed Batch (RT-452; ERPNext would otherwise auto-pick one, i.e. guess). After the
+    # replay guard, before insert.
+    batch_intents = _guard_tracked_items(doc_payload, work_item, client, correlation_id)
+    if isinstance(batch_intents, str):
+        return batch_intents  # the rejection outcome
 
     # T031 — submit on ERPNext (interim SI-only; rider R1 — no Payment Entry here).
     try:
@@ -620,7 +631,7 @@ def post_work_item(
         _assert_frozen_warehouse(work_item, company)  # RT-434: a feed warehouseRef, before insert
         doc_payload = {**doc_payload, "company": company}
         expected = expected_from_payload(doc_payload)  # what ERPNext must persist
-        sinv = _submit_atomically(doc_payload, expected)
+        sinv = _submit_atomically(doc_payload, expected, batch_intents)
         document_ref = ErpnextDocumentRef(doctype=_SALES_INVOICE, name=sinv.name)
     except _transient_exceptions() as exc:
         # T051 — transient (timeout/lock) → failed_transient; DP2 re-offers (no self-retry).
@@ -638,9 +649,10 @@ def post_work_item(
         return _recover_or_reject_unsupported(
             work_item, key, exc, client=client, store=store, correlation_id=correlation_id
         )
-    except (SettlementDrift, RepresentationMismatch, SiteCompanyNotConfigured) as exc:
+    except (SettlementDrift, RepresentationMismatch, BatchPostingMismatch, SiteCompanyNotConfigured) as exc:
         # RT-78 — ERPNext's computed totals left change/outstanding/write-off on a settled invoice.
         # RT-378 / D1 — ERPNext holds a value Retail Tower did not send ("representation: ...");
+        # RT-452 — ERPNext posted another Batch or quantity than the intent (never a success);
         # SiteCompanyNotConfigured is a plain config rejection (no default company), before insert.
         # _submit_atomically already rolled the insert back; nothing was submitted. Caught BEFORE the
         # dup-provenance clause, whose fallback catches Exception on a frappe missing those names.
@@ -811,9 +823,11 @@ def _post_reversal(
         return linked  # the rejection outcome
     doc_payload = linked
 
-    rejected = _guard_tracked_items(doc_payload, work_item, client, correlation_id)
-    if rejected is not None:
-        return rejected
+    # RT-452 / G7-10 — a batch row carries no Batch of its own: ERPNext rebuilds the original row's
+    # Batch through sales_invoice_item, so the original row must hold exactly one in its bundle.
+    batch_intents = _guard_tracked_items(doc_payload, work_item, client, correlation_id)
+    if isinstance(batch_intents, str):
+        return batch_intents  # the rejection outcome
 
     # Submit on ERPNext. The `unique_rt_si_provenance` index spans ALL Sales Invoices (incl.
     # is_return=1), so a second submit of the SAME reversal key (its work_item_ref) collides and is
@@ -821,7 +835,7 @@ def _post_reversal(
     # work_item_ref into rt_external_id (#28 re-key), it does NOT collide with the original SI's slot.
     try:
         expected = expected_from_payload(doc_payload)  # RT-378: company = the original's (linked)
-        sinv = _submit_atomically(doc_payload, expected)
+        sinv = _submit_atomically(doc_payload, expected, batch_intents)
         document_ref = ErpnextDocumentRef(doctype=_SALES_INVOICE, name=sinv.name)
     except _transient_exceptions() as exc:
         client.ack_outcome(
@@ -831,9 +845,10 @@ def _post_reversal(
         )
         _log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
         return "failed_transient"
-    except (SettlementDrift, RepresentationMismatch) as exc:
+    except (SettlementDrift, RepresentationMismatch, BatchPostingMismatch) as exc:
         # RT-78 — ERPNext's computed totals left change/outstanding/write-off on a settled invoice.
         # RT-378 / D1 — ERPNext holds a value Retail Tower did not send ("representation: ...").
+        # RT-452 — the return bundle's Batch or quantity is not the original row's.
         # _submit_atomically already rolled the insert back; nothing was submitted. Caught BEFORE the
         # dup-provenance clause, whose fallback catches Exception on a frappe missing those names.
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
@@ -983,7 +998,7 @@ def _recover_or_reject_unsupported(
 _SUBMIT_SAVEPOINT = "rt_posting_submit"
 
 
-def _submit_atomically(doc_payload: dict, expected: ExpectedInvoice):
+def _submit_atomically(doc_payload: dict, expected: ExpectedInvoice, batch_intents: dict[int, str] | None = None):
     """Insert + submit one Sales Invoice as a unit: on ANY failure, undo it before re-raising (RT-48).
 
     ⏳ BENCH-VALIDATION. A submit can fail PART-WAY. The RT-48 bench run proved it: a missing
@@ -995,6 +1010,10 @@ def _submit_atomically(doc_payload: dict, expected: ExpectedInvoice):
 
     RT-378 (D1): after ``insert()`` the document ERPNext computed must hold exactly ``expected``;
     otherwise :class:`RepresentationMismatch` rolls it back like any other failure.
+
+    RT-452 (891/892): after ``submit()`` each batch row in ``batch_intents`` (``{row position: Batch}``)
+    must have posted exactly that Batch and quantity; otherwise :class:`BatchPostingMismatch` rolls the
+    submitted invoice, its Stock Ledger Entries and bundles back. The ledger exists only after submit.
     """
     frappe.db.savepoint(_SUBMIT_SAVEPOINT)
     try:
@@ -1012,6 +1031,8 @@ def _submit_atomically(doc_payload: dict, expected: ExpectedInvoice):
                 expected_total=payments_total(doc_payload["payments"]),
             )
         sinv.submit()
+        if batch_intents:
+            _verify_batch_postings(sinv.name, batch_intents, inward=bool(doc_payload.get("is_return")))
     except BaseException:
         frappe.db.rollback(save_point=_SUBMIT_SAVEPOINT)
         raise
@@ -1039,19 +1060,92 @@ def _guard_tracked_items(
     work_item: PostingWorkItem,
     client: PostingFeedClient,
     correlation_id: str,
-) -> str | None:
-    """Reject a stock-moving doc carrying a batch/serial Item (RT-47 D4). Returns the outcome if rejected.
+) -> dict[int, str] | str:
+    """Apply the RT-452 batch policy before insert. Returns ``{row position: Batch}``, or the rejection outcome.
 
-    ⏳ BENCH-VALIDATION. The decision is the pure ``stock_policy.assert_no_tracked_items``; this
-    only reads the Item flags. A read failure is non-retryable ``other`` (never escapes the page).
+    ⏳ BENCH-VALIDATION. The decisions are the pure ``batch_policy`` functions; this only reads the
+    Item flags, the Batch master and, for a credit note, the original rows' bundles. A serial Item, a
+    tracking disagreement or an unusable Batch is ``validation``; a read failure is non-retryable
+    ``other`` (never escapes the page). An untracked document reads nothing beyond the Item flags.
     """
     try:
-        assert_no_tracked_items(doc_payload, _read_item_tracking(doc_payload))
-    except UnsupportedTrackedItem as exc:
+        tracking = _read_item_tracking(doc_payload)
+        lines = line_tracking(work_item)
+        assert_tracking_postable(doc_payload, lines, tracking)
+        if doc_payload.get("is_return"):
+            original_batches = _read_original_batches(doc_payload, tracking)
+            return return_batch_intents(doc_payload, lines, tracking, original_batches)
+        intents = sale_batch_intents(doc_payload, tracking)
+        if intents:
+            assert_batches_belong(doc_payload, _read_batch_masters(intents.values()))
+        return intents
+    except (UnsupportedTrackedItem, TrackedLineRejected, ReturnLineMismatch) as exc:
         return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
     except Exception as exc:
         return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
-    return None
+
+
+def _read_batch_masters(names) -> dict[str, dict]:
+    """Read ``{Batch name: {item}}`` for the Batches a sale posts (RT-452). ⏳ BENCH-VALIDATION."""
+    rows = frappe.get_all("Batch", filters={"name": ["in", sorted(set(names))]}, fields=["name", "item"])
+    return {row["name"]: row for row in rows}
+
+
+def _read_original_batches(doc_payload: dict, tracking: dict[str, dict]) -> dict[str, list[str] | None]:
+    """Read ``{original row name: its bundle's Batches}`` for a credit note's batch rows (G7-10).
+
+    ⏳ BENCH-VALIDATION. ``None`` = the original row has no Serial and Batch Bundle. Nothing is read
+    for a credit note with no batch row.
+    """
+    names = sorted(
+        {
+            item["sales_invoice_item"]
+            for item in doc_payload.get("items") or []
+            if item.get("sales_invoice_item") and is_batch_item(tracking.get(item["item_code"]))
+        }
+    )
+    if not names or not doc_payload.get("update_stock"):
+        return {}
+    rows = frappe.get_all(
+        "Sales Invoice Item", filters={"name": ["in", names]}, fields=["name", "serial_and_batch_bundle"]
+    )
+    bundles = sorted({row["serial_and_batch_bundle"] for row in rows if row.get("serial_and_batch_bundle")})
+    entries = _read_bundle_entries(bundles, ["parent", "batch_no"])
+    return {
+        row["name"]: (
+            [entry["batch_no"] for entry in entries if entry["parent"] == row["serial_and_batch_bundle"]]
+            if row.get("serial_and_batch_bundle")
+            else None
+        )
+        for row in rows
+    }
+
+
+def _read_bundle_entries(bundles: list[str], fields: list[str]) -> list[dict]:
+    """The Serial and Batch Entries of ``bundles`` (none read for no bundle). ⏳ BENCH-VALIDATION."""
+    if not bundles:
+        return []
+    return frappe.get_all("Serial and Batch Entry", filters={"parent": ["in", bundles]}, fields=fields)
+
+
+def _verify_batch_postings(invoice: str, batch_intents: dict[int, str], *, inward: bool) -> None:
+    """Read the submitted invoice's rows, live Stock Ledger Entries and bundle entries; verify them (RT-452).
+
+    ⏳ BENCH-VALIDATION. Called inside ``_submit_atomically``'s savepoint, so a mismatch rolls back.
+    """
+    rows = frappe.get_all(
+        "Sales Invoice Item",
+        filters={"parent": invoice, "parenttype": _SALES_INVOICE},
+        fields=["name", "idx", "stock_qty", "serial_and_batch_bundle"],
+    )
+    ledger = frappe.get_all(
+        "Stock Ledger Entry",
+        filters={"voucher_type": _SALES_INVOICE, "voucher_no": invoice, "is_cancelled": 0},
+        fields=["voucher_detail_no", "actual_qty", "serial_and_batch_bundle"],
+    )
+    bundles = sorted({row["serial_and_batch_bundle"] for row in rows if row.get("serial_and_batch_bundle")})
+    entries = _read_bundle_entries(bundles, ["parent", "batch_no", "qty"])
+    verify_batch_postings(batch_intents, inward=inward, rows=rows, ledger=ledger, entries=entries)
 
 
 def _posting_clock() -> PostingClock:

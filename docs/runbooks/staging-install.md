@@ -90,10 +90,35 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
    per store warehouse, with quantity and valuation rate, dated **before** the first POS sale.
    It is strongly recommended for a correct baseline, but a missing balance does not block sales
    (see 1).
-5. **Pilot Items are non-batch and non-serial** (`has_batch_no = 0`, `has_serial_no = 0`). The
-   connector rejects a stock-moving invoice that contains a batch- or serial-tracked Item
-   (`validation`), so one tracked line rejects the whole basket. Batch/expiry is a separate
-   pharmacy capability (RT-50). This technical pilot is **not** pharmacy readiness.
+5. **Pilot Items are non-batch and non-serial** (`has_batch_no = 0`, `has_serial_no = 0`). A
+   serial-tracked Item is always rejected (`validation`), so one serial line rejects the whole
+   basket. A batch-tracked Item posts only when Backend-Core sends its ERPNext Batch with the line
+   (RT-452, below). Until tracked selling is turned on for the tenant, a batch Item is rejected
+   exactly as before. Batch/expiry is a separate pharmacy capability (RT-50). This technical pilot
+   is **not** pharmacy readiness.
+
+   **Batch prerequisites (RT-50 B3), only for a tenant with tracked selling:**
+   - Batch-tracked Items have `has_batch_no = 1` (and `has_expiry_date = 1` when they expire),
+     matching the Retail Tower Catalog Tracking Profile. An Item whose flags disagree with the
+     profile is rejected (`validation`). Serial Items stay unsupported.
+   - Every sellable lot exists as an ERPNext **Batch** of that Item, with its expiry date, created
+     in ERPNext. The connector never creates a Batch.
+   - **Batch naming convention:** the operator agrees a convention so that the printed lot code
+     maps to the ERPNext Batch name. Backend-Core maps lots to Batches only from ERP evidence and
+     never assumes the two are equal. Without the convention, scanned lots do not resolve.
+   - Opening stock per Batch comes from an *Opening Stock* Stock Reconciliation per store
+     warehouse.
+   - Stock Settings checklist (old D8): `pick_serial_and_batch_based_on = Expiry` is recommended
+     for ERP-native flows. The connector itself never relies on ERPNext picking a Batch: it sets
+     the line's Batch explicitly (row `batch_no` with `use_serial_batch_fields = 1`) and checks
+     the posted Batch and quantity after submit.
+   - Batch-level negative stock (`allow_negative_stock_for_batch`) is a finance decision (RT-50
+     B2). While it is off, a sale beyond a Batch's book quantity is rejected (`validation`). Fix
+     the stock, then use the Backend-Core posting repair (`re_post`).
+   - An expired, disabled or unknown Batch, or a Batch of another Item, is rejected
+     (`validation`, nothing posted). Fix ERPNext, then use `re_post`.
+   - A void or a return restores stock to the original sale's Batch. ERPNext rebuilds it from the
+     original invoice row, and the connector checks it after submit.
 
 6. **Confirm the exactly-once indexes exist (Gate G5) before go-live and after every upgrade.**
    Stock now moves inside the Sales Invoice submit, so a missing index duplicates **stock as well

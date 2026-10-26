@@ -5,11 +5,11 @@
 
 Owner decisions (RT-47 comment 10287; RT-48 comment 10291):
 
-  - **D4 — no guessed batches.** The technical pilot moves stock only for non-batch / non-serial
-    Items. ERPNext would otherwise AUTO-PICK a batch/serial on an outward line
-    (``auto_create_serial_and_batch_bundle_for_outward`` defaults on) — a guess — so a tracked
-    Item on a stock-moving document fails CLOSED (:class:`UnsupportedTrackedItem` → ``validation``).
-    Batch/expiry is a separate pharmacy capability (RT-50).
+  - **D4 — no guessed batches.** ERPNext would otherwise AUTO-PICK a batch/serial on an outward line
+    (``auto_create_serial_and_batch_bundle_for_outward`` defaults on) — a guess. A serial Item on a
+    stock-moving document fails CLOSED (:class:`UnsupportedTrackedItem` → ``validation``). RT-452
+    (RT-50 G7-11) replaces the blanket rule for batch Items: they post only with the Batch the feed
+    supplies (``batch_policy``).
   - **D5 — a full void restores stock exactly once, and only if the sale moved it.** The return
     invoice MIRRORS the original invoice's ``update_stock`` (a legacy ``update_stock=0`` invoice
     gets an accounting-only credit note — never a fabricated stock restoration; ERPNext also refuses
@@ -43,12 +43,12 @@ from decimal import Decimal
 
 
 class UnsupportedTrackedItem(Exception):
-	"""A batch- or serial-tracked Item on a stock-moving document (RT-47 D4 fail-closed)."""
+	"""A serial-tracked Item on a stock-moving document (RT-47 D4 fail-closed; batch Items: RT-452)."""
 
 	def __init__(self, item_codes: Sequence[str]) -> None:
 		super().__init__(
-			f"stock posting does not support batch/serial-tracked Item(s) {', '.join(item_codes)} "
-			"(V1 technical pilot: non-batch, non-serial Items only; the connector never guesses a batch)"
+			f"stock posting does not support serial-tracked Item(s) {', '.join(item_codes)} "
+			"(serial selling is fail-closed, RT-50 Q11; the connector never guesses a serial or batch)"
 		)
 		self.item_codes = tuple(item_codes)
 
@@ -73,28 +73,6 @@ def tracking_item_codes(doc: Mapping[str, object]) -> list[str]:
 		if code not in seen:
 			seen.append(code)
 	return seen
-
-
-def assert_no_tracked_items(doc: Mapping[str, object], tracking: Mapping[str, Mapping[str, object]]) -> None:
-	"""Raise :class:`UnsupportedTrackedItem` if a stock-moving ``doc`` carries a batch/serial Item.
-
-	``tracking`` maps ``item_code`` → ``{has_batch_no, has_serial_no}`` (read by the glue from the
-	ERPNext Item master). A document that does not move stock (``update_stock`` falsy) is not
-	checked — no Serial and Batch Bundle is involved. An Item absent from ``tracking`` is left to
-	ERPNext's own link validation (it rejects an unknown Item on insert).
-	"""
-	if not doc.get("update_stock"):
-		return
-	tracked = [code for code in tracking_item_codes(doc) if _is_tracked(tracking.get(code))]
-	if tracked:
-		raise UnsupportedTrackedItem(tracked)
-
-
-def _is_tracked(flags: Mapping[str, object] | None) -> bool:
-	"""True if an Item's master flags mark it batch- or serial-tracked (absent Item → False)."""
-	if not flags:
-		return False
-	return bool(int(flags.get("has_batch_no") or 0) or int(flags.get("has_serial_no") or 0))
 
 
 def link_void_to_original(
