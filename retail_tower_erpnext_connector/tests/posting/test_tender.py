@@ -6,6 +6,51 @@
 import pytest
 
 from retail_tower_erpnext_connector.connector.posting import tender as t
+from retail_tower_erpnext_connector.connector.posting.contracts import SaleTender
+
+_MODES = t.TenderModeMap({"cash": "Cash", "card_external": "Card Clearing"}).resolve
+
+
+class TestPaymentRowOrder:
+    """RT-361 / RT-264 D4: one row per tender (same method included), in ``sequence`` order."""
+
+    def test_same_method_tenders_are_two_rows_never_merged(self):
+        tenders = [
+            SaleTender("cash", "15.00", tender_ref="r-1", sequence=1),
+            SaleTender("cash", "5.00", tender_ref="r-2", sequence=2),
+        ]
+        rows = t.build_payments(tenders, line_amounts=["20.00"], mode_of_payment_for=_MODES)
+        assert rows == [
+            {"mode_of_payment": "Cash", "amount": "15.00"},
+            {"mode_of_payment": "Cash", "amount": "5.00"},
+        ]
+
+    def test_rows_follow_sequence_not_wire_order(self):
+        tenders = [
+            SaleTender("cash", "5.00", tender_ref="r-2", sequence=2),
+            SaleTender("card_external", "3.00", "AB12", tender_ref="r-3", sequence=3),
+            SaleTender("cash", "15.00", tender_ref="r-1", sequence=1),
+        ]
+        rows = t.build_payments(tenders, line_amounts=["23.00"], mode_of_payment_for=_MODES)
+        assert [r["amount"] for r in rows] == ["15.00", "5.00", "3.00"]
+        assert t.tender_refs_in_row_order(tenders) == ["r-1", "r-2", "r-3"]
+
+    def test_rows_carry_no_tender_identity(self):
+        # D4: tenderRef / sequence never reach the ERPNext document.
+        tenders = [SaleTender("cash", "20.00", tender_ref="r-1", sequence=1)]
+        (row,) = t.build_payments(tenders, line_amounts=["20.00"], mode_of_payment_for=_MODES)
+        assert set(row) == {"mode_of_payment", "amount"}
+
+    def test_legacy_tenders_keep_wire_order(self):
+        tenders = [SaleTender("card_external", "5.00"), SaleTender("cash", "15.00")]
+        assert t.ordered_tenders(tenders) == tenders
+        assert t.tender_refs_in_row_order(tenders) == [None, None]
+
+    def test_tenders_without_a_sequence_follow_the_sequenced_ones_in_wire_order(self):
+        # Backend-Core projects ORDER BY sequence NULLS LAST; the sort is stable for the rest.
+        a, b, c = SaleTender("cash", "1.00"), SaleTender("cash", "2.00", sequence=2), SaleTender("cash", "3.00")
+        d = SaleTender("card_external", "4.00", sequence=1)
+        assert t.ordered_tenders([a, b, c, d]) == [d, b, a, c]
 
 
 class TestTenderModeMap:

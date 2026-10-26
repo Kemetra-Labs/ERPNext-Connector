@@ -260,6 +260,51 @@ class TestSettlementInGlue:
 		assert client.acks[0]["reason"]["category"] == "validation"
 		assert fake.events == ["savepoint", "insert", "rollback"] and store.writes == []
 
+	def test_same_method_split_tender_settles_with_two_rows_and_logs_its_refs(self, load_glue):
+		# RT-361 (G1): two cash tender lines post as two Cash rows (sequence order), the settlement
+		# check passes, and each row's tenderRef goes to the Connector's own log only (RT-264 D4).
+		fake = _Frappe()
+		ref_1, ref_2 = "7c9e6679-7425-40de-944b-e07fc1f90ae7", "16fd2706-8baf-433b-82eb-8c7fada847da"
+		work_item = _sale(
+			[
+				{"method": "cash", "amount": "0.49", "tenderRef": ref_2, "sequence": 2},
+				{"method": "cash", "amount": "10.00", "tenderRef": ref_1, "sequence": 1},
+			]
+		)
+		outcome, client, store = _post(load_glue(fake), work_item, tender_map={"cash": "Cash"})
+		assert outcome == "posted"
+		(payload,) = fake.payloads
+		assert payload["payments"] == [
+			{"mode_of_payment": "Cash", "amount": "10.00"},
+			{"mode_of_payment": "Cash", "amount": "0.49"},
+		]
+		assert ref_1 not in str(payload) and ref_2 not in str(payload)
+		assert fake.events == ["savepoint", "insert", "submit"]
+		assert client.acks[0]["outcome"] == "posted" and len(store.writes) == 1
+		posted = [r for _level, r in fake._logger.records if r.get("event") == "posting.posted"]
+		assert [r["tender_refs"] for r in posted] == [[ref_1, ref_2]]
+
+	def test_an_existing_invoice_ack_logs_no_tender_refs(self, load_glue, monkeypatch):
+		# CodeRabbit PR #49: a replay / recovered invoice's payment rows are not compared, so they are
+		# never attributed to the incoming tenderRefs; only a fresh submit logs them.
+		fake = _Frappe()
+		glue = load_glue(fake)
+		monkeypatch.setattr(glue, "_existing_mismatch", lambda work_item, document_ref: None)
+		work_item = _sale(
+			[{"method": "cash", "amount": "10.49", "tenderRef": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "sequence": 1}]
+		)
+		ref = c.ErpnextDocumentRef(doctype="Sales Invoice", name="SINV-0001")
+		assert glue._ack_existing(_Client(), work_item, ref, "rt361-test", "posting.replayed") == "posted"
+		(replayed,) = [r for _level, r in fake._logger.records if r.get("event") == "posting.replayed"]
+		assert "tender_refs" not in replayed
+
+	def test_legacy_tenders_log_no_tender_refs(self, load_glue):
+		fake = _Frappe()
+		outcome, _client, _store = _post(load_glue(fake), _sale(_CASH), tender_map={"cash": "Cash"})
+		assert outcome == "posted"
+		posted = [r for _level, r in fake._logger.records if r.get("event") == "posting.posted"]
+		assert len(posted) == 1 and "tender_refs" not in posted[0]
+
 	def test_tender_unknown_sale_skips_the_settlement_check(self, load_glue):
 		# An unpaid invoice legitimately keeps its outstanding amount (RT-10 D8).
 		fake = _Frappe()

@@ -82,7 +82,24 @@ def build_payments(
         return []
     _assert_tenders_cover_lines(tenders, line_amounts)
     resolve = mode_of_payment_for or _unwired
-    return [{"mode_of_payment": resolve(t.method), "amount": t.amount} for t in tenders]
+    # RT-361 / RT-264 D4: one row per tender, same-method tenders included (never merged), in
+    # sequence order. tenderRef and sequence stay off the document.
+    return [{"mode_of_payment": resolve(t.method), "amount": t.amount} for t in ordered_tenders(tenders)]
+
+
+def ordered_tenders(tenders: Sequence[SaleTender]) -> list[SaleTender]:
+    """``tenders`` in payment-row order (RT-361): by ``sequence``, then those without one, in wire order.
+
+    The feed contract builds the rows "in ``sequence`` order (tenders without it keep the order
+    given)"; Backend-Core projects them ``ORDER BY sequence NULLS LAST``, so a tender without a
+    sequence follows the sequenced ones. The sort is stable, so legacy tenders keep wire order.
+    """
+    return sorted(tenders, key=lambda t: (t.sequence is None, t.sequence or 0))
+
+
+def tender_refs_in_row_order(tenders: Sequence[SaleTender]) -> list[str | None]:
+    """The ``tenderRef`` of each payment row, by row position (RT-361 evidence; ``None`` = legacy)."""
+    return [t.tender_ref for t in ordered_tenders(tenders)]
 
 
 def _decimal_sum(amounts: Sequence[str]) -> Decimal:

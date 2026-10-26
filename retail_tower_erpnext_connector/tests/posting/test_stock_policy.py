@@ -224,6 +224,21 @@ class TestVoidSettlementMirror:
 		with pytest.raises(sp.VoidSettlementMismatch, match="total"):
 			_link(_paid_void(("Cash", "-199.00")), original_is_pos=1, original_payments=_ORIGINAL_PAYMENTS)
 
+	def test_same_method_original_rows_are_mirrored_row_for_row(self):
+		# RT-361 (G1): an original paid with two Cash rows is refunded through two Cash rows, never merged.
+		doc = _link(
+			_paid_void(("Cash", "-150.00"), ("Cash", "-50.00")),
+			original_is_pos=1,
+			original_payments=[
+				{"mode_of_payment": "Cash", "amount": 50.0, "idx": 2},
+				{"mode_of_payment": "Cash", "amount": 150.0, "idx": 1},
+			],
+		)
+		assert doc["payments"] == [
+			{"mode_of_payment": "Cash", "amount": "-150.0"},
+			{"mode_of_payment": "Cash", "amount": "-50.0"},
+		]
+
 	def test_a_settlement_mismatch_is_a_return_line_mismatch(self):
 		# The glue maps ReturnLineMismatch to validation; the settlement check must ride that path.
 		assert issubclass(sp.VoidSettlementMismatch, sp.ReturnLineMismatch)

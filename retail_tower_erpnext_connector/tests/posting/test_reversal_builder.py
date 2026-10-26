@@ -489,6 +489,18 @@ class TestVoidSettlement:
 			{"mode_of_payment": None, "amount": "-50.00"},
 		]
 
+	def test_void_of_a_same_method_split_tender_keeps_one_row_per_tender(self):
+		# RT-361 (G1): two cash tender lines are refunded as two rows in sequence order, never merged.
+		wi = _with_tenders(
+			_void_work_item(),
+			c.SaleTender("cash", "50.00", tender_ref="16fd2706-8baf-433b-82eb-8c7fada847da", sequence=2),
+			c.SaleTender("cash", "150.00", tender_ref="7c9e6679-7425-40de-944b-e07fc1f90ae7", sequence=1),
+		)
+		assert _build(wi)["payments"] == [
+			{"mode_of_payment": None, "amount": "-150.00"},
+			{"mode_of_payment": None, "amount": "-50.00"},
+		]
+
 	def test_void_does_not_need_the_current_tender_map(self):
 		# Codex P2 / Greptile, PR #48: a mapping removed after the sale must not make a fully
 		# reconstructable void fail as UnmappedTender before the original invoice is read.

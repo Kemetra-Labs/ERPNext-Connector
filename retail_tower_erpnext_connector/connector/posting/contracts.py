@@ -46,6 +46,9 @@ TENDER_METHODS: frozenset[str] = frozenset({"cash", "card_external"})
 # them with fullmatch: under match, Python `$` also accepts a trailing "\n" (RT-875).
 _NON_NEGATIVE_DECIMAL_RE = re.compile(r"^\d{1,15}(\.\d{1,4})?$", re.ASCII)
 _TENDER_REFERENCE_RE = re.compile(r"^[A-Z0-9]{1,6}$")
+# 012 SaleTender.tenderRef (`format: uuid`, RT-359): the canonical hyphenated 8-4-4-4-12 form only.
+# uuid.UUID() would also take braces, a urn:uuid: prefix or no hyphens.
+_TENDER_REF_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 # RFC 3339 ``date-time`` (full-date "T" full-time with seconds and an offset); fromisoformat alone
 # also accepts forms without seconds or in basic format, and some Pythons normalize 24:00 to the next
 # midnight — so hour/minute/second/offset ranges are part of the grammar (Codex P2, PR #49).
@@ -286,11 +289,19 @@ class SaleTender:
     on ``cash`` or a reference outside the short card-terminal pattern raises ``ValueError``, which
     the transport isolates as ``malformed_work_item`` → ``validation``. The connector never guesses
     or repairs a tender (Principle VI). ``reference`` is the terminal's short reference, never card data.
+
+    RT-361 (feed 1.7.0-draft, RT-359): the optional ``tenderRef`` (canonical uuid) and ``sequence``
+    (integer >= 1) are parsed strictly too. Neither is written to the ERPNext document (RT-264 D4):
+    ``sequence`` orders the payment rows and ``tenderRef`` goes to the Connector's own log only. A
+    tender without ``tenderRef`` is a legacy tender (one per method). Other unknown keys are still
+    ignored, as the feed's rollout order expects.
     """
 
     method: str
     amount: str
     reference: str | None = None
+    tender_ref: str | None = None
+    sequence: int | None = None
 
     @classmethod
     def from_wire(cls, wire: Mapping[str, object]) -> SaleTender:
@@ -314,16 +325,58 @@ class SaleTender:
                 raise ValueError(
                     f"SaleTender.reference must match ^[A-Z0-9]{{1,6}}$, got {reference!r}"
                 )
-        return cls(method=str(method), amount=amount, reference=reference)
+        return cls(
+            method=str(method),
+            amount=amount,
+            reference=reference,
+            tender_ref=_parse_tender_ref(wire.get("tenderRef")),
+            sequence=_parse_tender_sequence(wire.get("sequence")),
+        )
+
+
+def _parse_tender_ref(raw: object) -> str | None:
+    """``SaleTender.tenderRef`` (RT-359): absent / null → a legacy tender; else a canonical uuid."""
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not _TENDER_REF_RE.fullmatch(raw):
+        raise ValueError(f"SaleTender.tenderRef must be a canonical uuid string, got {raw!r}")
+    return raw
+
+
+def _parse_tender_sequence(raw: object) -> int | None:
+    """``SaleTender.sequence`` (RT-359): absent / null → none; else an integer >= 1.
+
+    ``type(raw) is int`` on purpose: ``bool`` is an ``int`` subclass, so ``true`` must not pass as 1,
+    and ``1.0`` is not an integer on the wire.
+    """
+    if raw is None:
+        return None
+    if type(raw) is not int or raw < 1:
+        raise ValueError(f"SaleTender.sequence must be an integer >= 1, got {raw!r}")
+    return raw
 
 
 def _parse_tenders(raw: object) -> tuple[SaleTender, ...]:
-    """``Sale.tenders``: absent / null / empty → ``()`` (tender-unknown, RT-10 D8); else each parsed."""
+    """``Sale.tenders``: absent / null / empty → ``()`` (tender-unknown, RT-10 D8); else each parsed.
+
+    RT-359 per-sale rules: ``tenderRef`` and ``sequence`` are each unique within the sale. A
+    duplicate raises ``ValueError`` (``malformed_work_item`` → ``validation``), never a guessed order.
+    """
     if raw is None:
         return ()
     if not isinstance(raw, list):
         raise ValueError(f"Sale.tenders must be a list, got {type(raw).__name__}")
-    return tuple(SaleTender.from_wire(t) for t in raw)
+    tenders = tuple(SaleTender.from_wire(t) for t in raw)
+    _assert_unique([t.tender_ref and t.tender_ref.lower() for t in tenders], "tenderRef")  # uuid case-blind
+    _assert_unique([t.sequence for t in tenders], "sequence")
+    return tenders
+
+
+def _assert_unique(values: list[object], field: str) -> None:
+    """Raise ``ValueError`` when a non-null ``field`` value repeats within one sale's tenders."""
+    present = [v for v in values if v is not None]
+    if len(present) != len(set(present)):
+        raise ValueError(f"Sale.tenders: SaleTender.{field} must be unique within the sale, got {present!r}")
 
 
 @dataclass(frozen=True)

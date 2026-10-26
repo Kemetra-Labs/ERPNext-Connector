@@ -267,6 +267,92 @@ class TestSaleTenders:
             c.PostingWorkItem.from_wire(self._with_tenders({"method": "cash", "amount": "1.00"}))
 
 
+_REF_1 = "0b4d6a2e-5c1f-4e8a-9d3b-7f2a1c6e8b01"
+_REF_2 = "0b4d6a2e-5c1f-4e8a-9d3b-7f2a1c6e8b02"
+
+
+class TestSaleTenderIdentity:
+    """RT-361 (feed 1.7.0-draft, RT-359): optional ``tenderRef`` / ``sequence``, parsed strictly.
+
+    A malformed value raises ``ValueError`` (``malformed_work_item`` → ``validation``).
+    """
+
+    def _parse(self, tenders):
+        wire = _wire_work_item()
+        wire["sale"]["tenders"] = tenders
+        return c.PostingWorkItem.from_wire(wire).sale.tenders
+
+    def test_same_method_tenders_keep_their_identity(self):
+        tenders = self._parse(
+            [
+                {"method": "cash", "amount": "15.00", "tenderRef": _REF_1, "sequence": 1},
+                {"method": "cash", "amount": "5.00", "tenderRef": _REF_2, "sequence": 2},
+            ]
+        )
+        assert tenders == (
+            c.SaleTender(method="cash", amount="15.00", tender_ref=_REF_1, sequence=1),
+            c.SaleTender(method="cash", amount="5.00", tender_ref=_REF_2, sequence=2),
+        )
+
+    def test_legacy_tender_has_neither(self):
+        (tender,) = self._parse([{"method": "cash", "amount": "1.00"}])
+        assert tender.tender_ref is None and tender.sequence is None
+
+    def test_explicit_nulls_are_absent(self):
+        (tender,) = self._parse([{"method": "cash", "amount": "1.00", "tenderRef": None, "sequence": None}])
+        assert tender.tender_ref is None and tender.sequence is None
+
+    def test_uppercase_uuid_is_accepted(self):
+        (tender,) = self._parse([{"method": "cash", "amount": "1.00", "tenderRef": _REF_1.upper()}])
+        assert tender.tender_ref == _REF_1.upper()
+
+    @pytest.mark.parametrize(
+        "ref",
+        [
+            "",
+            "not-a-uuid",
+            _REF_1.replace("-", ""),  # unhyphenated
+            "{" + _REF_1 + "}",  # braces
+            "urn:uuid:" + _REF_1,
+            _REF_1 + "\n",  # fullmatch, not match (RT-875)
+            _REF_1[:-1] + "g",
+            1234,
+            ["x"],
+        ],
+    )
+    def test_tender_ref_must_be_a_canonical_uuid(self, ref):
+        with pytest.raises(ValueError, match="tenderRef"):
+            self._parse([{"method": "cash", "amount": "1.00", "tenderRef": ref}])
+
+    @pytest.mark.parametrize("sequence", [0, -1, True, False, 1.0, "1", [1]])
+    def test_sequence_must_be_an_integer_from_one(self, sequence):
+        with pytest.raises(ValueError, match="sequence"):
+            self._parse([{"method": "cash", "amount": "1.00", "sequence": sequence}])
+
+    def test_duplicate_tender_ref_in_a_sale_is_malformed(self):
+        with pytest.raises(ValueError, match="tenderRef must be unique"):
+            self._parse(
+                [
+                    {"method": "cash", "amount": "1.00", "tenderRef": _REF_1},
+                    {"method": "cash", "amount": "2.00", "tenderRef": _REF_1.upper()},  # same uuid
+                ]
+            )
+
+    def test_duplicate_sequence_in_a_sale_is_malformed(self):
+        with pytest.raises(ValueError, match="sequence must be unique"):
+            self._parse(
+                [
+                    {"method": "cash", "amount": "1.00", "sequence": 1},
+                    {"method": "card_external", "amount": "2.00", "sequence": 1},
+                ]
+            )
+
+    def test_other_unknown_tender_keys_are_still_ignored(self):
+        # The feed's rollout order: an additive field the Connector predates must not reject the item.
+        (tender,) = self._parse([{"method": "cash", "amount": "1.00", "futureField": "x"}])
+        assert tender == c.SaleTender(method="cash", amount="1.00")
+
+
 
 class TestReversalTimestamps:
     """RT-16 / RT-63 (decision 10348): ``reversalOf.recordedAt`` + ``reversalOf.businessDate``.

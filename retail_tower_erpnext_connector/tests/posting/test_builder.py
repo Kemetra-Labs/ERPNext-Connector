@@ -366,6 +366,10 @@ def _tendered(tenders, *, tax_amount=None, pos_total="200.00") -> c.PostingWorkI
     )
 
 
+_REF_A = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+_REF_B = "16fd2706-8baf-433b-82eb-8c7fada847da"
+
+
 def _settle(work_item, **kw):
     return b.build_sales_invoice(
         work_item,
@@ -458,6 +462,24 @@ class TestSettlement:
             _tendered([{"method": "cash", "amount": "100"}, {"method": "cash", "amount": "100.0000"}])
         )
         assert [p["amount"] for p in doc["payments"]] == ["100", "100.0000"]
+
+    def test_same_method_split_tender_posts_one_row_per_tender_in_sequence_order(self):
+        # RT-361 (G1): two cash tender lines stay two Cash rows; the wire order is not the row order.
+        doc = _settle(
+            _tendered(
+                [
+                    {"method": "cash", "amount": "50.00", "tenderRef": _REF_B, "sequence": 2},
+                    {"method": "cash", "amount": "150.00", "tenderRef": _REF_A, "sequence": 1},
+                ]
+            )
+        )
+        assert doc["is_pos"] == 1
+        assert doc["payments"] == [
+            {"mode_of_payment": "Cash", "amount": "150.00"},
+            {"mode_of_payment": "Cash", "amount": "50.00"},
+        ]
+        # RT-264 D4: the tender line identity stays off the ERPNext document.
+        assert _REF_A not in str(doc) and _REF_B not in str(doc)
 
     def test_float_payment_amount_is_not_money_conformant(self):
         from retail_tower_erpnext_connector.connector.posting import uom as u
