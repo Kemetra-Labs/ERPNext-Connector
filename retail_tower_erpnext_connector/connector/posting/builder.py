@@ -23,6 +23,16 @@ document payload the connector will submit. It:
     selling Pricing Rule otherwise rewrote 9.50 to 9.00 on submit, and that without ``price_list_rate``
     ERPNext fills it from its own price list and records an invented discount or margin. Per document
     only: the connector never changes Pricing Rules or Selling Settings (the site may serve ERP sales).
+  - posts a per-line manual discount as a VISIBLE discount (RT-857, owner decision OD-28-13): the feed
+    carries only ``unitPrice``, ``quantity`` and the NET ``lineAmount``, so the discount is derived as
+    ``unitPrice x quantity - lineAmount`` (no kind or reason reaches ERPNext). A discounted line carries
+    ``price_list_rate = unitPrice``, a per-unit ``discount_amount`` and ``rate`` = the net per-unit
+    price; ``amount`` stays ``lineAmount``. ERPNext v16 keeps that rate (``calculate_item_rate``: a
+    rate equal to ``price_list_rate - discount_amount`` exits early) and recomputes
+    ``amount = flt(rate x qty, precision)``, so the net per-unit price must be exact at the currency's
+    minor unit with ``rate x qty == lineAmount``. When it is not (e.g. 10.00 net over qty 3), the line
+    is refused (:class:`LineDiscountNotPostable`, ``validation``): never a total off by one minor unit.
+    An undiscounted line (``lineAmount == unitPrice x quantity``) builds exactly as before.
   - sets ``disable_rounded_total = 1`` (RT-80): the site default rounds a fractional total to the
     whole unit (10.49 EGP -> AR 10.00 + 0.49 Round Off), so AR would no longer equal ``posTotal``.
     The reversal builder composes on this one, so credit notes inherit it.
@@ -37,9 +47,11 @@ Payment Entry here: a paid sale carries its own payments; a tender-unknown one s
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from decimal import Decimal, localcontext
 
-from .contracts import PostingWorkItem
+from .compatibility_profile import ISO_MINOR_UNITS
+from .contracts import PostingWorkItem, SaleLine
 from .posting_time import UTC_CLOCK, PostingStamp, apply_stamp, stamp_for
 from .tender import build_payments
 
@@ -54,6 +66,102 @@ class UnmappedUnit(Exception):
     def __init__(self, unit: str) -> None:
         super().__init__(f"unit {unit!r} has no ERPNext UOM mapping (fail-closed → validation)")
         self.unit = unit
+
+
+class LineDiscountNotPostable(Exception):
+    """A discounted line cannot be posted exactly as a visible per-unit discount (RT-857, OD-28-13).
+
+    The caller maps this to a ``permanently_rejected`` / ``validation`` outcome (fail closed: the sale
+    goes to Backend-Core's review path, never posted at gross or at a rounded total). ``code`` says why:
+
+    * ``discount_currency_unknown``: the line currency has no known ISO 4217 minor unit;
+    * ``discount_off_minor_unit``: ``unitPrice`` or ``lineAmount`` is finer than that minor unit;
+    * ``discount_above_gross``: ``lineAmount`` is negative (a discount above 100%);
+    * ``discount_negative``: ``lineAmount`` is above ``unitPrice x quantity`` (a surcharge);
+    * ``discount_not_divisible``: no net per-unit price at the minor unit gives ``rate x qty ==
+      lineAmount``, so ERPNext would post a different line amount.
+    """
+
+    def __init__(self, code: str, line: SaleLine, detail: str) -> None:
+        super().__init__(
+            f"line discount not postable [{code}] on line {line.line_ref or line.line_name!r}: {detail} "
+            "— rejected as validation (OD-28-13: fail closed, never a total off by a minor unit)"
+        )
+        self.code = code
+
+
+# Digits for the exact discount arithmetic: a 012 amount (<= 15 + 4 digits) times a quantity
+# (<= 15 + 6 digits) never needs more, so no product below is ever rounded by the context.
+_EXACT_DIGITS = 60
+
+
+def _line_discount(line: SaleLine) -> tuple[str, str] | None:
+    """``(rate, discount_amount)`` per unit for a discounted line; ``None`` for an undiscounted one.
+
+    The minor unit is the line currency's ISO 4217 exponent (``compatibility_profile.ISO_MINOR_UNITS``,
+    the table the RT-379 profile holds ERPNext's currency precision to: posting is paused while the
+    site precision is below it). A value exact at the minor unit is therefore held exactly by ERPNext.
+    Exact :class:`Decimal` only, never float (FR-009).
+    """
+    with localcontext() as ctx:
+        ctx.prec = _EXACT_DIGITS
+        unit_price, quantity, line_amount = (
+            Decimal(line.unit_price),
+            Decimal(line.quantity),
+            Decimal(line.line_amount),
+        )
+        gross = unit_price * quantity
+        if line_amount == gross:
+            return None  # undiscounted: posted exactly as before RT-857
+        quantum = _minor_unit(line)
+        for field, value in (("unitPrice", unit_price), ("lineAmount", line_amount)):
+            if value != value.quantize(quantum):
+                raise LineDiscountNotPostable(
+                    "discount_off_minor_unit", line, f"{field} {value} is finer than the {line.currency_code} minor unit"
+                )
+        if line_amount < 0:
+            raise LineDiscountNotPostable(
+                "discount_above_gross", line, f"lineAmount {line.line_amount} is negative (discount above 100%)"
+            )
+        if line_amount > gross:
+            raise LineDiscountNotPostable(
+                "discount_negative",
+                line,
+                f"lineAmount {line.line_amount} is above unitPrice {line.unit_price} x quantity {line.quantity}",
+            )
+        # Here gross > lineAmount >= 0, so quantity > 0. A rate is exact iff rate x qty == lineAmount.
+        rate = (line_amount / quantity).quantize(quantum)
+        if rate * quantity != line_amount:
+            raise LineDiscountNotPostable(
+                "discount_not_divisible",
+                line,
+                f"net lineAmount {line.line_amount} over quantity {line.quantity} has no exact per-unit price "
+                f"at the {line.currency_code} minor unit (ERPNext would post {rate} x {line.quantity} = "
+                f"{rate * quantity})",
+            )
+        return f"{rate:f}", f"{(unit_price - rate).quantize(quantum):f}"
+
+
+def _minor_unit(line: SaleLine) -> Decimal:
+    """``10 ** -minor`` for the line currency; fail closed when its minor unit is unknown."""
+    minor = ISO_MINOR_UNITS.get(line.currency_code)
+    if minor is None:
+        raise LineDiscountNotPostable(
+            "discount_currency_unknown", line, f"currency {line.currency_code!r} has no known ISO 4217 minor unit"
+        )
+    return Decimal(1).scaleb(-minor)
+
+
+def _represent_line_discounts(items: list[dict], lines: Sequence[SaleLine]) -> None:
+    """RT-857 / OD-28-13 (i): put each discounted line's visible per-unit discount on its item row.
+
+    ``price_list_rate`` stays ``unitPrice`` and ``amount`` stays ``lineAmount``; ``rate`` becomes the net
+    per-unit price and ``discount_amount`` the per-unit discount. Undiscounted rows are not touched.
+    """
+    for item, line in zip(items, lines, strict=True):
+        discount = _line_discount(line)
+        if discount is not None:
+            item["rate"], item["discount_amount"] = discount
 
 
 def build_sales_invoice(
@@ -96,7 +204,8 @@ def build_sales_invoice(
             "qty": line.quantity,
             "uom": uom_for(line.unit),
             "rate": line.unit_price,
-            # RT-377 / D6: the list price IS the Retail Tower price, so ERPNext derives no discount.
+            # RT-377 / D6: the list price IS the Retail Tower unit price, so ERPNext derives no discount
+            # of its own. A discounted line gets its net rate and discount_amount below (RT-857).
             "price_list_rate": line.unit_price,
             "amount": line.line_amount,
             "warehouse": warehouse["name"],
@@ -145,6 +254,10 @@ def build_sales_invoice(
     # builder↔uom import cycle (uom imports UnmappedUnit from this module).
     from .uom import assert_money_conformance
 
+    assert_money_conformance(doc)
+    # RT-857: derived from the conformant strings checked above, then the final payload is held to
+    # FR-009 again (a discounted row gains a net rate and a discount_amount).
+    _represent_line_discounts(items, sale.lines)
     assert_money_conformance(doc)
     # businessDate drives the fiscal period — never the connector's post-time (T033). RT-49:
     # set_posting_time=1, or ERPNext overwrites posting_date/posting_time with "now".

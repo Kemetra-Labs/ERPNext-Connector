@@ -7,14 +7,21 @@ Retail Tower is the pricing authority (Pricing 656-659). ``ignore_pricing_rule``
 (675-687). It compares the payload the Connector built with the Sales Invoice ERPNext holds:
 
 * **per line**, paired by position (ERPNext keeps the row order it was given): Item, qty, UOM,
-  rate, amount and warehouse, exactly; plus ``price_list_rate`` = rate, no discount
-  (``discount_percentage`` / ``discount_amount`` = 0) and no margin (empty ``margin_type``,
-  ``margin_rate_or_amount`` = 0). An extra row (e.g. a free item) or a missing one is a mismatch.
+  rate, amount and warehouse, exactly; plus ``price_list_rate`` = the sent list price, exactly the
+  discount Retail Tower sent (``discount_amount`` = the sent per-unit discount, 0 when none was sent;
+  ``discount_percentage`` = 0) and no margin (empty ``margin_type``, ``margin_rate_or_amount`` = 0).
+  An extra row (e.g. a free item) or a missing one is a mismatch.
 * **per document**: currency (ERPNext v15 holds it on the parent, not on Sales Invoice Item),
   customer and company (set explicitly in the payload: the site default for a sale, the original
   invoice's for a credit note); ``ignore_pricing_rule`` = 1 (RT-377); no tax row (D4: Retail Tower
   sends none while Egyptian VAT is deferred); and ``grand_total`` equal to the sum of the line
   amounts.
+
+**Own discount** (RT-857, OD-28-13): a discounted line is sent as ``price_list_rate`` = unit price,
+``discount_amount`` = per-unit discount and ``rate`` = net. That discount is accepted because the
+Connector sent it, and only that one: any other list price, discount amount, any discount percentage
+and any margin is still an ERP-derived adjustment. An undiscounted line is sent with ``price_list_rate``
+= rate and no ``discount_amount``, so it is held to exactly what it was held to before.
 
 **Old invoices on replay** (review finding 3): an invoice posted before RT-377 has
 ``ignore_pricing_rule`` = 0 (the builder never set it and ERPNext's default is 0). With
@@ -49,8 +56,9 @@ EXEMPTABLE = frozenset({"warehouse", "uom", "customer", "company"})
 # Line fields that must be present and equal to what was sent.
 _LINE_TEXT_FIELDS = ("item_code", "uom", "warehouse")
 _LINE_NUMBER_FIELDS = ("qty", "rate", "amount")
-# ERP-derived adjustments that must be zero (an unset value counts as zero).
-_ZERO_FIELDS = ("discount_percentage", "discount_amount", "margin_rate_or_amount")
+# ERP-derived adjustments that must be zero (an unset value counts as zero). ``discount_amount`` is not
+# one: it must equal the per-unit discount the Connector sent, 0 when none (RT-857, OD-28-13).
+_ZERO_FIELDS = ("discount_percentage", "margin_rate_or_amount")
 
 
 class RepresentationMismatch(Exception):
@@ -59,7 +67,11 @@ class RepresentationMismatch(Exception):
 
 @dataclass(frozen=True)
 class ExpectedLine:
-	"""One item line as Retail Tower sent it. ``None`` = exempt from the comparison."""
+	"""One item line as Retail Tower sent it. ``None`` = exempt from the comparison.
+
+	``price_list_rate`` ``None`` means the list price sent was the rate (RT-377); ``discount_amount`` is
+	the per-unit discount the Connector itself sent (RT-857), ``"0"`` when it sent none.
+	"""
 
 	item_code: str
 	qty: str
@@ -67,6 +79,8 @@ class ExpectedLine:
 	rate: str
 	amount: str
 	warehouse: str | None
+	price_list_rate: str | None = None
+	discount_amount: str = "0"
 
 
 @dataclass(frozen=True)
@@ -121,6 +135,8 @@ def _expected_line(item: Mapping[str, object], exempt: frozenset[str]) -> Expect
 		rate=str(item["rate"]),
 		amount=str(item["amount"]),
 		warehouse=None if "warehouse" in exempt else str(item["warehouse"]),
+		price_list_rate=str(item.get("price_list_rate", item["rate"])),
+		discount_amount=str(item.get("discount_amount") or "0"),
 	)
 
 
@@ -138,7 +154,14 @@ def persisted_from_doc(doc) -> PersistedInvoice:
 
 
 def _row_values(row) -> dict[str, object]:
-	fields = (*_LINE_TEXT_FIELDS, *_LINE_NUMBER_FIELDS, "price_list_rate", "margin_type", *_ZERO_FIELDS)
+	fields = (
+		*_LINE_TEXT_FIELDS,
+		*_LINE_NUMBER_FIELDS,
+		"price_list_rate",
+		"discount_amount",
+		"margin_type",
+		*_ZERO_FIELDS,
+	)
 	return {field: row.get(field) for field in fields}
 
 
@@ -227,9 +250,18 @@ def _number_mismatch(field: str, want: str, row: Mapping[str, object]) -> str | 
 
 
 def _adjustment_mismatch(line: ExpectedLine, row: Mapping[str, object]) -> str | None:
-	"""ERPNext derived no list price, discount or margin Retail Tower did not send (D6, decision 658)."""
-	if _number(row.get("price_list_rate")) != _number(line.rate):
-		return f"price_list_rate {row.get('price_list_rate')!r} is not the sent rate {line.rate}"
+	"""ERPNext derived no list price, discount or margin Retail Tower did not send (D6, decision 658).
+
+	RT-857: the list price and per-unit discount must be exactly the ones the Connector sent.
+	"""
+	list_price = line.rate if line.price_list_rate is None else line.price_list_rate
+	if _number(row.get("price_list_rate")) != _number(list_price):
+		return f"price_list_rate {row.get('price_list_rate')!r} is not the sent list price {list_price}"
+	if _number(row.get("discount_amount") or 0) != _number(line.discount_amount):
+		return (
+			f"discount_amount {row.get('discount_amount')!r} is not the sent discount {line.discount_amount} "
+			"(ERP-derived adjustment)"
+		)
 	for field in _ZERO_FIELDS:
 		if _number(row.get(field) or 0) != 0:
 			return f"{field} {row.get(field)!r} is not zero (ERP-derived adjustment)"

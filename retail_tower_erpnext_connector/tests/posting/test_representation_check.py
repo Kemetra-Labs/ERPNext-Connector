@@ -344,3 +344,169 @@ class TestPricingFlagSplit:
 	def test_a_new_invoice_on_replay_gets_the_full_field_set(self):
 		doc = _with_line("discount_amount", 0.5)
 		assert _check(doc, legacy_allowed=True) is not None
+
+
+def _discounted_payload():
+	"""RT-857 / OD-28-13: line 1 carries a visible discount (list 10.00, 1.00 off per unit, net 9.00)."""
+	payload = _payload()
+	payload["items"][0].update(rate="9.00", price_list_rate="10.00", discount_amount="1.00", amount="18.00")
+	return payload
+
+
+def _discounted_doc():
+	"""What ERPNext v16 persists for ``_discounted_payload`` (floats, as Frappe returns them)."""
+	doc = _doc()
+	doc["grand_total"] = 28.49
+	doc["items"][0].update(rate=9.0, price_list_rate=10.0, discount_amount=1.0, amount=18.0)
+	return doc
+
+
+def _discounted_check(doc):
+	return _check(doc, _discounted_payload())
+
+
+class TestOwnDiscount:
+	"""RT-857 / OD-28-13: the check accepts exactly the discount the Connector sent and still refuses
+	any discount, list price, pricing rule or margin ERPNext adds on its own (RT-378 / RT-283)."""
+
+	def test_the_sent_discount_persisted_as_sent_passes(self):
+		assert _discounted_check(_discounted_doc()) is None
+
+	def test_a_free_line_with_a_full_discount_passes(self):
+		payload = _payload()
+		payload["items"][0].update(rate="0.00", price_list_rate="9.50", discount_amount="9.50", amount="0.00")
+		doc = _doc()
+		doc["grand_total"] = 10.49
+		doc["items"][0].update(rate=0.0, price_list_rate=9.5, discount_amount=9.5, amount=0.0)
+		assert _check(doc, payload) is None
+
+	@pytest.mark.parametrize(
+		("field", "value"),
+		[
+			("discount_amount", 1.5),  # ERPNext changed the discount
+			("discount_amount", 0.0),  # ERPNext dropped the discount
+			("discount_amount", None),  # an unset discount counts as zero
+			("price_list_rate", 11.0),  # ERPNext's own list price
+			("price_list_rate", 9.0),  # list price reset to the rate
+			("rate", 8.5),  # a repriced net
+			("amount", 18.01),  # a rounded line amount
+			("discount_percentage", 10.0),  # an ERP-derived percentage on top
+			("margin_type", "Amount"),
+			("margin_rate_or_amount", 0.5),
+		],
+	)
+	def test_anything_but_the_sent_discount_is_a_mismatch(self, field, value):
+		doc = _discounted_doc()
+		doc["items"][0][field] = value
+		reason = _discounted_check(doc)
+		assert reason is not None and reason.startswith("representation: line 1 ")
+
+	def test_a_discount_erpnext_adds_to_an_undiscounted_line_is_still_a_mismatch(self):
+		doc = _discounted_doc()
+		doc["items"][1].update(price_list_rate=11.0, discount_amount=0.51)
+		reason = _discounted_check(doc)
+		assert reason is not None and "line 2 price_list_rate" in reason
+
+	def test_a_discount_only_in_amount_on_an_undiscounted_line_is_still_a_mismatch(self):
+		reason = _check(_with_line("discount_amount", 0.5))
+		assert reason is not None and "discount_amount" in reason and "ERP-derived" in reason
+
+	def test_a_discounted_invoice_without_the_pricing_rule_flag_is_a_mismatch(self):
+		doc = _discounted_doc()
+		doc["ignore_pricing_rule"] = 0
+		assert "ignore_pricing_rule" in _discounted_check(doc)
+
+	def test_the_grand_total_is_held_to_the_net_line_total(self):
+		doc = _discounted_doc()
+		doc["grand_total"] = 29.49  # the gross
+		assert "grand_total" in _discounted_check(doc)
+
+	def test_the_expected_line_carries_the_sent_list_price_and_discount(self):
+		line = expected_from_payload(_discounted_payload()).lines[0]
+		assert (line.rate, line.price_list_rate, line.discount_amount) == ("9.00", "10.00", "1.00")
+		plain = expected_from_payload(_payload()).lines[1]
+		assert (plain.price_list_rate, plain.discount_amount) == ("10.49", "0")
+
+	def test_a_discounted_credit_note_keeps_a_positive_discount(self):
+		payload = _payload(sign=-1)
+		payload["items"][0].update(
+			rate="9.00", price_list_rate="10.00", discount_amount="1.00", amount="-18.00"
+		)
+		doc = _doc(sign=-1)
+		doc["grand_total"] = -28.49
+		doc["items"][0].update(rate=9.0, price_list_rate=10.0, discount_amount=1.0, amount=-18.0)
+		assert _check(doc, payload) is None
+
+
+class TestBuilderPayloadRoundTrip:
+	"""The representation of a payload the real builder made for a discounted sale (RT-857)."""
+
+	def _payload(self):
+		from retail_tower_erpnext_connector.connector.posting.builder import build_sales_invoice
+
+		payload = build_sales_invoice(
+			_work_item_with_line("9.99", "3", "26.97"),
+			uom_for=lambda unit: "Nos",
+			warehouse_for=lambda store: {"doctype": "Warehouse", "name": "Store WH"},
+			customer_for=lambda store: "Walk-in",
+			company=_COMPANY,
+		)
+		return payload
+
+	def _persisted(self, **row):
+		persisted = {
+			**_row("ITEM-A", "Nos", qty=3.0, rate=8.99, amount=26.97),
+			"price_list_rate": 9.99,
+			"discount_amount": 1.0,
+			**row,
+		}
+		return {
+			"currency": "EGP",
+			"customer": "Walk-in",
+			"company": _COMPANY,
+			"ignore_pricing_rule": 1,
+			"grand_total": 26.97,
+			"taxes": [],
+			"items": [persisted],
+		}
+
+	def test_erpnext_holding_the_sent_discount_passes(self):
+		assert _check(self._persisted(), self._payload()) is None
+
+	def test_erpnext_holding_its_own_discount_is_a_mismatch(self):
+		assert _check(self._persisted(discount_amount=1.5, rate=8.49), self._payload()) is not None
+
+
+def _work_item_with_line(unit_price, quantity, line_amount):
+	return c.PostingWorkItem.from_wire(
+		{
+			"workItemRef": "11111111-1111-4111-8111-111111111111",
+			"kind": "sale_post",
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-857",
+			"payloadHash": "a" * 64,
+			"businessDate": "2026-06-01",
+			"itemCursor": "1",
+			"sale": {
+				"saleRef": "22222222-2222-4222-8222-222222222222",
+				"storeId": "33333333-3333-4333-8333-333333333333",
+				"currencyCode": "EGP",
+				"posTotal": line_amount,
+				"occurredAt": "2026-06-01T10:00:00Z",
+				"businessDate": "2026-06-01",
+				"sourceSystem": "pos-pulse",
+				"externalId": "POS-857",
+				"lines": [
+					{
+						"lineName": "Item A",
+						"unitPrice": unit_price,
+						"currencyCode": "EGP",
+						"quantity": quantity,
+						"lineAmount": line_amount,
+						"unit": "each",
+						"erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
+					}
+				],
+			},
+		}
+	)

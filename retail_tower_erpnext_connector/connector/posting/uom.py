@@ -134,12 +134,13 @@ def assert_money_conformance(doc: Mapping[str, object]) -> None:
 
 
 def _assert_item_money(idx: int, item: Mapping[str, object]) -> None:
-    """One item's money fields (``rate``/``price_list_rate``/``amount``) and ``qty`` conform."""
-    # rate/price_list_rate/amount → DecimalAmount (≤4 fractional); qty → quantity (≤6
-    # fractional). All must be exact-decimal STRINGS, never float (FR-009).
+    """One item's money fields (``rate``/``price_list_rate``/``discount_amount``/``amount``) and ``qty`` conform."""
+    # rate/price_list_rate/discount_amount (RT-857)/amount → DecimalAmount (≤4 fractional); qty →
+    # quantity (≤6 fractional). All must be exact-decimal STRINGS, never float (FR-009).
     for field, pattern in (
         ("rate", _DECIMAL_RE),
         ("price_list_rate", _DECIMAL_RE),
+        ("discount_amount", _DECIMAL_RE),
         ("amount", _DECIMAL_RE),
         ("qty", _QUANTITY_RE),
     ):

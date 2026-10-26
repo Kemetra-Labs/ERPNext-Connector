@@ -215,7 +215,8 @@ def load_glue():
 			namespace[name] = value
 
 
-def _work_item(*, version=2, warehouse="Frozen WH"):
+def _work_item(*, version=2, warehouse="Frozen WH", line=None):
+	"""``line`` overrides the sale line's wire fields (RT-857: a discounted line)."""
 	sale = {
 		"saleRef": "22222222-2222-4222-8222-222222222222",
 		"storeId": _STORE,
@@ -238,6 +239,7 @@ def _work_item(*, version=2, warehouse="Frozen WH"):
 			}
 		],
 	}
+	sale["lines"][0].update(line or {})
 	if warehouse is not None:
 		sale["warehouseRef"] = {"doctype": "Warehouse", "name": warehouse}
 	wire = {
@@ -651,3 +653,85 @@ class TestMissingExistingInvoice:
 		outcome, client = _post(glue, _work_item(), _Store(existing=_EXISTING))
 		assert outcome == "reconciliation_required"
 		assert "not submitted" in client.acks[0]["ack"]["reason"]["message"]
+
+
+# RT-857 / OD-28-13: 3 x 100.00 with 30.00 off (10.00 per unit) = net 270.00.
+_DISCOUNTED = {"unitPrice": "100.00", "quantity": "3", "lineAmount": "270.00"}
+# The row ERPNext v16 persists for it: list price, per-unit discount, net rate, net amount.
+_DISCOUNTED_ROW = {
+	"item_code": "ITEM-A",
+	"warehouse": "Frozen WH",
+	"rt_line_ref": _A,
+	"qty": 3.0,
+	"rate": 90.0,
+	"amount": 270.0,
+	"price_list_rate": 100.0,
+	"discount_amount": 10.0,
+}
+
+
+class TestDiscountedLine:
+	"""RT-857 / OD-28-13 through the real glue: post a visible discount, refuse what cannot be posted
+	exactly, and verify a replayed discounted invoice against the rebuilt (frozen) representation."""
+
+	def test_a_discounted_line_posts_its_visible_discount(self, load_glue):
+		fake = _Frappe()
+		glue = load_glue(fake)
+		outcome, client = _post(glue, _work_item(line=_DISCOUNTED), _Store())
+		assert outcome == "posted", client.acks
+		item = fake.payloads[0]["items"][0]
+		assert (item["price_list_rate"], item["discount_amount"], item["rate"], item["amount"]) == (
+			"100.00",
+			"10.00",
+			"90.00",
+			"270.00",
+		)
+
+	def test_an_indivisible_discount_is_rejected_as_validation_before_insert(self, load_glue):
+		fake = _Frappe()
+		glue = load_glue(fake)
+		line = {"unitPrice": "100.00", "quantity": "3", "lineAmount": "290.00"}  # 290.00 / 3 = 96.666...
+		outcome, client = _post(glue, _work_item(line=line), _Store())
+		assert outcome == "permanently_rejected"
+		reason = client.acks[0]["ack"]["reason"]
+		assert reason["category"] == "validation"
+		assert reason["message"].startswith(
+			"LineDiscountNotPostable: line discount not postable [discount_not_divisible]"
+		)
+		assert fake.payloads == [] and fake.events == []  # nothing inserted or submitted
+
+	def test_a_line_amount_above_the_gross_is_rejected_as_validation(self, load_glue):
+		fake = _Frappe()
+		glue = load_glue(fake)
+		line = {"unitPrice": "100.00", "quantity": "1", "lineAmount": "100.01"}
+		outcome, client = _post(glue, _work_item(line=line), _Store())
+		assert outcome == "permanently_rejected"
+		assert "[discount_negative]" in client.acks[0]["ack"]["reason"]["message"]
+		assert fake.payloads == []
+
+	def test_a_replayed_discounted_invoice_holding_the_sent_discount_acks_posted(self, load_glue):
+		glue = load_glue(_Frappe(items=[_DISCOUNTED_ROW]))
+		outcome, client = _post(glue, _work_item(line=_DISCOUNTED), _Store(existing=_EXISTING))
+		assert outcome == "posted", client.acks
+		assert client.acks[0]["ack"]["documentRef"]["name"] == _EXISTING.name
+
+	def test_an_unversioned_replay_of_a_discounted_invoice_is_verified_too(self, load_glue):
+		glue = load_glue(_Frappe(items=[_DISCOUNTED_ROW]))
+		outcome, _client = _post(glue, _work_item(version=None, line=_DISCOUNTED), _Store(existing=_EXISTING))
+		assert outcome == "posted"
+
+	@pytest.mark.parametrize(
+		"row",
+		[
+			{"discount_amount": 12.0, "rate": 88.0, "amount": 264.0},  # ERPNext's own discount
+			{"discount_amount": 0.0, "price_list_rate": 90.0},  # the sent discount was dropped
+			{"discount_percentage": 10.0},  # an ERP-derived percentage
+		],
+	)
+	def test_a_replayed_invoice_with_another_discount_acks_reconciliation_required(self, load_glue, row):
+		fake = _Frappe(items=[{**_DISCOUNTED_ROW, **row}])
+		glue = load_glue(fake)
+		outcome, client = _post(glue, _work_item(line=_DISCOUNTED), _Store(existing=_EXISTING))
+		assert outcome == "reconciliation_required"
+		assert client.acks[0]["ack"]["reason"]["message"].startswith("representation:")
+		assert fake.events.count("submit") == 0

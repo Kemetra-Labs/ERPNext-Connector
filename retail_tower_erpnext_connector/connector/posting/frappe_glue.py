@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 
 import frappe
 
-from .builder import UnmappedUnit, build_sales_invoice
+from .builder import LineDiscountNotPostable, UnmappedUnit, build_sales_invoice
 from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
 from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
@@ -493,6 +493,7 @@ _SALE_BUILD_VALIDATION_ERRORS = (
     UnmappedStore,
     UnmappedTender,
     TenderMismatch,
+    LineDiscountNotPostable,  # RT-857 / OD-28-13: fail closed, never a total off by a minor unit
 )
 
 
@@ -503,6 +504,7 @@ _REVERSAL_BUILD_VALIDATION_ERRORS = (
     UnmappedStore,
     UnmappedTender,
     TenderMismatch,
+    LineDiscountNotPostable,  # RT-857: a void / refund composes on the sale builder
     MissingRefundTenders,
     ReturnPricingMismatch,
     ReturnTaxNotPosted,

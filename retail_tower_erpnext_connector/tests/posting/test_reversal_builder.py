@@ -22,6 +22,8 @@ Pure dict-transform: no frappe, no ERPNext call. Composes on the forward builder
 conformance (FR-009) runs once on positive magnitudes; qty/amount are then negated.
 """
 
+import dataclasses
+
 import pytest
 
 from retail_tower_erpnext_connector.connector.posting import contracts as c
@@ -589,3 +591,17 @@ class TestRepricingProtection:
 class TestExplicitCompany:
 	def test_the_credit_note_carries_the_given_company(self):
 		assert _build(company="RT Co")["company"] == "RT Co"
+
+
+class TestDiscountedSaleReversal:
+	"""RT-857: a void composes on the forward builder, so it carries the sale's visible discount as
+	ERPNext's return convention wants it: list price, discount and rate positive, qty and amount negated."""
+
+	def test_a_void_of_a_discounted_sale_keeps_the_discount_positive(self):
+		wi = _void_work_item()
+		line = dataclasses.replace(wi.sale.lines[0], line_amount="180.00")  # 2 x 100.00, 20.00 off
+		wi = dataclasses.replace(wi, sale=dataclasses.replace(wi.sale, lines=(line,)))
+		item = _build(wi)["items"][0]
+		assert (item["qty"], item["amount"]) == ("-2", "-180.00")
+		assert (item["price_list_rate"], item["discount_amount"]) == ("100.00", "10.00")
+		assert item["rate"] == "90.00"

@@ -242,3 +242,17 @@ class TestExplicitCompany:
 	def test_the_return_carries_the_given_company(self):
 		# RT-378 finding 2: the glue then replaces it with the ORIGINAL invoice's company when linking.
 		assert _build(_return(), company="RT Co")["company"] == "RT Co"
+
+
+class TestDiscountedLineReturnIsOutOfScope:
+	"""RT-857 / OD-28-13: a return of a discounted line stays refused (its credit-note representation
+	is a separate follow-up); the forward discount does not change the return path."""
+
+	def test_a_return_of_a_discounted_sale_line_is_still_refused(self):
+		lines = [{"lineRef": _A, "quantity": "1", "lineAmount": "90.00", "taxAmount": None}]
+		work_item = _return(return_lines=lines, refund_tenders=[{"method": "cash", "amount": "90.00"}])
+		# 3 x 100.00 with 30.00 off: the returned unit is priced at the net 90.00, not 100.00.
+		discounted = dataclasses.replace(work_item.sale.lines[0], line_amount="270.00")
+		sale = dataclasses.replace(work_item.sale, lines=(discounted, *work_item.sale.lines[1:]))
+		with pytest.raises(rtb.ReturnPricingMismatch, match=r"90.00"):
+			_build(dataclasses.replace(work_item, sale=sale))

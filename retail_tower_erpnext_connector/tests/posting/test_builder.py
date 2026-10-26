@@ -8,6 +8,8 @@ represents money as exact-decimal strings (never float), carries businessDate â†
 and addresses every ERPNext doc generically as {doctype, name}. No frappe, no ERPNext call.
 """
 
+from decimal import Decimal
+
 import pytest
 
 from retail_tower_erpnext_connector.connector.posting import builder as b
@@ -580,3 +582,194 @@ class TestExplicitCompany:
     def test_without_a_company_the_document_carries_none(self):
         doc = b.build_sales_invoice(_work_item(), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer)
         assert "company" not in doc
+
+
+def _line_sale(unit_price, quantity, line_amount, currency="EGP", tenders=None) -> dict:
+    """A one-line sale wire; ``line_amount`` below ``unit_price x quantity`` carries a manual discount."""
+    sale = {
+        "saleRef": "22222222-2222-4222-8222-222222222222",
+        "storeId": "33333333-3333-4333-8333-333333333333",
+        "currencyCode": currency,
+        "posTotal": line_amount,
+        "occurredAt": "2026-06-01T10:00:00Z",
+        "businessDate": "2026-06-01",
+        "sourceSystem": "pos-pulse",
+        "externalId": "POS-9001",
+        "lines": [
+            {
+                "lineRef": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "lineName": "Item A",
+                "unitPrice": unit_price,
+                "currencyCode": currency,
+                "quantity": quantity,
+                "lineAmount": line_amount,
+                "unit": "each",
+                "erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
+            }
+        ],
+    }
+    if tenders is not None:
+        sale["tenders"] = tenders
+    return sale
+
+
+def _build_line(*args, **kw) -> dict:
+    doc = b.build_sales_invoice(
+        _work_item(sale=_line_sale(*args, **kw)), uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer
+    )
+    return doc["items"][0]
+
+
+def _erpnext_v16_amount(item: dict, minor: int = 2) -> Decimal:
+    """The row amount ERPNext v16 would persist for this row (``taxes_and_totals`` emulation).
+
+    ``calculate_item_rate``: no margin, so ``rate_with_margin = price_list_rate``; a non-zero rate equal
+    to ``price_list_rate - discount_amount`` is kept (early exit) and a zero rate is replaced by it.
+    ``calculate_item_values``: ``amount = flt(rate x qty, precision)``. Exact decimals stand in for
+    Frappe's float + ``flt``: the builder only sends rates whose product is exact at the minor unit.
+    """
+    calculated = Decimal(item["price_list_rate"]) - Decimal(item.get("discount_amount", "0"))
+    rate = Decimal(item["rate"]) or calculated
+    assert rate == calculated, "ERPNext would reset the discount: rate != price_list_rate - discount_amount"
+    return (rate * Decimal(item["qty"])).quantize(Decimal(1).scaleb(-minor))
+
+
+class TestLineDiscount:
+    """RT-857 / owner decision OD-28-13: a per-line manual discount is posted as a VISIBLE discount.
+
+    The feed carries ``unitPrice``, ``quantity`` and the NET ``lineAmount``. A discounted line posts
+    ``price_list_rate = unitPrice``, a per-unit ``discount_amount`` and ``rate`` = the net per-unit
+    price, with ``amount = lineAmount``. When no exact per-unit price exists at the currency minor
+    unit, the line is refused (fail closed): never a total off by a minor unit.
+    """
+
+    def test_an_undiscounted_line_builds_exactly_as_before(self):
+        item = _build_line("100.00", "2", "200.00")
+        assert item == {
+            "item_code": "ITEM-A",
+            "qty": "2",
+            "uom": "Nos",
+            "rate": "100.00",
+            "price_list_rate": "100.00",
+            "amount": "200.00",
+            "warehouse": "Main - RT",
+            "currency": "EGP",
+            "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        }
+
+    def test_an_amount_discount_on_quantity_one(self):
+        item = _build_line("100.00", "1", "87.50")
+        assert (item["price_list_rate"], item["discount_amount"], item["rate"], item["amount"]) == (
+            "100.00",
+            "12.50",
+            "87.50",
+            "87.50",
+        )
+
+    def test_a_percent_discount_on_an_evenly_divisible_quantity(self):
+        # 10% of 3 x 9.99 = 2.997 -> 3.00 (half up on the line gross, OD-28-3): net 26.97 = 3 x 8.99.
+        item = _build_line("9.99", "3", "26.97")
+        assert (item["price_list_rate"], item["discount_amount"], item["rate"], item["amount"]) == (
+            "9.99",
+            "1.00",
+            "8.99",
+            "26.97",
+        )
+
+    def test_a_free_line_posts_a_full_discount_at_rate_zero(self):
+        item = _build_line("25.00", "2", "0.00")
+        assert (item["price_list_rate"], item["discount_amount"], item["rate"], item["amount"]) == (
+            "25.00",
+            "25.00",
+            "0.00",
+            "0.00",
+        )
+
+    @pytest.mark.parametrize(
+        ("unit_price", "quantity", "line_amount"),
+        [("100.00", "1", "87.50"), ("9.99", "3", "26.97"), ("100.00", "4", "360.00"), ("25.00", "2", "0.00")],
+    )
+    def test_erpnext_recomputes_exactly_the_captured_net(self, unit_price, quantity, line_amount):
+        item = _build_line(unit_price, quantity, line_amount)
+        assert _erpnext_v16_amount(item) == Decimal(line_amount) == Decimal(item["amount"])
+
+    def test_the_invoice_total_equals_the_captured_net(self):
+        doc = b.build_sales_invoice(
+            _work_item(sale=_line_sale("9.99", "3", "26.97")),
+            uom_for=_uom,
+            warehouse_for=_warehouse,
+            customer_for=_customer,
+        )
+        assert sum(Decimal(i["amount"]) for i in doc["items"]) == Decimal("26.97")
+
+    def test_a_tendered_discounted_sale_is_settled_on_the_net(self):
+        sale = _line_sale("100.00", "2", "180.00", tenders=[{"method": "cash", "amount": "180.00"}])
+        doc = b.build_sales_invoice(
+            _work_item(sale=sale),
+            uom_for=_uom,
+            warehouse_for=_warehouse,
+            customer_for=_customer,
+            mode_of_payment_for=lambda method: "Cash",
+        )
+        assert doc["payments"] == [{"mode_of_payment": "Cash", "amount": "180.00"}]
+
+    @pytest.mark.parametrize(
+        ("unit_price", "quantity", "line_amount"),
+        [
+            ("3.34", "3", "10.00"),  # 10.00 / 3: 3.33 x 3 = 9.99 and 3.34 x 3 = 10.02, neither is 10.00
+            ("3.33", "3", "8.99"),  # 10% of 9.99 = 0.999 -> 1.00; net 8.99 / 3 = 2.9966...
+            ("10.00", "7", "69.99"),  # a 0.01 discount over 7 units
+        ],
+    )
+    def test_an_indivisible_net_is_refused(self, unit_price, quantity, line_amount):
+        with pytest.raises(b.LineDiscountNotPostable, match=r"\[discount_not_divisible\]") as caught:
+            _build_line(unit_price, quantity, line_amount)
+        assert caught.value.code == "discount_not_divisible"
+        assert line_amount in str(caught.value)
+
+    def test_a_line_amount_above_the_gross_is_refused(self):
+        with pytest.raises(b.LineDiscountNotPostable, match=r"\[discount_negative\]"):
+            _build_line("100.00", "2", "200.01")
+
+    def test_a_negative_line_amount_is_refused(self):
+        # A discount above 100% of the line gross.
+        with pytest.raises(b.LineDiscountNotPostable, match=r"\[discount_above_gross\]"):
+            _build_line("100.00", "2", "-10.00")
+
+    @pytest.mark.parametrize(("unit_price", "line_amount"), [("10.005", "9.00"), ("10.00", "9.005")])
+    def test_a_discounted_amount_finer_than_the_minor_unit_is_refused(self, unit_price, line_amount):
+        with pytest.raises(b.LineDiscountNotPostable, match=r"\[discount_off_minor_unit\]"):
+            _build_line(unit_price, "1", line_amount)
+
+    def test_a_discount_in_a_currency_without_a_known_minor_unit_is_refused(self):
+        with pytest.raises(b.LineDiscountNotPostable, match=r"\[discount_currency_unknown\]"):
+            _build_line("10.00", "1", "9.00", currency="XTS")
+
+    def test_an_undiscounted_line_needs_no_known_minor_unit(self):
+        # Unchanged behavior: the minor unit is consulted only for a discounted line.
+        assert _build_line("10.00", "1", "10.00", currency="XTS")["rate"] == "10.00"
+
+    def test_the_minor_unit_follows_the_line_currency(self):
+        # JPY has no minor unit: 2700 / 3 = 900 is exact, 2701 / 3 is not.
+        item = _build_line("1000", "3", "2700", currency="JPY")
+        assert (item["rate"], item["discount_amount"]) == ("900", "100")
+        assert _erpnext_v16_amount(item, minor=0) == Decimal("2700")
+        with pytest.raises(b.LineDiscountNotPostable, match=r"\[discount_not_divisible\]"):
+            _build_line("1000", "3", "2701", currency="JPY")
+
+    def test_a_three_decimal_currency_keeps_its_minor_unit(self):
+        item = _build_line("1.500", "4", "5.400", currency="KWD")
+        assert (item["rate"], item["discount_amount"]) == ("1.350", "0.150")
+        assert _erpnext_v16_amount(item, minor=3) == Decimal("5.400")
+
+    def test_extra_zero_digits_do_not_change_the_representation(self):
+        item = _build_line("100.0000", "2.000000", "180.0000")
+        assert (item["rate"], item["discount_amount"]) == ("90.00", "10.00")
+        assert (item["price_list_rate"], item["amount"]) == ("100.0000", "180.0000")
+
+    def test_a_malformed_amount_is_still_a_money_conformance_error(self):
+        # The discount is derived only from strings FR-009 has already accepted.
+        from retail_tower_erpnext_connector.connector.posting.uom import MoneyConformanceError
+
+        with pytest.raises(MoneyConformanceError):
+            _build_line("100.00", "2", "1e2")

@@ -160,6 +160,18 @@ class TestMoneyConformance:
         with pytest.raises(u.MoneyConformanceError):
             u.assert_money_conformance(doc)
 
+    @pytest.mark.parametrize("value", [1.0, "1.00001", "abc"])
+    def test_rejects_a_non_conformant_discount_amount(self, value):
+        # RT-857: the per-unit discount_amount is money too (exact-decimal string, never float).
+        doc = {
+            "currency": "EGP",
+            "items": [
+                {"rate": "9.00", "amount": "9.00", "qty": "1", "price_list_rate": "10.00", "discount_amount": value}
+            ],
+        }
+        with pytest.raises(u.MoneyConformanceError):
+            u.assert_money_conformance(doc)
+
     def test_rejects_non_decimal_price_list_rate(self):
         doc = {
             "currency": "EGP",
