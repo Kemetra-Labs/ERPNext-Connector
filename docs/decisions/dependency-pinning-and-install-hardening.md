@@ -181,3 +181,18 @@ new SHA-pinned `astral-sh/setup-uv` step only).
 ## 8. Next safe action
 
 Create the §7 Implementation issue in Jira and have the owner authorize its gated paths.
+
+## Addendum 2026-10-28: lock moved to Python 3.14 (RT-923)
+
+The sections above record the 2026-10-17 decision on the 3.11 runtime and are kept as written.
+v15 was dropped (owner decision 2026-10-25), so the CI runtime is now the v16 one, as the
+"Upgrade compatibility" section foresaw:
+
+- The connector's Python comes from `integrations/erpnext-connector/.python-version` (`3.14`);
+  `requires-python = ">=3.14"` and ruff `target-version = "py314"`. Frappe v16.52.0 itself
+  requires `>=3.14,<3.15` and pins `sentry-sdk~=1.45.1`, so the `sentry-sdk==1.45.1` pin stays.
+- `pylock.toml` was regenerated in place with the header command and `--python-version 3.14`,
+  uv 0.11.32. No version changed; `tomli` dropped out (only needed below 3.11). Every locked tool
+  still installs wheels-only with hashes.
+- Evidence (WSL Ubuntu, CPython 3.14.6, uv 0.11.32, the hash-locked set): `ruff check` clean,
+  the CI pytest command `1309 passed, 4 skipped, 104 subtests passed`.

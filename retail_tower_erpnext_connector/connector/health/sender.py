@@ -33,7 +33,7 @@ unit-tested); this shell is exercised locally against a frappe stand-in.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import frappe
 
@@ -87,7 +87,7 @@ def _send_heartbeat(request_id: str) -> None:
 	report = HeartbeatReport(
 		connector_version=_connector_version(),
 		erpnext_reachable=_erpnext_reachable(),
-		source_clock_at=format_source_clock(datetime.now(timezone.utc)),
+		source_clock_at=format_source_clock(datetime.now(UTC)),
 	)
 	ack = client.report(report)
 	frappe.logger(_LOGGER).debug(

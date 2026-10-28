@@ -9,7 +9,7 @@ identity field, and only within the contract's bounds. A 200 returns the server-
 """
 
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -82,7 +82,7 @@ class TestReportBody:
 
 class TestSourceClock:
 	def test_utc_with_milliseconds_and_a_z_suffix(self):
-		moment = datetime(2026, 10, 26, 9, 5, 7, 123456, tzinfo=timezone.utc)
+		moment = datetime(2026, 10, 26, 9, 5, 7, 123456, tzinfo=UTC)
 		assert hb.format_source_clock(moment) == "2026-10-26T09:05:07.123Z"
 
 	def test_another_offset_is_converted_to_utc(self):

@@ -27,7 +27,7 @@ idempotency-store DocType is the deferred [GATED] T020). It RECEIVES an
 from __future__ import annotations
 
 import dataclasses
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import frappe
 
@@ -1153,7 +1153,7 @@ def _posting_clock() -> PostingClock:
 
     ⏳ BENCH-VALIDATION.
     """
-    return PostingClock(site_tz=frappe.utils.get_system_timezone(), now=datetime.now(timezone.utc))
+    return PostingClock(site_tz=frappe.utils.get_system_timezone(), now=datetime.now(UTC))
 
 
 def _posting_stamp(work_item: PostingWorkItem, business_date: str) -> PostingStamp:

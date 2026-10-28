@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DAY_START = "00:00:00.000000"
@@ -120,7 +120,7 @@ def _parse_instant(text: str) -> datetime:
 	parsed = datetime.fromisoformat(value)
 	if parsed.tzinfo is None:
 		raise ValueError(f"occurredAt must carry a timezone offset, got {text!r}")
-	return parsed.astimezone(timezone.utc)
+	return parsed.astimezone(UTC)
 
 
 def _zone(name: str) -> ZoneInfo:

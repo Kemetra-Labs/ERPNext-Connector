@@ -21,7 +21,7 @@
 <p align="center">
   <a href="docs/decisions/version-pin-upgrade-policy.md"><img alt="Frappe v16" src="https://img.shields.io/badge/Frappe-v16-0089ff?logo=frappe&logoColor=white&labelColor=0a0f24&style=flat-square"></a>
   <a href="docs/decisions/version-pin-upgrade-policy.md"><img alt="ERPNext v16" src="https://img.shields.io/badge/ERPNext-v16-0e7490?labelColor=0a0f24&style=flat-square"></a>
-  <a href="pyproject.toml"><img alt="Python 3.10+" src="https://img.shields.io/badge/python-%E2%89%A53.10-3776ab?logo=python&logoColor=white&labelColor=0a0f24&style=flat-square"></a>
+  <a href=".python-version"><img alt="Python 3.14" src="https://img.shields.io/badge/python-3.14-3776ab?logo=python&logoColor=white&labelColor=0a0f24&style=flat-square"></a>
   <a href="retail_tower_erpnext_connector/hooks.py"><img alt="Transport: pull feed and ack" src="https://img.shields.io/badge/transport-pull%20feed%20%2B%20ack-60a5fa?labelColor=0a0f24&style=flat-square"></a>
   <a href="#what-the-connector-posts-today"><img alt="ERP posting: Sales Invoice and returns" src="https://img.shields.io/badge/ERP%20posting-Sales%20Invoice%20%2B%20returns-b45309?labelColor=0a0f24&style=flat-square"></a>
   <a href="retail_tower_erpnext_connector/connector/bin_view/poller.py"><img alt="Bin-view poller: every 5 minutes" src="https://img.shields.io/badge/bin--view%20poller-every%205%20min-2563eb?labelColor=0a0f24&style=flat-square"></a>

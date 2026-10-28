@@ -66,7 +66,7 @@ def parse_warn_within(warn_days: object) -> timedelta:
     return timedelta(days=days)
 
 
-class CredentialExpiryStatus(str, Enum):
+class CredentialExpiryStatus(str, Enum):  # noqa: UP042 - StrEnum changes str()/format() output (RT-923)
     """The lifecycle state derived from the recorded ``expires_at`` (§6).
 
     ``UNKNOWN`` is distinct from ``ACTIVE``: a legacy / not-yet-reconfigured credential has no
@@ -90,7 +90,7 @@ class CredentialExpiryState:
     message: str
 
 
-class CredentialAuthStatus(str, Enum):
+class CredentialAuthStatus(str, Enum):  # noqa: UP042 - StrEnum changes str()/format() output (RT-923)
     """The reactive auth state derived from a live pull/ack result (003 §8).
 
     Independent of :class:`CredentialExpiryStatus`: a credential revoked or disabled BEFORE its

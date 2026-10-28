@@ -24,7 +24,7 @@ use, or a fake in unit tests). Pure Python, NO frappe.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol
 
 # spec-003 substrate: the request_id correlation travels on every call (RT-39).
@@ -109,7 +109,7 @@ def format_source_clock(moment: datetime) -> str:
 	"""
 	if moment.tzinfo is None:
 		raise ValueError("source clock must be timezone-aware")
-	utc = moment.astimezone(timezone.utc)
+	utc = moment.astimezone(UTC)
 	return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
 
 

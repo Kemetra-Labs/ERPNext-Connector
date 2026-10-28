@@ -12,13 +12,13 @@ unless ``set_posting_time=1``, so ``businessDate`` was silently discarded. The r
     that is later (ERPNext rejects a return EARLIER than its original; equal is allowed).
 """
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
 
 import pytest
 
 from retail_tower_erpnext_connector.connector.posting import posting_time as pt
 
-_NOW = datetime(2026, 9, 28, 16, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 9, 28, 16, 0, 0, tzinfo=UTC)
 _CAIRO = pt.PostingClock(site_tz="Africa/Cairo", now=_NOW)  # UTC+3 on this date (EEST)
 _UTC = pt.PostingClock(site_tz="UTC", now=_NOW)
 

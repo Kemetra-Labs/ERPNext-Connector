@@ -168,7 +168,7 @@ class FakeHttpResponse:
 class FakeAckTransport:
     """A transport whose post() returns a FakeHttpResponse (status-aware), for ack semantics."""
 
-    def __init__(self, response: "FakeHttpResponse"):
+    def __init__(self, response: FakeHttpResponse):
         self._response = response
         self.post_calls: list[tuple[str, dict, dict]] = []
 

@@ -15,7 +15,7 @@ Anchored to constitution Principle III (additive & upgrade-safe changes).
 |-----------|----------------|---------------|-------|
 | Frappe Framework | **v16** | 16.52.0 | Host framework |
 | ERPNext | **v16** | 16.51.0 | ERP/accounting/inventory backend; declared as `required_apps` in `hooks.py` |
-| Python | **>= 3.10** (v16 bench: >= 3.14) | 3.14.8 | The app's floor is `requires-python` in `pyproject.toml`; the bench decides the actual version |
+| Python | **>= 3.14** (RT-923; Frappe v16.52.0 requires >=3.14,<3.15) | 3.14.8 | The app's floor is `requires-python` in `pyproject.toml`; the bench decides the actual version |
 | Node | v16 bench: >= 24 | 24.22.0 | The connector ships no JS; Node matters only for the bench |
 | MariaDB | 11.8 | 11.8.9 | As in the frappe_docker image for v16 |
 
