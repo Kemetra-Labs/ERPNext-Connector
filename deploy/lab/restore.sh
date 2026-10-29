@@ -23,10 +23,11 @@
 #
 # Exit codes: 0 done (or a clean dry run); 2 bad usage, no ledger, invalid ledger values;
 #             3 refused because the scheduler already resumed (forward-fix only);
-#             4 the backup is not restorable (checksums, missing encryption_key, a previous image
-#               that is neither on the host nor in a saved image tar);
+#             4 the backup is not restorable (checksums, missing encryption_key, a database dump
+#               without one System Settings enable_scheduler value of 0 or 1, a previous image that is
+#               neither on the host nor in a saved image tar);
 #             5 a restore step failed (including a saved compose file whose mariadb mount cannot be
-#               moved to the new volume).
+#               moved to the new volume, and a site scheduler that is not as the backup had it).
 #
 # ASSUMPTIONS about the lab-03 host, to be confirmed at the restore rehearsal (plan Task 7):
 #   - the dc wrapper passes the rest of its arguments to `docker compose` (so `-f` works);
@@ -126,6 +127,20 @@ done
 [ -n "$DB_FILE" ] && [ -n "$PUB_FILE" ] && [ -n "$PRIV_FILE" ] && [ -n "$CFG_FILE" ] || die 2 "the ledger must name the database, files, private files and config backups"
 (cd "$RUN_DIR" && sha256sum -c --quiet SHA256SUMS >/dev/null 2>&1) || die 4 "backup checksum mismatch (SHA256SUMS)"
 grep -q '"encryption_key"' "$RUN_DIR/$CFG_FILE" || die 4 "the backup config has no encryption_key: a restore would leave every Password field unreadable"
+# The backup's System Settings.enable_scheduler. A forced restore into a new volume leaves it 0 whatever
+# the backup had (Frappe reads it from the old database, which is not there), so STEP 4 sets it back:
+# on lab-03 (2026-10-29) the workers ran on a disabled scheduler and no connector job ran for hours.
+SCHED_BACKUP="$("$PYTHON" -c 'import gzip, re, sys
+row = re.compile(rb"\(\s*\x27System Settings\x27\s*,\s*\x27enable_scheduler\x27\s*,\s*\x27([^\x27]*)\x27\s*\)\s*[,;]")
+found = set()
+with gzip.open(sys.argv[1], "rb") as handle:
+    for line in handle:
+        found.update(row.findall(line))
+for value in sorted(found):
+    print(value.decode("ascii", "replace"))' "$RUN_DIR/$DB_FILE")" || die 4 "could not read enable_scheduler from $DB_FILE"
+SCHED_BACKUP="${SCHED_BACKUP//$'\r'/}"
+[[ "$SCHED_BACKUP" =~ ^[01]$ ]] || die 4 "$DB_FILE has no single System Settings enable_scheduler value of 0 or 1: the restore cannot tell whether the scheduler should run"
+if [ "$SCHED_BACKUP" = 1 ]; then SCHED_WANT=enabled; else SCHED_WANT=disabled; fi
 
 NEW_VOL="rt-erp_mariadb-restore-$RUN_ID"
 OVERRIDE="$RUN_DIR/restore-override.yml"
@@ -189,7 +204,7 @@ echo "PLAN 0 previous-image-present: every image of the saved compose file is on
 echo "PLAN 1 stop: stop every service of the project (the old database volume is left as it is)"
 echo "PLAN 2 new-volume: create the volume $NEW_VOL and start MariaDB on it"
 echo "PLAN 3 set-encryption-key: copy encryption_key from $CFG_FILE into the site config (the value is never printed)"
-echo "PLAN 4 force-restore: bench --site $SITE --force restore $DB_FILE with the public and private files"
+echo "PLAN 4 force-restore: bench --site $SITE --force restore $DB_FILE with the public and private files, then the scheduler as the backup had it (enable_scheduler=$SCHED_BACKUP: enable-scheduler if 1) and scheduler status must say $SCHED_WANT"
 echo "PLAN 5 previous-image: put back the compose file saved before the swap (image $DIGEST_BEFORE), point compose.yml at $NEW_VOL and start all services"
 echo "PLAN 6 ping: wait for $SITE to answer /api/method/ping with 200"
 [ "$DRY_RUN" = 0 ] || { echo "dry run: nothing was changed"; exit 0; }
@@ -285,6 +300,15 @@ hosts="$(q "SELECT host FROM mysql.user WHERE user = \"$RT_DB_USER\"")" || exit 
 [ "$hosts" = "%" ] || q "RENAME USER \`$RT_DB_USER\`@\`$hosts\` TO \`$RT_DB_USER\`@\`%\`"' \
   || die 5 "could not move the site DB user $DB_USER to host %"
 unset RT_DB_ROOT_PW
+# The forced restore left the scheduler disabled: put back what the backup had, and check it before
+# STEP 5 starts the workers, or they run and no scheduled job ever does.
+if [ "$SCHED_BACKUP" = 1 ]; then
+  docker exec "$BACKEND_CID" bench --site "$SITE" enable-scheduler || die 5 "bench enable-scheduler failed"
+fi
+SCHED_STATUS="$(docker exec "$BACKEND_CID" bench --site "$SITE" scheduler status)" || die 5 "bench scheduler status failed"
+SCHED_NOW="$(grep -oE 'Scheduler is (enabled|disabled)' <<<"$SCHED_STATUS" | sort -u)" || true
+[ "$SCHED_NOW" = "Scheduler is $SCHED_WANT" ] \
+  || die 5 "the site scheduler is not $SCHED_WANT after the restore (the backup had enable_scheduler=$SCHED_BACKUP). The database is restored and MariaDB and the backend run on $NEW_VOL through $OVERRIDE; the workers were not started, compose.yml was not replaced and the resume marker was not written (see the README before finishing by hand)"
 
 echo "STEP 5 previous-image"
 # The saved compose file with the mariadb mount moved to $NEW_VOL (folded and checked in STEP 0): from

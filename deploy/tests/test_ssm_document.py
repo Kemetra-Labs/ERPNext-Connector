@@ -418,3 +418,144 @@ def test_db_volume_helper_reads_the_running_container_mount(body):
 def test_db_volume_helper_fails_on_anything_but_one_named_volume(body, mode, data):
     proc = _resolve(body, mode, data)
     assert proc.returncode != 0 and proc.stdout.strip() == ""
+
+
+# ---- the site scheduler (RT-927, lab-03 2026-10-29): a disabled scheduler must never pass as resumed ----
+
+POLL_METHOD = "retail_tower_erpnext_connector.connector.posting.poller.run_posting_poll"
+
+
+def test_check_gate_stops_a_deploy_whose_site_scheduler_is_disabled(body):
+    """The deploy's job is to resume posting: a disabled scheduler stops it before anything is stopped."""
+    check = body[_pos(body, "# ---- step 1: check ----"):_pos(body, "RT_GATE check=pass")]
+    assert 'bench --site "$SITE" scheduler status' in check
+    assert 'stop "scheduler-disabled"' in check
+    assert 'stop "scheduler-status-unreadable"' in check
+    assert check.index('stop "scheduler-disabled"') < check.index("docker pull")
+    assert _pos(body, 'stop "scheduler-disabled"') < _pos(body, "STOPPED=1")
+
+
+def test_postresume_waits_for_the_posting_poll_to_run_after_the_resume(body):
+    post = body[_pos(body, "GATE=postresume"):_pos(body, "RT_GATE postresume=pass")]
+    assert 'stop "posting-poll-did-not-run"' in post
+    assert "$RESUMED_AT" in post
+    assert "PY_POLL_RAN" in post
+    assert POLL_METHOD in body or "$CONNECTOR_APP.connector.posting.poller.run_posting_poll" in body
+    # bounded by wall clock: 180 s from the start of the wait, read time included
+    assert "POLL_DEADLINE=$((SECONDS + 180))" in post
+    # the deadline is checked before every sleep, and no sleep crosses it
+    assert 'pause=$((POLL_DEADLINE - SECONDS))' in post and '[ "$pause" -le 0 ]' in post
+    assert '[ "$pause" -le 15 ] || pause=15' in post and 'sleep "$pause"' in post
+    assert "sleep 15" not in post
+    assert "polled" not in post
+    # each read is capped at 30 s and at the time left, so a hung docker exec cannot pass the deadline
+    assert 'left=$((POLL_DEADLINE - SECONDS)); [ "$left" -le 30 ] || left=30' in post
+    assert 'timeout "$left" docker exec' in post
+    # a helper that cannot read the job (import, connect, query) is not a scheduler that did not run
+    assert post.index('stop "posting-poll-unreadable"') < post.index('stop "posting-poll-did-not-run"')
+    assert _pos(body, "RT_GATE resume=pass") < _pos(body, 'stop "posting-poll-did-not-run"')
+
+
+def test_postresume_failures_are_monitoring_never_a_rollback(body):
+    post = body[_pos(body, "GATE=postresume"):_pos(body, "RT_GATE postresume=pass")]
+    for word in ("restore", "docker stop", "dc\" stop", "compose.yml"):
+        assert word not in post, word
+
+
+def _poll_helper(body: str) -> str:
+    match = re.search(r"^PY_POLL_RAN='(.*?)'$", body, re.S | re.M)
+    assert match, "PY_POLL_RAN must be a single-quoted python block"
+    return match.group(1)
+
+
+FAKE_FRAPPE = '''import os
+from datetime import datetime
+class _DB:
+    def get_value(self, doctype, filters, field):
+        assert doctype == "Scheduled Job Type" and field == "last_execution", (doctype, field)
+        assert filters == {"method": os.environ["EXPECT_METHOD"]}, filters
+        if os.environ.get("FAKE_RAISE"):
+            raise RuntimeError("no database")
+        value = os.environ.get("FAKE_LAST") or None
+        # Frappe returns a datetime for a Datetime field
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S.%f") if value else None
+db = _DB()
+def init(site, sites_path):
+    assert site == "lab.localhost" and sites_path == "."
+def connect():
+    pass
+def destroy():
+    pass
+'''
+
+FAKE_FRAPPE_UTILS = '''from datetime import datetime
+def get_datetime(value):
+    if isinstance(value, datetime):
+        return value
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S.%f")
+def get_system_timezone():
+    return "Africa/Cairo"
+'''
+
+
+def _poll(body: str, tmp_path: Path, last: str | None, resumed: str,
+          fail: bool = False) -> subprocess.CompletedProcess:
+    pkg = tmp_path / "fake" / "frappe"
+    (pkg / "utils").mkdir(parents=True, exist_ok=True)
+    (pkg / "__init__.py").write_text(FAKE_FRAPPE, encoding="utf-8")
+    (pkg / "utils" / "__init__.py").write_text(FAKE_FRAPPE_UTILS, encoding="utf-8")
+    env = {**__import__("os").environ, "PYTHONPATH": str(tmp_path / "fake"), "FAKE_LAST": last or "",
+           "EXPECT_METHOD": POLL_METHOD, "FAKE_RAISE": "1" if fail else ""}
+    return subprocess.run([sys.executable, "-c", _poll_helper(body), "lab.localhost", resumed, POLL_METHOD],
+                          capture_output=True, text=True, env=env, check=False)
+
+
+def _cairo_available() -> bool:
+    try:
+        from zoneinfo import ZoneInfo
+
+        ZoneInfo("Africa/Cairo")
+    except Exception:  # no tz database on this host
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _cairo_available(), reason="no Africa/Cairo in the tz database")
+@pytest.mark.parametrize("last,ran", [
+    # 10:00Z is 13:00 in Cairo (UTC+3 in July). 12:30 local is 09:30Z: BEFORE the resume, although a
+    # naive comparison of the stored local time with the UTC resume time says it is later.
+    ("2026-07-15 12:30:00.000000", False),
+    ("2026-07-15 12:59:59.000000", False),
+    ("2026-07-15 13:00:30.123456", True),
+    (None, False),
+])
+def test_poll_helper_compares_the_site_local_last_execution_with_the_utc_resume(body, tmp_path, last, ran):
+    proc = _poll(body, tmp_path, last, "2026-07-15T10:00:00Z")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip().splitlines()[-1] == ("posting-poll=ran" if ran else "posting-poll=waiting")
+
+
+@pytest.mark.skipif(not _cairo_available(), reason="no Africa/Cairo in the tz database")
+def test_poll_helper_reports_an_error_instead_of_waiting_when_it_cannot_read(body, tmp_path):
+    proc = _poll(body, tmp_path, "2026-07-15 13:00:30.000000", "2026-07-15T10:00:00Z", fail=True)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip().splitlines()[-1] == "posting-poll=error"
+
+
+@pytest.mark.skipif(not _cairo_available(), reason="no Africa/Cairo in the tz database")
+def test_poll_helper_fails_closed_in_the_repeated_hour_when_dst_ends(body, tmp_path):
+    """Egypt falls back at 24:00 on 2026-10-29: 23:00-23:59 local happens twice. A run at 21:30Z (the
+    second 23:30) is read as the first one (20:30Z, fold=0): the gate may wait in vain, never pass early."""
+    proc = _poll(body, tmp_path, "2026-10-29 23:30:00.000000", "2026-10-29T21:10:00Z")
+    assert proc.stdout.strip().splitlines()[-1] == "posting-poll=waiting"
+    early = _poll(body, tmp_path, "2026-10-29 23:05:00.000000", "2026-10-29T20:10:00Z")
+    assert early.stdout.strip().splitlines()[-1] == "posting-poll=waiting"
+
+
+def test_scheduler_stop_reasons_are_in_the_script(body):
+    """That every stop reason fits the workflow's RESULT_RE is checked from the root, in
+    .github/release/test_erp_lab_workflows.py: a product test may not read the root .github/."""
+    for reason in ("scheduler-disabled", "scheduler-status-unreadable", "posting-poll-did-not-run",
+                   "posting-poll-unreadable"):
+        assert f'stop "{reason}"' in body
+        assert re.fullmatch(r"[a-z0-9-]+", reason)

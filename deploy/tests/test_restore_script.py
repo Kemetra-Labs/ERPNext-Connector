@@ -1,5 +1,6 @@
 """RT-927 Task 5: the owner-run restore script (guards and plan; the host steps are rehearsed on lab-03)."""
 
+import gzip
 import hashlib
 import json
 import os
@@ -55,13 +56,22 @@ def _compose(digest: str = DIGEST_BEFORE, db_vol: str = "erp_db", extra_vols: st
     return COMPOSE.format(digest=digest, db_vol=db_vol, extra_vols=extra_vols)
 
 
+def _dump(scheduler: str | None) -> bytes:
+    """A gzip dump with the tabSingles row bench backup writes for System Settings.enable_scheduler."""
+    rows = "('System Settings','country','Egypt')"
+    if scheduler is not None:
+        rows += f",('System Settings','enable_scheduler','{scheduler}')"
+    text = f"INSERT INTO `tabSingles` VALUES {rows};\n"
+    return gzip.compress(text.encode(), mtime=0)
+
+
 def _make_run(root: Path, *, resumed: bool = False, key: bool = True, digest: str = DIGEST_BEFORE,
               corrupt: bool = False, started: str | None = "2026-10-29T09:00:00Z",
-              compose: str | None = None) -> Path:
+              compose: str | None = None, scheduler: str | None = "1", dump: bytes | None = None) -> Path:
     run_dir = root / RUN
     run_dir.mkdir(parents=True)
     contents = {
-        FILES["db"]: b"db-bytes",
+        FILES["db"]: dump if dump is not None else _dump(scheduler),
         FILES["pub"]: b"pub-bytes",
         FILES["priv"]: b"priv-bytes",
         FILES["cfg"]: json.dumps({"encryption_key": KEY_VALUE} if key else {"db_name": "x"}).encode(),
@@ -308,6 +318,12 @@ case "$1" in
     case "$*" in
       *ROOT_PASSWORD*) printf %s fake-root-pw ;;
       *'["db_user"]'*) echo erp_user ;;
+      *enable-scheduler*) touch "$RT_FAKE_SCHED" ;;
+      *"scheduler status"*)
+        if [ -n "${RT_FAKE_SCHED_FORCE:-}" ]; then state="$RT_FAKE_SCHED_FORCE"
+        elif [ -f "$RT_FAKE_SCHED" ]; then state=enabled
+        else state=disabled; fi
+        echo "Scheduler is $state for site erp.lab.example" ;;
       *) cat >/dev/null ;;
     esac ;;
   *) exit 0 ;;
@@ -330,7 +346,7 @@ def _write_exec(path: Path, text: str) -> None:
 
 
 def _stub_run(root: Path, *, present: tuple[str, ...] = (DIGEST_BEFORE, "mariadb:11.8", "redis:6.2-alpine"),
-              ) -> tuple[subprocess.CompletedProcess, Path, list[str]]:
+              sched_force: str = "") -> tuple[subprocess.CompletedProcess, Path, list[str]]:
     """Runs restore.sh for real (no --dry-run) with every host command faked. Returns the process,
     the stack dir (its compose.yml is what the script left) and the logged fake calls."""
     bin_dir, stack = root / "bin", root / "stack"
@@ -346,7 +362,8 @@ def _stub_run(root: Path, *, present: tuple[str, ...] = (DIGEST_BEFORE, "mariadb
     (stack / "compose.yml").write_text("# the swapped compose file\n", encoding="utf-8", newline="\n")
     proc = _run(root, RUN, "--backups-root", root.as_posix(), path_prefix=bin_dir, extra_env={
         "RT_STACK_DIR": stack.as_posix(), "RT_DEPLOY_LOCK": (root / "deploy.lock").as_posix(),
-        "RT_FAKE_LOG": log.as_posix(), "RT_FAKE_IMAGES": images.as_posix()})
+        "RT_FAKE_LOG": log.as_posix(), "RT_FAKE_IMAGES": images.as_posix(),
+        "RT_FAKE_SCHED": (root / "sched-enabled").as_posix(), "RT_FAKE_SCHED_FORCE": sched_force})
     calls = log.read_text(encoding="utf-8").splitlines()
     return proc, stack, calls
 
@@ -490,3 +507,77 @@ def test_an_image_line_with_a_trailing_comment_is_still_checked(tmp_path):
     assert proc.returncode == 4, proc.stderr
     assert "previous image redis:6.2-alpine" in proc.stderr
     assert "dc stop" not in calls
+
+
+# ---- the site scheduler after the restore (RT-927, lab-03 2026-10-29) ----
+# A forced restore into a new volume left System Settings.enable_scheduler=0 although the backup had 1:
+# the workers ran, every gate passed, and no connector job ran for hours.
+
+
+def _index(calls: list[str], needle: str) -> int:
+    return next(i for i, call in enumerate(calls) if needle in call)
+
+
+def test_enables_the_scheduler_when_the_backup_had_it_enabled(tmp_path):
+    _make_run(tmp_path, scheduler="1")
+    proc, _, calls = _stub_run(tmp_path)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    enable = _index(calls, "enable-scheduler")
+    assert _index(calls, "--force restore") < enable
+    assert enable < _index(calls, "scheduler status") < calls.index("dc up -d")
+    assert f"bench --site {SITE} enable-scheduler" in calls[enable]
+
+
+def test_leaves_the_scheduler_disabled_when_the_backup_had_it_disabled(tmp_path):
+    _make_run(tmp_path, scheduler="0")
+    proc, _, calls = _stub_run(tmp_path)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert not any("enable-scheduler" in call for call in calls)
+    assert _index(calls, "scheduler status") < calls.index("dc up -d")
+
+
+@pytest.mark.parametrize("dump", [
+    _dump(None),
+    _dump("2"),
+    gzip.compress(b"INSERT INTO `tabSingles` VALUES ('System Settings','enable_scheduler','0'),"
+                  b"('System Settings','enable_scheduler','1');\n", mtime=0),
+    b"not a gzip file",
+    # a partial or malformed row is not the complete tabSingles row and must not count
+    gzip.compress(b"INSERT INTO `tabSingles` VALUES ('System Settings','enable_scheduler','1'garbage);\n", mtime=0),
+    gzip.compress(b"-- 'System Settings','enable_scheduler','1'\n", mtime=0),
+], ids=["missing", "not-0-or-1", "two-values", "not-gzip", "malformed-row", "comment-not-row"])
+def test_a_dump_without_one_clear_scheduler_value_exits_4_before_anything_stops(tmp_path, dump):
+    _make_run(tmp_path, dump=dump)
+    dry = _dry(tmp_path)
+    assert dry.returncode == 4, dry.stderr
+    assert "enable_scheduler" in dry.stderr
+    assert "PLAN" not in dry.stdout
+    proc, stack, calls = _stub_run(tmp_path)
+    assert proc.returncode == 4, proc.stderr
+    assert "dc stop" not in calls
+    assert (stack / "compose.yml").read_text(encoding="utf-8") == "# the swapped compose file\n"
+
+
+def test_a_scheduler_status_that_differs_from_the_backup_exits_5_and_resumes_nothing(tmp_path):
+    _make_run(tmp_path, scheduler="1")
+    proc, stack, calls = _stub_run(tmp_path, sched_force="disabled")
+    assert proc.returncode == 5, proc.stderr
+    assert "scheduler" in proc.stderr
+    assert "dc up -d" not in calls
+    assert not (tmp_path / "host" / "last-resumed-at").exists(), "the restore window must stay open"
+    assert (stack / "compose.yml").read_text(encoding="utf-8") == "# the swapped compose file\n"
+
+
+def test_an_unreadable_scheduler_status_exits_5(tmp_path):
+    _make_run(tmp_path, scheduler="0")
+    proc, _, calls = _stub_run(tmp_path, sched_force="confused")
+    assert proc.returncode == 5, proc.stderr
+    assert "dc up -d" not in calls
+
+
+def test_the_plan_names_the_scheduler_state_it_will_restore(tmp_path):
+    _make_run(tmp_path, scheduler="1")
+    proc = _dry(tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    plan4 = next(line for line in proc.stdout.splitlines() if line.startswith("PLAN 4 "))
+    assert "enable-scheduler" in plan4 and "scheduler status" in plan4
