@@ -185,6 +185,17 @@ RT_DB_ROOT_PW="$(docker exec "$MARIADB_CID" sh -c 'printf %s "${MARIADB_ROOT_PAS
 export RT_DB_ROOT_PW
 docker exec -e RT_DB_ROOT_PW "$BACKEND_CID" sh -c 'bench --site "$0" --force restore "$1" --with-public-files "$2" --with-private-files "$3" --db-root-password "$RT_DB_ROOT_PW"' \
   "$SITE" "$IN_DIR/$DB_FILE" "$IN_DIR/$PUB_FILE" "$IN_DIR/$PRIV_FILE" || die 5 "bench restore failed"
+# bench restore creates the site's DB user at the backend's current IP, and STEP 5 recreates the
+# containers with new ones (every request then fails with 1045): move the user to any host.
+DB_USER="$(docker exec "$BACKEND_CID" ./env/bin/python -c 'import json, sys
+print(json.load(open("sites/" + sys.argv[1] + "/site_config.json"))["db_user"])' "$SITE")" || die 5 "could not read the site db_user"
+[[ "$DB_USER" =~ ^[A-Za-z0-9_]{1,64}$ ]] || die 5 "the site db_user is not a plain name"
+docker exec -e RT_DB_ROOT_PW -e RT_DB_USER="$DB_USER" "$MARIADB_CID" sh -c '
+q() { MYSQL_PWD="$RT_DB_ROOT_PW" mariadb -uroot -N -e "$1"; }
+hosts="$(q "SELECT host FROM mysql.user WHERE user = \"$RT_DB_USER\"")" || exit 1
+[ -n "$hosts" ] && [ "$(printf "%s\n" "$hosts" | wc -l)" = 1 ] || exit 1
+[ "$hosts" = "%" ] || q "RENAME USER \`$RT_DB_USER\`@\`$hosts\` TO \`$RT_DB_USER\`@\`%\`"' \
+  || die 5 "could not move the site DB user $DB_USER to host %"
 unset RT_DB_ROOT_PW
 
 echo "STEP 5 previous-image"

@@ -253,3 +253,13 @@ def test_waits_for_mariadb_to_be_healthy_before_the_restore():
     step2 = text[text.index('echo "STEP 2 new-volume"'):text.index('echo "STEP 3 set-encryption-key"')]
     # A bounded wait: compose treats --wait-timeout 0 as no timeout (PR #108 review).
     assert "dcx up -d --wait --wait-timeout 180 --no-deps mariadb" in step2
+
+
+def test_moves_the_site_db_user_to_any_host_before_the_services_restart():
+    """bench restore creates the site DB user at the backend's current IP; STEP 5 recreates the
+    containers with new IPs and every request failed with 1045 (lab-03 rehearsal, run 40865158775)."""
+    text = _script()
+    step4 = text[text.index('echo "STEP 4 force-restore"'):text.index('echo "STEP 5 previous-image"')]
+    assert step4.index("--force restore") < step4.index("RENAME USER")
+    assert "db_user" in step4
+    assert "die 5" in step4[step4.index("RENAME USER"):]
