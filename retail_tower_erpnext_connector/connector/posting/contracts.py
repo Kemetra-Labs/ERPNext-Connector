@@ -45,10 +45,11 @@ TENDER_METHODS: frozenset[str] = frozenset({"cash", "card_external"})
 # 012 SaleLine.trackingMode enum (RT-450, 1.10.0-draft); null is "no profile determined".
 TRACKING_MODES: frozenset[str] = frozenset({"none", "batch", "serial"})
 
-# 012 NonNegativeDecimalAmount and SaleTender.reference patterns (posting-feed.yaml, verbatim). Apply
-# them with fullmatch: under match, Python `$` also accepts a trailing "\n" (RT-875).
-_NON_NEGATIVE_DECIMAL_RE = re.compile(r"^\d{1,15}(\.\d{1,4})?$", re.ASCII)
-_TENDER_REFERENCE_RE = re.compile(r"^[A-Z0-9]{1,6}$")
+# 012 NonNegativeDecimalAmount and SaleTender.reference patterns (posting-feed.yaml). Python `$` also
+# accepts a trailing "\n" while the contract's ECMA `$` does not, so they end in `\Z` (RT-875, RT-915)
+# and are applied with fullmatch.
+_NON_NEGATIVE_DECIMAL_RE = re.compile(r"^\d{1,15}(\.\d{1,4})?\Z", re.ASCII)
+_TENDER_REFERENCE_RE = re.compile(r"^[A-Z0-9]{1,6}\Z")
 # 012 SaleTender.tenderRef (`format: uuid`, RT-359): the canonical hyphenated 8-4-4-4-12 form only.
 # uuid.UUID() would also take braces, a urn:uuid: prefix or no hyphens.
 _TENDER_REF_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -60,8 +61,8 @@ _CALENDAR_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _RFC3339_DATE_TIME_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt]([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d+)?([Zz]|[+-]([01]\d|2[0-3]):[0-5]\d)$"
 )
-# 012 ReturnLine.quantity pattern (verbatim); the connector additionally requires > 0.
-_RETURN_QUANTITY_RE = re.compile(r"^\d{1,13}(\.\d{1,6})?$", re.ASCII)
+# 012 ReturnLine.quantity pattern (`\Z` for `$`, as above); the connector additionally requires > 0.
+_RETURN_QUANTITY_RE = re.compile(r"^\d{1,13}(\.\d{1,6})?\Z", re.ASCII)
 
 
 class MissingErpnextItemRef(Exception):
