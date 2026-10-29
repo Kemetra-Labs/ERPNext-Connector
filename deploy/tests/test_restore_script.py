@@ -244,3 +244,12 @@ def test_reads_the_mariadb_root_password_variable_lab03_sets():
     line = next(line for line in text.splitlines() if line.startswith("RT_DB_ROOT_PW="))
     assert line.index("MARIADB_ROOT_PASSWORD") < line.index("MYSQL_ROOT_PASSWORD")
     assert '[ -n "$RT_DB_ROOT_PW" ] || die 5' in text
+
+
+def test_waits_for_mariadb_to_be_healthy_before_the_restore():
+    """A new volume makes MariaDB initialise first; `up -d` alone returned before it listened and
+    bench restore failed with 2002 (lab-03 rehearsal, run 40865158775)."""
+    text = _script()
+    step2 = text[text.index('echo "STEP 2 new-volume"'):text.index('echo "STEP 3 set-encryption-key"')]
+    # A bounded wait: compose treats --wait-timeout 0 as no timeout (PR #108 review).
+    assert "dcx up -d --wait --wait-timeout 180 --no-deps mariadb" in step2

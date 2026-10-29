@@ -153,7 +153,9 @@ volumes:
   $NEW_VOL:
     external: true
 EOF
-dcx up -d --no-deps mariadb || die 5 "MariaDB did not start on the new volume"
+# A new volume makes MariaDB initialise before it listens: wait for its healthcheck, or bench
+# restore fails with 2002 (lab-03 rehearsal).
+dcx up -d --wait --wait-timeout 180 --no-deps mariadb || die 5 "MariaDB did not become healthy on the new volume"
 dcx up -d --no-deps backend || die 5 "the backend did not start"
 BACKEND_CID="$(dcx ps -q backend)"
 MARIADB_CID="$(dcx ps -q mariadb)"
