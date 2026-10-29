@@ -25,7 +25,8 @@
 # ASSUMPTIONS about the lab-03 host, to be confirmed at the restore rehearsal (plan Task 7):
 #   - the dc wrapper passes the rest of its arguments to `docker compose` (so `-f` works);
 #   - the compose services are named mariadb and backend, and MariaDB keeps its data in /var/lib/mysql;
-#   - the mariadb container has MYSQL_ROOT_PASSWORD, and bench restore takes --db-root-password.
+#   - the mariadb container has MARIADB_ROOT_PASSWORD (seen on lab-03) or the older MYSQL_ROOT_PASSWORD,
+#     and bench restore takes --db-root-password.
 set -Eeuo pipefail
 export LC_ALL=C
 umask 077
@@ -177,7 +178,8 @@ docker exec "$BACKEND_CID" mkdir -p "$IN_DIR"
 for f in "$DB_FILE" "$PUB_FILE" "$PRIV_FILE"; do
   docker cp "$RUN_DIR/$f" "$BACKEND_CID:$IN_DIR/$f" || die 5 "could not copy $f into the backend"
 done
-RT_DB_ROOT_PW="$(docker exec "$MARIADB_CID" sh -c 'printf %s "$MYSQL_ROOT_PASSWORD"')"
+RT_DB_ROOT_PW="$(docker exec "$MARIADB_CID" sh -c 'printf %s "${MARIADB_ROOT_PASSWORD:-$MYSQL_ROOT_PASSWORD}"')"
+[ -n "$RT_DB_ROOT_PW" ] || die 5 "the mariadb container has no MARIADB_ROOT_PASSWORD or MYSQL_ROOT_PASSWORD"
 export RT_DB_ROOT_PW
 docker exec -e RT_DB_ROOT_PW "$BACKEND_CID" sh -c 'bench --site "$0" --force restore "$1" --with-public-files "$2" --with-private-files "$3" --db-root-password "$RT_DB_ROOT_PW"' \
   "$SITE" "$IN_DIR/$DB_FILE" "$IN_DIR/$PUB_FILE" "$IN_DIR/$PRIV_FILE" || die 5 "bench restore failed"

@@ -9,7 +9,8 @@ do), so the deploy hashes the installed directory and compares it with
 
 This reproduces git's own tree hash for what `git archive` extracts: blobs, trees, the
 executable bit and symlinks. It leaves out what installing the app adds to the directory:
-`__pycache__`, `*.pyc` and `*.egg-info`. Any other extra or missing file changes the hash,
+`__pycache__`, `*.pyc` and `*.egg-info`, and a `.git` directory (never part of a git tree; a host
+build that copied a clone carries one). Any other extra or missing file changes the hash,
 which is the point: a mismatch stops the deploy before anything changes.
 
 Usage: python tree_hash.py DIR    (prints the 40-hex hash; exit 2 when DIR is not a directory)
@@ -23,7 +24,7 @@ import stat
 import sys
 from pathlib import Path
 
-IGNORED_DIRS = ("__pycache__",)
+IGNORED_DIRS = ("__pycache__", ".git")  # .git: a host build that copied a clone (lab-03)
 IGNORED_DIR_SUFFIXES = (".egg-info",)
 IGNORED_FILE_SUFFIXES = (".pyc",)
 

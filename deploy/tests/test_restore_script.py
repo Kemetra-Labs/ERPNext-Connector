@@ -235,3 +235,12 @@ def test_records_the_resume_before_the_services_start_again():
     text = _script()
     step5 = text[text.index('echo "STEP 5 previous-image"'):]
     assert step5.index('mv -f "$MARKER.tmp" "$MARKER"') < step5.index("dcx up -d")
+
+
+def test_reads_the_mariadb_root_password_variable_lab03_sets():
+    """lab-03's mariadb container sets MARIADB_ROOT_PASSWORD (read-only host check, RT-927 Task 7);
+    MYSQL_ROOT_PASSWORD stays as the fallback for older images."""
+    text = SCRIPT.read_text(encoding="utf-8").replace("\r\n", "\n")
+    line = next(line for line in text.splitlines() if line.startswith("RT_DB_ROOT_PW="))
+    assert line.index("MARIADB_ROOT_PASSWORD") < line.index("MYSQL_ROOT_PASSWORD")
+    assert '[ -n "$RT_DB_ROOT_PW" ] || die 5' in text

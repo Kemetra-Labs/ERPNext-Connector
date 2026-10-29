@@ -107,3 +107,15 @@ def test_script_runs_with_a_bare_interpreter(repo):
     out = subprocess.run([sys.executable, "-I", str(script), str(repo / "sub")],
                          capture_output=True, text=True, check=True).stdout
     assert out == expected + "\n"
+
+
+def test_ignores_a_git_directory_left_by_a_host_build(repo):
+    """lab-03's host-built image copied a clone, .git included; git never stores .git in a tree.
+
+    Found on lab-03 (RT-927 Task 7): with .git the installed tree hashed 24b1129b, without it
+    80c7049e, the declared tree.
+    """
+    _make(repo, {"pkg/__init__.py": "x = 1\n"})
+    expected = _commit(repo)
+    _make(repo, {".git/HEAD": "ref: refs/heads/main\n", ".git/objects/ab/cdef": b"\x00\x01"})
+    assert tree_hash.tree_hash(repo / "sub") == expected
