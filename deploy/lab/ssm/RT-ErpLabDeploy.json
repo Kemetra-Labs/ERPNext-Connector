@@ -11,7 +11,7 @@
     "CurrentImages": {
       "type": "String",
       "description": "JSON object service -> image ref for the six ERP services as they run now (deploy #0 has a mixed map).",
-      "allowedPattern": "^\\{[^\\n]{2,2046}\\}$",
+      "allowedPattern": "^\\{[^\\n]{2,1000}\\}$",
       "interpolationType": "ENV_VAR"
     },
     "CurrentTree": {
@@ -260,7 +260,7 @@
           "[[ \"$MIN_FREE_GIB\" =~ ^[0-9]{1,3}$ ]] || stop \"MinFreeGiB-missing-or-invalid\"",
           "[[ \"$JIRA_KEY\" =~ ^RT-[1-9][0-9]{0,5}$ ]] || stop \"JiraKey-missing-or-invalid\"",
           "[[ \"$ROLLBACK_CLASS\" =~ ^(image-only|restore)$ ]] || stop \"RollbackClass-missing-or-invalid\"",
-          "[ \"${#CURRENT_IMAGES}\" -le 2048 ] || stop \"CurrentImages-too-long\"",
+          "[ \"${#CURRENT_IMAGES}\" -le 1002 ] || stop \"CurrentImages-too-long\"",
           "declare -A CUR_IMG",
           "parse_rc=0",
           "PARSED=\"$(python3 -c \"$PY_IMAGES\" \"$CURRENT_IMAGES\" \"$SERVICES\")\" || parse_rc=$?",

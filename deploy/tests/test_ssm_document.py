@@ -328,3 +328,19 @@ def test_workers_are_not_restarted_when_the_resume_cannot_be_recorded(body):
     mark = body[_pos(body, "mark_resumed() {"):]
     mark = mark[: mark.index("\n}\n")]
     assert mark.count("|| return 1") >= 2, "every write in mark_resumed must fail the function"
+
+
+def test_allowed_patterns_fit_the_ssm_regex_engine(doc):
+    """SSM validates allowedPattern with Go RE2, which refuses a repeat count above 1000.
+
+    create-document failed on lab-03 with `invalid repeat count: {2,2046}` (RT-927 Task 7).
+    """
+    for name, param in doc["parameters"].items():
+        for low, high in re.findall(r"\{(\d+)(?:,(\d+))?\}", param.get("allowedPattern", "")):
+            assert int(high or low) <= 1000, f"{name}: repeat {{{low},{high}}} is above RE2's limit"
+
+
+def test_current_images_limit_is_the_same_in_the_document_and_the_script(doc, body):
+    pattern = doc["parameters"]["CurrentImages"]["allowedPattern"]
+    limit = int(re.search(r",(\d+)\}", pattern).group(1)) + 2
+    assert f'[ "${{#CURRENT_IMAGES}}" -le {limit} ]' in body
