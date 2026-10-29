@@ -17,10 +17,16 @@
 # first (otherwise every Password field becomes unreadable), restores, puts the previous image back
 # and checks /api/method/ping.
 #
+# Before it stops anything it also checks that every image of the saved compose file is on the host
+# (loading the run's saved image tars if one is missing), and that the saved compose file has exactly
+# one /var/lib/mysql mount, which STEP 5 points at the new volume: compose.yml alone is then the truth.
+#
 # Exit codes: 0 done (or a clean dry run); 2 bad usage, no ledger, invalid ledger values;
 #             3 refused because the scheduler already resumed (forward-fix only);
-#             4 the backup is not restorable (checksums, missing encryption_key);
-#             5 a restore step failed.
+#             4 the backup is not restorable (checksums, missing encryption_key, a previous image
+#               that is neither on the host nor in a saved image tar);
+#             5 a restore step failed (including a saved compose file whose mariadb mount cannot be
+#               moved to the new volume).
 #
 # ASSUMPTIONS about the lab-03 host, to be confirmed at the restore rehearsal (plan Task 7):
 #   - the dc wrapper passes the rest of its arguments to `docker compose` (so `-f` works);
@@ -31,14 +37,18 @@ set -Eeuo pipefail
 export LC_ALL=C
 umask 077
 
-STACK_DIR=/opt/rt-erp
+# RT_STACK_DIR and RT_DEPLOY_LOCK exist for the stub run in the tests only.
+STACK_DIR="${RT_STACK_DIR:-/opt/rt-erp}"
 DC="$STACK_DIR/dc"
 COMPOSE="$STACK_DIR/compose.yml"
+LOCK="${RT_DEPLOY_LOCK:-/run/rt-erp-deploy.lock}"
 BACKUPS_ROOT=/var/backups/rt-erp
 BENCH_DIR=/home/frappe/frappe-bench
 SITE_URL=http://127.0.0.1:18000
 PYTHON="${RT_PYTHON:-python3}"
 IMAGE_RE='^(rt-erpnext:16\.51\.0-[0-9a-f]{12}|ghcr\.io/kemetra-labs/rt-erpnext@sha256:[0-9a-f]{64})$'
+# mariadb and redis run their own images: they are checked for presence, held only to a safe charset.
+OTHER_IMAGE_RE='^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$'
 
 die() { local code="$1"; shift; echo "restore.sh: $*" >&2; exit "$code"; }
 
@@ -119,23 +129,101 @@ grep -q '"encryption_key"' "$RUN_DIR/$CFG_FILE" || die 4 "the backup config has 
 
 NEW_VOL="rt-erp_mariadb-restore-$RUN_ID"
 OVERRIDE="$RUN_DIR/restore-override.yml"
+FOLDED="$RUN_DIR/compose.restore.yml"
+
+# Reads the saved compose file: `images` prints every image: value; `fold NEW_VOL [OUT]` moves the one
+# <volume>:/var/lib/mysql mount to NEW_VOL and declares NEW_VOL external under the one top-level
+# volumes: key (writing OUT when given). Exact matches only: anything else fails with the reason.
+PY_COMPOSE='import re, sys
+mode, src = sys.argv[1], sys.argv[2]
+with open(src, encoding="utf-8", newline="") as handle:
+    lines = handle.read().splitlines(keepends=True)
+if mode == "images":
+    for line in lines:
+        found = re.match(r"\s*image:\s*(\S+)\s*(#.*)?$", line)
+        if found:
+            print(found.group(1).strip(chr(34) + chr(39)))
+    sys.exit(0)
+new_vol = sys.argv[3]
+mount = re.compile(r"(\s*-\s*)[A-Za-z0-9][A-Za-z0-9_.-]*(:/var/lib/mysql(?::[a-z,]+)?\s*)$")
+mounts = [i for i, line in enumerate(lines) if mount.match(line)]
+tops = [i for i, line in enumerate(lines) if re.match(r"volumes:\s*$", line)]
+if len(mounts) != 1:
+    sys.exit("expected exactly one <volume>:/var/lib/mysql mount, found %d" % len(mounts))
+if len(tops) != 1:
+    sys.exit("expected exactly one top-level volumes: key, found %d" % len(tops))
+found = mount.match(lines[mounts[0]])
+lines[mounts[0]] = found.group(1) + new_vol + found.group(2)
+nl = "\r\n" if lines[tops[0]].endswith("\r\n") else "\n"
+# The new key takes the indent of the existing entries, or a nested one would swallow them.
+indent = "  "
+for line in lines[tops[0] + 1:]:
+    if line.strip() and not line.lstrip().startswith("#"):
+        if line[0] in " \t":
+            indent = line[:len(line) - len(line.lstrip())]
+        break
+lines.insert(tops[0] + 1, indent + new_vol + ":" + nl + indent * 2 + "external: true" + nl)
+if len(sys.argv) > 4:
+    with open(sys.argv[4], "w", encoding="utf-8", newline="") as handle:
+        handle.write("".join(lines))'
+compose_py() { "$PYTHON" -c "$PY_COMPOSE" "$@"; }
+
+# Every image STEP 5 starts again, validated before any docker command sees it.
+IMAGES_OUT="$(compose_py images "$RUN_DIR/compose.yml")" || die 4 "could not read the images of the saved compose file"
+IMAGES_OUT="${IMAGES_OUT//$'\r'/}"
+PREV_IMAGES=()
+while IFS= read -r ref; do
+  [ -n "$ref" ] || continue
+  if [[ "$ref" == *rt-erpnext* ]]; then
+    [[ "$ref" =~ $IMAGE_RE ]] || die 4 "the saved compose file names an unknown ERP image: $ref"
+  else
+    [[ "$ref" =~ $OTHER_IMAGE_RE ]] || die 4 "the saved compose file names an image this script will not pass to docker"
+  fi
+  PREV_IMAGES+=("$ref")
+done <<<"$IMAGES_OUT"
+[ "${#PREV_IMAGES[@]}" -gt 0 ] || die 4 "the saved compose file names no image"
+compose_py fold "$RUN_DIR/compose.yml" "$NEW_VOL" || die 5 "the saved compose file cannot be pointed at $NEW_VOL"
 
 echo "restore of run $RUN_ID, site $SITE, previous image $DIGEST_BEFORE"
+echo "PLAN 0 previous-image-present: every image of the saved compose file is on this host (loaded from the run's saved image tars if not); nothing is stopped before this passes"
 echo "PLAN 1 stop: stop every service of the project (the old database volume is left as it is)"
 echo "PLAN 2 new-volume: create the volume $NEW_VOL and start MariaDB on it"
 echo "PLAN 3 set-encryption-key: copy encryption_key from $CFG_FILE into the site config (the value is never printed)"
 echo "PLAN 4 force-restore: bench --site $SITE --force restore $DB_FILE with the public and private files"
-echo "PLAN 5 previous-image: put back the compose file saved before the swap (image $DIGEST_BEFORE) and start all services"
+echo "PLAN 5 previous-image: put back the compose file saved before the swap (image $DIGEST_BEFORE), point compose.yml at $NEW_VOL and start all services"
 echo "PLAN 6 ping: wait for $SITE to answer /api/method/ping with 200"
 [ "$DRY_RUN" = 0 ] || { echo "dry run: nothing was changed"; exit 0; }
 
 dcx() { "$DC" -f "$COMPOSE" -f "$OVERRIDE" "$@"; }
 
 # The same lock RT-ErpLabDeploy holds: never stop the stack under a deploy that swaps or migrates.
-exec 9>/run/rt-erp-deploy.lock
-flock -n 9 || die 5 "a deploy is running (/run/rt-erp-deploy.lock is held); wait for it to end"
+exec 9>"$LOCK"
+flock -n 9 || die 5 "a deploy is running ($LOCK is held); wait for it to end"
 # A deploy may have resumed between the first check and the lock: check again under the lock.
 check_host_marker
+
+# STEP 5 starts these images again: make sure they are here while nothing has been stopped yet.
+echo "STEP 0 previous-image-present"
+missing_images() {
+  local ref
+  for ref in "${PREV_IMAGES[@]}"; do
+    docker image inspect "$ref" >/dev/null 2>&1 || printf '%s\n' "$ref"
+  done
+}
+MISSING="$(missing_images)"
+if [ -n "$MISSING" ]; then
+  TARS=()
+  for t in "$RUN_DIR"/current-image-*.tar; do
+    if [ -f "$t" ]; then TARS+=("$t"); fi
+  done
+  [ "${#TARS[@]}" -gt 0 ] || die 4 "previous image $(head -n 1 <<<"$MISSING") is not on this host and the run saved no image tar"
+  for t in "${TARS[@]}"; do
+    docker load -i "$t" || die 4 "could not load the saved image $t"
+  done
+  MISSING="$(missing_images)"
+  [ -z "$MISSING" ] || die 4 "previous image $(head -n 1 <<<"$MISSING") is still not on this host after loading the saved image tars"
+fi
+compose_py fold "$RUN_DIR/compose.yml" "$NEW_VOL" "$FOLDED" || die 5 "could not write $FOLDED"
 
 echo "STEP 1 stop"
 "$DC" stop || die 5 "could not stop the project"
@@ -199,14 +287,16 @@ hosts="$(q "SELECT host FROM mysql.user WHERE user = \"$RT_DB_USER\"")" || exit 
 unset RT_DB_ROOT_PW
 
 echo "STEP 5 previous-image"
-cp "$RUN_DIR/compose.yml" "$COMPOSE"
+# The saved compose file with the mariadb mount moved to $NEW_VOL (folded and checked in STEP 0): from
+# here compose.yml alone is the truth, so a later `dc up` or deploy keeps the restored database.
+cp "$FOLDED" "$COMPOSE" || die 5 "could not put back the compose file"
 # The workers start with the services, so posting resumes on the restored database: record it
 # first (the deploy's rule), which also refuses any later restore of this or an earlier run.
 mkdir -p "$(dirname "$MARKER")"
 printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$MARKER.tmp" \
   && mv -f "$MARKER.tmp" "$MARKER" \
   || die 5 "could not record the resume marker"
-dcx up -d || die 5 "could not start the services on the previous image"
+"$DC" up -d || die 5 "could not start the services on the previous image"
 
 echo "STEP 6 ping"
 waited=0
@@ -215,6 +305,4 @@ until [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H "Host: $SITE
   sleep 5
   waited=$((waited + 5))
 done
-echo "restore complete: $SITE answers ping."
-echo "NOTE: MariaDB now runs on $NEW_VOL through $OVERRIDE. Fold that mount into $COMPOSE before the next deploy,"
-echo "      or the next compose run goes back to the old volume. The old volume was not touched."
+echo "restore complete: $SITE answers ping; $COMPOSE mounts $NEW_VOL (the old volume was not touched)."

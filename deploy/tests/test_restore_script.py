@@ -28,9 +28,36 @@ FILES = {
 BASH = shutil.which("bash")
 pytestmark = pytest.mark.skipif(BASH is None, reason="bash is not installed")
 
+NEW_VOL = f"rt-erp_mariadb-restore-{RUN}"
+# The shape of lab-03's /opt/rt-erp/compose.yml: one x-erp image, mariadb and redis on their own
+# images, exactly one /var/lib/mysql mount and one top-level volumes: key.
+COMPOSE = """x-erp: &erp
+  image: {digest}
+  restart: unless-stopped
+
+services:
+  backend:
+    <<: *erp
+  mariadb:
+    image: mariadb:11.8
+    volumes:
+      - {db_vol}:/var/lib/mysql
+  redis-cache:
+    image: redis:6.2-alpine
+
+volumes:
+{extra_vols}  erp_db:
+  sites:
+"""
+
+
+def _compose(digest: str = DIGEST_BEFORE, db_vol: str = "erp_db", extra_vols: str = "") -> str:
+    return COMPOSE.format(digest=digest, db_vol=db_vol, extra_vols=extra_vols)
+
 
 def _make_run(root: Path, *, resumed: bool = False, key: bool = True, digest: str = DIGEST_BEFORE,
-              corrupt: bool = False, started: str | None = "2026-10-29T09:00:00Z") -> Path:
+              corrupt: bool = False, started: str | None = "2026-10-29T09:00:00Z",
+              compose: str | None = None) -> Path:
     run_dir = root / RUN
     run_dir.mkdir(parents=True)
     contents = {
@@ -45,7 +72,8 @@ def _make_run(root: Path, *, resumed: bool = False, key: bool = True, digest: st
     (run_dir / "SHA256SUMS").write_text(sums, encoding="utf-8", newline="\n")
     if corrupt:
         (run_dir / FILES["db"]).write_bytes(b"tampered")
-    (run_dir / "compose.yml").write_text("x-erp: &erp\n  image: " + digest + "\n", encoding="utf-8", newline="\n")
+    (run_dir / "compose.yml").write_text(compose if compose is not None else _compose(digest),
+                                         encoding="utf-8", newline="\n")
     ledger = {
         "runId": RUN, "site": SITE, "digestBefore": digest, "outcome": "migrated",
         "backup": {"dir": str(run_dir), "sha256": "0" * 64, "files": list(FILES.values())},
@@ -58,11 +86,13 @@ def _make_run(root: Path, *, resumed: bool = False, key: bool = True, digest: st
     return run_dir
 
 
-def _run(root: Path, *args: str, path_prefix: Path | None = None) -> subprocess.CompletedProcess:
+def _run(root: Path, *args: str, path_prefix: Path | None = None,
+         extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     # The same bash the test process would find (on Windows a bare "bash" can be the WSL launcher).
     env = {**os.environ, "RT_PYTHON": sys.executable.replace("\\", "/"),
            # The host-wide marker; tests point it at their own tmp dir (never under --backups-root).
-           "RT_RESUME_MARKER": (root / "host" / "last-resumed-at").as_posix()}
+           "RT_RESUME_MARKER": (root / "host" / "last-resumed-at").as_posix(),
+           **(extra_env or {})}
     if path_prefix is not None:
         env["PATH"] = os.pathsep.join([str(path_prefix), env["PATH"]])
     return subprocess.run([BASH, SCRIPT.name, *args], cwd=LAB, capture_output=True, text=True, env=env, check=False)
@@ -112,7 +142,8 @@ def test_plan_order(tmp_path):
     proc = _dry(tmp_path)
     assert proc.returncode == 0, proc.stderr
     steps = re.findall(r"^PLAN \d+ ([a-z-]+)", proc.stdout, re.M)
-    assert steps == ["stop", "new-volume", "set-encryption-key", "force-restore", "previous-image", "ping"]
+    assert steps == ["previous-image-present", "stop", "new-volume", "set-encryption-key", "force-restore",
+                     "previous-image", "ping"]
 
 
 def test_secret_value_is_never_printed(tmp_path):
@@ -234,7 +265,7 @@ def test_records_the_resume_before_the_services_start_again():
     """STEP 5 starts the workers: the host marker must close every earlier restore window first."""
     text = _script()
     step5 = text[text.index('echo "STEP 5 previous-image"'):]
-    assert step5.index('mv -f "$MARKER.tmp" "$MARKER"') < step5.index("dcx up -d")
+    assert step5.index('mv -f "$MARKER.tmp" "$MARKER"') < step5.index('"$DC" up -d')
 
 
 def test_reads_the_mariadb_root_password_variable_lab03_sets():
@@ -263,3 +294,199 @@ def test_moves_the_site_db_user_to_any_host_before_the_services_restart():
     assert step4.index("--force restore") < step4.index("RENAME USER")
     assert "db_user" in step4
     assert "die 5" in step4[step4.index("RENAME USER"):]
+
+
+# ---- stub runs: the whole script against fake dc, docker, curl and flock (RT-927 restore safety) ----
+
+FAKE_DOCKER = """#!/bin/sh
+echo "docker $*" >> "$RT_FAKE_LOG"
+case "$1" in
+  image) grep -qxF "$3" "$RT_FAKE_IMAGES" ;;
+  load) cat "$3" >> "$RT_FAKE_IMAGES" ;;
+  volume) [ "$2" = create ] ;;
+  exec)
+    case "$*" in
+      *ROOT_PASSWORD*) printf %s fake-root-pw ;;
+      *'["db_user"]'*) echo erp_user ;;
+      *) cat >/dev/null ;;
+    esac ;;
+  *) exit 0 ;;
+esac
+"""
+
+FAKE_DC = """#!/bin/sh
+echo "dc $*" >> "$RT_FAKE_LOG"
+case "$*" in
+  *"ps -q backend") echo backend-cid ;;
+  *"ps -q mariadb") echo mariadb-cid ;;
+esac
+exit 0
+"""
+
+
+def _write_exec(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8", newline="\n")
+    path.chmod(0o755)
+
+
+def _stub_run(root: Path, *, present: tuple[str, ...] = (DIGEST_BEFORE, "mariadb:11.8", "redis:6.2-alpine"),
+              ) -> tuple[subprocess.CompletedProcess, Path, list[str]]:
+    """Runs restore.sh for real (no --dry-run) with every host command faked. Returns the process,
+    the stack dir (its compose.yml is what the script left) and the logged fake calls."""
+    bin_dir, stack = root / "bin", root / "stack"
+    bin_dir.mkdir()
+    stack.mkdir()
+    log, images = root / "calls.log", root / "images.txt"
+    log.write_text("", encoding="utf-8")
+    images.write_text("".join(ref + "\n" for ref in present), encoding="utf-8", newline="\n")
+    _write_exec(bin_dir / "docker", FAKE_DOCKER)
+    _write_exec(bin_dir / "curl", "#!/bin/sh\nprintf 200\n")
+    _write_exec(bin_dir / "flock", "#!/bin/sh\nexit 0\n")
+    _write_exec(stack / "dc", FAKE_DC)
+    (stack / "compose.yml").write_text("# the swapped compose file\n", encoding="utf-8", newline="\n")
+    proc = _run(root, RUN, "--backups-root", root.as_posix(), path_prefix=bin_dir, extra_env={
+        "RT_STACK_DIR": stack.as_posix(), "RT_DEPLOY_LOCK": (root / "deploy.lock").as_posix(),
+        "RT_FAKE_LOG": log.as_posix(), "RT_FAKE_IMAGES": images.as_posix()})
+    calls = log.read_text(encoding="utf-8").splitlines()
+    return proc, stack, calls
+
+
+# Written out by hand, not derived with the script's own insert logic (pr-review finding 3).
+FOLDED_TAIL = f"""      - {NEW_VOL}:/var/lib/mysql
+  redis-cache:
+    image: redis:6.2-alpine
+
+volumes:
+  {NEW_VOL}:
+    external: true
+{{extra_vols}}  erp_db:
+  sites:
+"""
+
+
+def _folded(digest: str = DIGEST_BEFORE, extra_vols: str = "") -> str:
+    head = _compose(digest).split("      - erp_db:/var/lib/mysql\n")[0]
+    return head + FOLDED_TAIL.format(extra_vols=extra_vols)
+
+
+def test_restore_end_to_end_against_stubs(tmp_path):
+    """The whole script once, STEP 1 to STEP 6: compose.yml alone names the new volume at the end."""
+    _make_run(tmp_path)
+    proc, stack, calls = _stub_run(tmp_path)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "restore complete" in proc.stdout
+    assert "NOTE" not in proc.stdout
+    assert (stack / "compose.yml").read_text(encoding="utf-8") == _folded()
+    dc_calls = [c for c in calls if c.startswith("dc ")]
+    assert dc_calls[-1] == "dc up -d", dc_calls
+    assert calls.index("dc stop") < calls.index(f"docker volume create {NEW_VOL}")
+    assert (tmp_path / "host" / "last-resumed-at").exists()
+
+
+def test_step5_points_compose_at_the_new_volume_when_the_source_is_an_earlier_restore(tmp_path):
+    earlier = "rt-erp_mariadb-restore-1"
+    extra = f"  {earlier}:\n    external: true\n"
+    _make_run(tmp_path, compose=_compose(db_vol=earlier, extra_vols=extra))
+    proc, stack, _ = _stub_run(tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    text = (stack / "compose.yml").read_text(encoding="utf-8")
+    assert f"      - {NEW_VOL}:/var/lib/mysql\n" in text
+    assert f"{earlier}:/var/lib/mysql" not in text
+    assert text == _folded(extra_vols=extra)
+
+
+@pytest.mark.parametrize("mounts", ["", "      - erp_db:/var/lib/mysql\n      - other:/var/lib/mysql\n"])
+def test_zero_or_two_mysql_mounts_exit_5_before_anything_stops(tmp_path, mounts):
+    compose = _compose().replace("      - erp_db:/var/lib/mysql\n", mounts)
+    _make_run(tmp_path, compose=compose)
+    proc, stack, calls = _stub_run(tmp_path)
+    assert proc.returncode == 5, proc.stderr
+    assert "/var/lib/mysql" in proc.stderr
+    assert "dc stop" not in calls
+    assert (stack / "compose.yml").read_text(encoding="utf-8") == "# the swapped compose file\n"
+
+
+def test_missing_previous_image_without_a_saved_tar_exits_4_before_anything_stops(tmp_path):
+    _make_run(tmp_path)
+    proc, _, calls = _stub_run(tmp_path, present=("mariadb:11.8", "redis:6.2-alpine"))
+    assert proc.returncode == 4, proc.stderr
+    assert f"previous image {DIGEST_BEFORE}" in proc.stderr
+    assert "dc stop" not in calls
+    assert not any(c.startswith("docker load") for c in calls)
+
+
+def test_missing_previous_image_is_loaded_from_the_saved_tar(tmp_path):
+    run_dir = _make_run(tmp_path)
+    (run_dir / "current-image-1.tar").write_text(DIGEST_BEFORE + "\n", encoding="utf-8", newline="\n")
+    proc, _, calls = _stub_run(tmp_path, present=("mariadb:11.8", "redis:6.2-alpine"))
+    assert proc.returncode == 0, proc.stderr
+    loads = [c for c in calls if c.startswith("docker load -i")]
+    assert loads and loads[0].endswith("current-image-1.tar")
+    assert calls.index(loads[0]) < calls.index("dc stop")
+
+
+def test_an_erp_image_in_compose_outside_the_known_refs_exits_4(tmp_path):
+    _make_run(tmp_path, compose=_compose().replace("    <<: *erp\n", "    <<: *erp\n    image: rt-erpnext:latest\n"))
+    proc, _, calls = _stub_run(tmp_path)
+    assert proc.returncode == 4, proc.stderr
+    assert "dc stop" not in calls
+
+
+def test_non_erp_images_are_checked_but_not_held_to_the_erp_pattern(tmp_path):
+    """mariadb and redis run their own images: they must be present, not match IMAGE_RE."""
+    _make_run(tmp_path)
+    proc, _, calls = _stub_run(tmp_path, present=(DIGEST_BEFORE, "redis:6.2-alpine"))
+    assert proc.returncode == 4, proc.stderr
+    assert "previous image mariadb:11.8" in proc.stderr
+    assert "docker image inspect -- mariadb:11.8" in calls or "docker image inspect mariadb:11.8" in calls
+    assert "dc stop" not in calls
+
+
+def test_restore_no_longer_needs_an_override_after_step_5():
+    text = _script()
+    step5 = text[text.index('echo "STEP 5 previous-image"'):]
+    assert "dcx" not in step5
+    assert "NOTE" not in step5
+    assert "point compose.yml at $NEW_VOL" in text
+
+
+def test_step5_keeps_the_indent_of_a_compose_whose_volumes_use_four_spaces(tmp_path):
+    """A fixed two-space insert would nest erp_db and sites under the new volume (pr-review finding 1)."""
+    compose = """services:
+    backend:
+        image: rt-erpnext:16.51.0-274589a3dd54
+    mariadb:
+        image: mariadb:11.8
+        volumes:
+            - erp_db:/var/lib/mysql
+
+volumes:
+    erp_db:
+    sites:
+"""
+    _make_run(tmp_path, compose=compose)
+    proc, stack, _ = _stub_run(tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert (stack / "compose.yml").read_text(encoding="utf-8") == f"""services:
+    backend:
+        image: rt-erpnext:16.51.0-274589a3dd54
+    mariadb:
+        image: mariadb:11.8
+        volumes:
+            - {NEW_VOL}:/var/lib/mysql
+
+volumes:
+    {NEW_VOL}:
+        external: true
+    erp_db:
+    sites:
+"""
+
+
+def test_an_image_line_with_a_trailing_comment_is_still_checked(tmp_path):
+    """`image: x  # pin` must not slip past the presence check (pr-review finding 4)."""
+    _make_run(tmp_path, compose=_compose().replace("image: redis:6.2-alpine", "image: redis:6.2-alpine  # pinned"))
+    proc, _, calls = _stub_run(tmp_path, present=(DIGEST_BEFORE, "mariadb:11.8"))
+    assert proc.returncode == 4, proc.stderr
+    assert "previous image redis:6.2-alpine" in proc.stderr
+    assert "dc stop" not in calls

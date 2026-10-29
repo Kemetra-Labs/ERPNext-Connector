@@ -9,6 +9,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -344,3 +345,76 @@ def test_current_images_limit_is_the_same_in_the_document_and_the_script(doc, bo
     pattern = doc["parameters"]["CurrentImages"]["allowedPattern"]
     limit = int(re.search(r",(\d+)\}", pattern).group(1)) + 2
     assert f'[ "${{#CURRENT_IMAGES}}" -le {limit} ]' in body
+
+
+def _db_volume_helper(body: str) -> str:
+    match = re.search(r"^PY_DB_VOLUME='(.*?)'$", body, re.S | re.M)
+    assert match, "PY_DB_VOLUME must be a single-quoted python block"
+    return match.group(1)
+
+
+def _resolve(body: str, mode: str, data: object) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, "-c", _db_volume_helper(body), mode], input=json.dumps(data),
+                          capture_output=True, text=True, check=False)
+
+
+def test_step_one_refuses_a_live_db_volume_that_differs_from_compose(body):
+    """lab-03 ran MariaDB on a restore volume while compose.yml still mounted erp_db: the next
+    recreate would have gone back to the old database (RT-927). Checked before anything stops."""
+    check = body[_pos(body, "# ---- step 1: check ----"):_pos(body, "RT_GATE check=pass")]
+    assert 'cid_of mariadb' in check
+    assert "config --format json" in check
+    assert 'stop "mariadb-volume-differs-from-compose"' in check
+    assert check.index("mariadb-volume-differs-from-compose") < check.index("docker pull")
+    # dc config interpolates erp.env: its output goes straight to python3, never to a file or the log.
+    config_line = next(line for line in check.splitlines() if "config --format json" in line)
+    assert "| python3 -c \"$PY_DB_VOLUME\" compose" in config_line
+    inspect_line = next(line for line in check.splitlines() if "docker inspect \"$MARIADB_CID\"" in line)
+    assert "| python3 -c \"$PY_DB_VOLUME\" container" in inspect_line
+
+
+COMPOSE_CONFIG = {
+    "name": "rt-erp",
+    "services": {"mariadb": {"volumes": [
+        {"type": "bind", "source": "/opt/rt-erp/my.cnf", "target": "/etc/mysql/conf.d/my.cnf"},
+        {"type": "volume", "source": "erp_db", "target": "/var/lib/mysql", "volume": {}},
+    ]}},
+    "volumes": {"erp_db": {"name": "rt-erp_erp_db"},
+                "rt-erp_mariadb-restore-7": {"name": "rt-erp_mariadb-restore-7", "external": True}},
+}
+
+
+def _container(mounts: list[dict]) -> list[dict]:
+    return [{"Mounts": mounts}]
+
+
+def test_db_volume_helper_resolves_the_compose_source_through_its_volume_name(body):
+    proc = _resolve(body, "compose", COMPOSE_CONFIG)
+    assert proc.returncode == 0 and proc.stdout.strip() == "rt-erp_erp_db", proc.stderr
+
+
+def test_db_volume_helper_resolves_an_external_restore_volume(body):
+    data = json.loads(json.dumps(COMPOSE_CONFIG))
+    data["services"]["mariadb"]["volumes"][1]["source"] = "rt-erp_mariadb-restore-7"
+    proc = _resolve(body, "compose", data)
+    assert proc.stdout.strip() == "rt-erp_mariadb-restore-7", proc.stderr
+
+
+def test_db_volume_helper_reads_the_running_container_mount(body):
+    proc = _resolve(body, "container", _container([
+        {"Type": "bind", "Source": "/x", "Destination": "/etc/mysql/conf.d/my.cnf"},
+        {"Type": "volume", "Name": "rt-erp_mariadb-restore-7", "Destination": "/var/lib/mysql"},
+    ]))
+    assert proc.returncode == 0 and proc.stdout.strip() == "rt-erp_mariadb-restore-7", proc.stderr
+
+
+@pytest.mark.parametrize("mode,data", [
+    ("container", [{"Mounts": [{"Type": "bind", "Source": "/srv/db", "Destination": "/var/lib/mysql"}]}]),
+    ("container", [{"Mounts": []}]),
+    ("compose", {"services": {"mariadb": {"volumes": [
+        {"type": "bind", "source": "/srv/db", "target": "/var/lib/mysql"}]}}, "volumes": {}}),
+    ("compose", {"services": {"backend": {}}, "volumes": {}}),
+])
+def test_db_volume_helper_fails_on_anything_but_one_named_volume(body, mode, data):
+    proc = _resolve(body, mode, data)
+    assert proc.returncode != 0 and proc.stdout.strip() == ""

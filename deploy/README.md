@@ -75,7 +75,9 @@ sudo integrations/erpnext-connector/deploy/lab/restore.sh <run-id>
 What the script checks before it changes anything:
 
 - it refuses after resume (exit 3);
-- it refuses a backup whose `SHA256SUMS` or `encryption_key` is missing (exit 4).
+- it refuses a backup whose `SHA256SUMS` or `encryption_key` is missing (exit 4);
+- it refuses a saved compose file that does not have exactly one `<volume>:/var/lib/mysql` mount and one top-level `volumes:` key (exit 5);
+- step 0: every image of the saved compose file must be on the host. A missing one is loaded from the run's `current-image-*.tar` (`save_current_image=true`); if there is no tar, or it is still missing, the script exits 4 before anything stops. The tars hold only the ERP images: a missing mariadb or redis image always exits 4. Whether `docker load` of an image saved by `ghcr.io/…@sha256:` digest makes that digest inspectable again depends on the host's image store; confirm it at the next restore rehearsal.
 
 What it does:
 
@@ -83,10 +85,12 @@ What it does:
 2. Starts MariaDB on a **new** volume (`rt-erp_mariadb-restore-<run-id>`) through an override file. The old volume is never touched.
 3. Copies the backup's `encryption_key` into the site config.
 4. Runs `bench --force restore` with the public and private files.
-5. Puts back the compose file saved before the swap, which holds the previous image.
+5. Puts back the compose file saved before the swap, which holds the previous image, with its MariaDB mount moved to the new volume (declared `external: true`). Then starts all services from `compose.yml` alone, with no override.
 6. Waits for ping 200.
 
-Its host assumptions are listed in its header. The restore rehearsal is what confirms them. After a real restore, fold the override's volume into `compose.yml` before the next deploy.
+Its host assumptions are listed in its header. The restore rehearsal is what confirms them. No manual step follows a restore: `compose.yml` already mounts the new volume. As a safety net, step 1 of `RT-ErpLabDeploy` stops with `mariadb-volume-differs-from-compose` when the running MariaDB volume is not the one `compose.yml` resolves to.
+
+**After this change merges** (RT-927 restore safety), the document in AWS must get a new version from main (owner step 5: `update-document`, then set the default version). Until then, lab-03 runs the old document without the volume check.
 
 ## Changing the embedded helpers
 
