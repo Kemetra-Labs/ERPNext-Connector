@@ -61,21 +61,18 @@ Confluence contains durable project-level context:
 
 Use it for context, not as proof that code exists.
 
-### Orchestrator
+### Orchestrator (retired, historical)
 
-`Kemetra/Orchestrator` is a versioned Technical Handbook only.
+`Kemetra/Orchestrator` is being retired as a separately maintained repository (AD-ORCH-003, accepted 2026-10-18; the GitHub archive itself is not yet done). It is a frozen historical source, not a handbook to consult or update. Do not link to it as a live source.
 
-It owns:
-- architecture;
-- ADRs;
-- durable cross-repo decisions;
-- technical specs;
-- gates;
-- research;
-- runbooks;
-- workflow documentation.
+Its former content now lives in:
+- GitHub `main` in the owning repository: implementation truth, plus repo-owned code, contract and build documentation;
+- Jira RT: live work, Work Modes, blockers, status and execution evidence;
+- Confluence RETAIL: architecture, accepted ADRs, durable decisions, research, runbooks and pilot knowledge.
 
-It is NOT:
+Copies indexed on the Confluence page "Legacy Orchestrator Files" are non-canonical unless explicitly ratified.
+
+It was never, and must not become:
 - a live work queue;
 - a task router;
 - a prompt compiler;
@@ -104,9 +101,9 @@ Do not convert Jira work back into the old queue/materialization model.
 
 ## 3. Current Repositories and Ownership
 
-### `Kemetra/Orchestrator`
+### `Kemetra/Orchestrator` (retired, historical)
 
-Technical Handbook only.
+Frozen historical source pending archive (AD-ORCH-003). Not an active repository, handbook or dependency.
 
 No production application code belongs here.
 

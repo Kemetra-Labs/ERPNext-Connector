@@ -57,7 +57,7 @@
 | **Admin-Console** | [`Kemetra/Admin-Console`](https://github.com/Kemetra/Admin-Console) | Operator web UI · catalog · inventory views · sync ops |
 | **ERPNext-Connector** ◀ you are here | [`Kemetra/ERPNext-Connector`](https://github.com/Kemetra/ERPNext-Connector) | The only ERPNext/Frappe adapter · DocType mapping · posting |
 
-<sub>One architecture, one set of contracts, one AI-embedded design. POS and Admin-Console both synchronize through Backend-Core, the single contract boundary, which alone reaches ERPNext through this connector ([flow and boundaries](#role-and-boundaries)). <a href="https://github.com/Kemetra/Orchestrator"><code>Kemetra/Orchestrator</code></a> is the technical handbook, not a track.</sub>
+<sub>One architecture, one set of contracts, one AI-embedded design. POS and Admin-Console both synchronize through Backend-Core, the single contract boundary, which alone reaches ERPNext through this connector ([flow and boundaries](#role-and-boundaries)). The former <code>Kemetra/Orchestrator</code> handbook is retired (AD-ORCH-003); durable decisions live in <a href="https://rahmaqanater.atlassian.net/wiki/spaces/RETAIL/pages/5341185/Decisions">Confluence RETAIL</a>.</sub>
 
 ---
 
@@ -498,11 +498,12 @@ yourself.
 
 | Repository | Role |
 | --- | --- |
-| [Orchestrator](https://github.com/Kemetra/Orchestrator) | Technical handbook: architecture, ADRs, gates, runbooks. Not a work queue. |
 | [Backend-Core](https://github.com/Kemetra/Backend-Core) | Backend, OpenAPI contracts, orchestration and the single contract boundary. |
 | [POS](https://github.com/Kemetra/POS) | Windows offline-capable cashier terminal. |
 | [Admin-Console](https://github.com/Kemetra/Admin-Console) | Admin and operations frontend. |
 | **ERPNext-Connector** | **This repository**: the only ERPNext / Frappe adapter. |
+
+Durable architecture, accepted ADRs and runbooks live in [Confluence RETAIL — Decisions](https://rahmaqanater.atlassian.net/wiki/spaces/RETAIL/pages/5341185/Decisions). `Kemetra/Orchestrator` is retired and frozen (AD-ORCH-003).
 
 ## License
 
