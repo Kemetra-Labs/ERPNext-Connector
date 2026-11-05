@@ -371,7 +371,6 @@ def test_bin_view_tick_error_is_reported_with_the_sent_request_id(frappe_stub, m
 	assert _request_ids(transport) == {request_id}
 
 
-
 def test_paged_report_job_error_is_reported_and_reraised(frappe_stub, monkeypatch):
 	captured = _record_captures(monkeypatch)
 	poller = importlib.import_module(_BIN_VIEW_POLLER)
@@ -384,6 +383,7 @@ def test_paged_report_job_error_is_reported_and_reraised(frappe_stub, monkeypatc
 	assert raised.value is exc
 	assert job_name == "bin_view_paged_report"
 	_assert_backend_core_accepts(request_id)
+
 
 def test_healthy_ticks_never_touch_sentry(frappe_stub, monkeypatch):
 	monkeypatch.setenv("RT_CONNECTOR_SENTRY_DSN", _DSN)

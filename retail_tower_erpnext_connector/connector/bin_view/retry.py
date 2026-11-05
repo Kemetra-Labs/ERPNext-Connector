@@ -49,104 +49,104 @@ ABANDONED = "abandoned"
 
 @dataclass(frozen=True)
 class FailureOutcome:
-    """What :meth:`RetrySet.record_failure` did with a failed request."""
+	"""What :meth:`RetrySet.record_failure` did with a failed request."""
 
-    status: str  # QUEUED | ABANDONED
-    failures: int
+	status: str  # QUEUED | ABANDONED
+	failures: int
 
 
 class RetrySet:
-    """Requests awaiting a fresh report attempt, oldest-charged first (FIFO rotation)."""
+	"""Requests awaiting a fresh report attempt, oldest-charged first (FIFO rotation)."""
 
-    def __init__(self, state: object = None) -> None:
-        self._entries: dict[str, tuple[BinViewRequest, int]] = {}
-        if not isinstance(state, Mapping):
-            return
-        for ref, raw in state.items():
-            try:
-                request = BinViewRequest.from_wire(raw["request"])
-                failures = int(raw["failures"])
-            except (KeyError, TypeError, ValueError):
-                continue  # unreadable entry (e.g. a pre-upgrade shape) — drop it
-            if request.request_ref == ref and failures >= 1:
-                self._entries[ref] = (request, failures)
+	def __init__(self, state: object = None) -> None:
+		self._entries: dict[str, tuple[BinViewRequest, int]] = {}
+		if not isinstance(state, Mapping):
+			return
+		for ref, raw in state.items():
+			try:
+				request = BinViewRequest.from_wire(raw["request"])
+				failures = int(raw["failures"])
+			except (KeyError, TypeError, ValueError):
+				continue  # unreadable entry (e.g. a pre-upgrade shape) — drop it
+			if request.request_ref == ref and failures >= 1:
+				self._entries[ref] = (request, failures)
 
-    def __contains__(self, request_ref: object) -> bool:
-        return request_ref in self._entries
+	def __contains__(self, request_ref: object) -> bool:
+		return request_ref in self._entries
 
-    def __len__(self) -> int:
-        return len(self._entries)
+	def __len__(self) -> int:
+		return len(self._entries)
 
-    def pending(self) -> list[BinViewRequest]:
-        """The requests to re-attempt this tick (a snapshot; safe to mutate the set while iterating)."""
-        return [request for request, _ in self._entries.values()]
+	def pending(self) -> list[BinViewRequest]:
+		"""The requests to re-attempt this tick (a snapshot; safe to mutate the set while iterating)."""
+		return [request for request, _ in self._entries.values()]
 
-    def has_room_for(self, request_ref: str) -> bool:
-        """True when ``request_ref`` is held already or the set is below ``MAX_PENDING``."""
-        return not self._is_full_for(request_ref)
+	def has_room_for(self, request_ref: str) -> bool:
+		"""True when ``request_ref`` is held already or the set is below ``MAX_PENDING``."""
+		return not self._is_full_for(request_ref)
 
-    def failures(self, request_ref: str) -> int:
-        entry = self._entries.get(request_ref)
-        return 0 if entry is None else entry[1]
+	def failures(self, request_ref: str) -> int:
+		entry = self._entries.get(request_ref)
+		return 0 if entry is None else entry[1]
 
-    def resolve(self, request_ref: str) -> None:
-        """Forget a request — its report completed, or it ended in a terminal (non-retryable) state."""
-        self._entries.pop(request_ref, None)
+	def resolve(self, request_ref: str) -> None:
+		"""Forget a request — its report completed, or it ended in a terminal (non-retryable) state."""
+		self._entries.pop(request_ref, None)
 
-    def record_failure(self, request: BinViewRequest) -> FailureOutcome:
-        """Count one more failed attempt; keep the request for the next tick, or abandon it.
+	def record_failure(self, request: BinViewRequest) -> FailureOutcome:
+		"""Count one more failed attempt; keep the request for the next tick, or abandon it.
 
-        The first failure (from the feed) queues the request; each failed retry adds one. After
-        the ``MAX_RETRY_TICKS``-th failed retry the request is abandoned and removed.
-        """
-        ref = request.request_ref
-        failures = self.failures(ref) + 1
-        if self._should_abandon(ref, failures):
-            return self._abandon(ref, failures)
-        return self._requeue(request, failures)
+		The first failure (from the feed) queues the request; each failed retry adds one. After
+		the ``MAX_RETRY_TICKS``-th failed retry the request is abandoned and removed.
+		"""
+		ref = request.request_ref
+		failures = self.failures(ref) + 1
+		if self._should_abandon(ref, failures):
+			return self._abandon(ref, failures)
+		return self._requeue(request, failures)
 
-    def charge_retry(self, request: BinViewRequest) -> FailureOutcome:
-        """Count a retry attempt BEFORE it runs and move the request to the back of the order.
+	def charge_retry(self, request: BinViewRequest) -> FailureOutcome:
+		"""Count a retry attempt BEFORE it runs and move the request to the back of the order.
 
-        Charging up front means an attempt that never returns (the worker is killed mid-attempt)
-        still uses up one retry once the poller has checkpointed the set. ``ABANDONED`` here means
-        the previous charged attempt was already the last one allowed, so it is not attempted again.
-        """
-        ref = request.request_ref
-        failures = self.failures(ref) + 1
-        if failures > MAX_RETRY_TICKS + 1:
-            return self._abandon(ref, failures)
-        return self._requeue(request, failures)
+		Charging up front means an attempt that never returns (the worker is killed mid-attempt)
+		still uses up one retry once the poller has checkpointed the set. ``ABANDONED`` here means
+		the previous charged attempt was already the last one allowed, so it is not attempted again.
+		"""
+		ref = request.request_ref
+		failures = self.failures(ref) + 1
+		if failures > MAX_RETRY_TICKS + 1:
+			return self._abandon(ref, failures)
+		return self._requeue(request, failures)
 
-    def settle_failed_retry(self, request: BinViewRequest) -> FailureOutcome:
-        """A charged retry failed: keep it (already counted and rotated) or abandon it at the bound."""
-        ref = request.request_ref
-        failures = self.failures(ref)
-        if failures > MAX_RETRY_TICKS:
-            return self._abandon(ref, failures)
-        return FailureOutcome(status=QUEUED, failures=failures)
+	def settle_failed_retry(self, request: BinViewRequest) -> FailureOutcome:
+		"""A charged retry failed: keep it (already counted and rotated) or abandon it at the bound."""
+		ref = request.request_ref
+		failures = self.failures(ref)
+		if failures > MAX_RETRY_TICKS:
+			return self._abandon(ref, failures)
+		return FailureOutcome(status=QUEUED, failures=failures)
 
-    def _abandon(self, request_ref: str, failures: int) -> FailureOutcome:
-        self._entries.pop(request_ref, None)
-        return FailureOutcome(status=ABANDONED, failures=failures)
+	def _abandon(self, request_ref: str, failures: int) -> FailureOutcome:
+		self._entries.pop(request_ref, None)
+		return FailureOutcome(status=ABANDONED, failures=failures)
 
-    def _requeue(self, request: BinViewRequest, failures: int) -> FailureOutcome:
-        """Store ``request`` with ``failures`` at the BACK of the order (pop + re-insert)."""
-        self._entries.pop(request.request_ref, None)
-        self._entries[request.request_ref] = (request, failures)
-        return FailureOutcome(status=QUEUED, failures=failures)
+	def _requeue(self, request: BinViewRequest, failures: int) -> FailureOutcome:
+		"""Store ``request`` with ``failures`` at the BACK of the order (pop + re-insert)."""
+		self._entries.pop(request.request_ref, None)
+		self._entries[request.request_ref] = (request, failures)
+		return FailureOutcome(status=QUEUED, failures=failures)
 
-    def _should_abandon(self, request_ref: str, failures: int) -> bool:
-        """Abandon once the retry budget is spent, or when a NEW request finds the set full."""
-        return failures > MAX_RETRY_TICKS or self._is_full_for(request_ref)
+	def _should_abandon(self, request_ref: str, failures: int) -> bool:
+		"""Abandon once the retry budget is spent, or when a NEW request finds the set full."""
+		return failures > MAX_RETRY_TICKS or self._is_full_for(request_ref)
 
-    def _is_full_for(self, request_ref: str) -> bool:
-        """True when ``request_ref`` is not held yet and the set is already at ``MAX_PENDING``."""
-        return request_ref not in self._entries and len(self._entries) >= MAX_PENDING
+	def _is_full_for(self, request_ref: str) -> bool:
+		"""True when ``request_ref`` is not held yet and the set is already at ``MAX_PENDING``."""
+		return request_ref not in self._entries and len(self._entries) >= MAX_PENDING
 
-    def to_state(self) -> dict[str, dict[str, object]]:
-        """A plain, cache-storable form (round-trips through the constructor)."""
-        return {
-            ref: {"request": request.to_wire(), "failures": failures}
-            for ref, (request, failures) in self._entries.items()
-        }
+	def to_state(self) -> dict[str, dict[str, object]]:
+		"""A plain, cache-storable form (round-trips through the constructor)."""
+		return {
+			ref: {"request": request.to_wire(), "failures": failures}
+			for ref, (request, failures) in self._entries.items()
+		}

@@ -34,30 +34,30 @@ from .contracts import RejectionReason
 
 
 class FailureKind(enum.Enum):
-    """Connector-internal, non-retryable failure kinds (mapped to the 012 closed set)."""
+	"""Connector-internal, non-retryable failure kinds (mapped to the 012 closed set)."""
 
-    CLOSED_PERIOD = "closed_period"
-    VALIDATION = "validation"
-    UNMAPPED_UNIT = "unmapped_unit"
-    UNMAPPED_ACCOUNT = "unmapped_account"
-    MISSING_ITEM_REF = "missing_item_ref"
-    DISABLED_ITEM = "disabled_item"
-    OTHER = "other"
+	CLOSED_PERIOD = "closed_period"
+	VALIDATION = "validation"
+	UNMAPPED_UNIT = "unmapped_unit"
+	UNMAPPED_ACCOUNT = "unmapped_account"
+	MISSING_ITEM_REF = "missing_item_ref"
+	DISABLED_ITEM = "disabled_item"
+	OTHER = "other"
 
 
 class UnmappedFailureKind(Exception):
-    """A failure kind not recognised by the mapper — raised, never silently bucketed."""
+	"""A failure kind not recognised by the mapper — raised, never silently bucketed."""
 
 
 # Internal kind → 012 closed category. Every FailureKind appears exactly once.
 _CATEGORY_BY_KIND: dict[FailureKind, str] = {
-    FailureKind.CLOSED_PERIOD: "closed_period",
-    FailureKind.VALIDATION: "validation",
-    FailureKind.UNMAPPED_UNIT: "validation",  # no `unmapped_uom` in the 012 set
-    FailureKind.UNMAPPED_ACCOUNT: "unmapped_account",
-    FailureKind.MISSING_ITEM_REF: "validation",  # upstream contract violation (R2)
-    FailureKind.DISABLED_ITEM: "validation",  # the Item is mapped; submit-validation failure
-    FailureKind.OTHER: "other",
+	FailureKind.CLOSED_PERIOD: "closed_period",
+	FailureKind.VALIDATION: "validation",
+	FailureKind.UNMAPPED_UNIT: "validation",  # no `unmapped_uom` in the 012 set
+	FailureKind.UNMAPPED_ACCOUNT: "unmapped_account",
+	FailureKind.MISSING_ITEM_REF: "validation",  # upstream contract violation (R2)
+	FailureKind.DISABLED_ITEM: "validation",  # the Item is mapped; submit-validation failure
+	FailureKind.OTHER: "other",
 }
 
 # Patterns whose VALUE is redacted from outgoing messages (token-like / credential-bearing).
@@ -75,22 +75,22 @@ _CATEGORY_BY_KIND: dict[FailureKind, str] = {
 # the fallback consumes the input, so the scan stays linear.
 _CREDENTIAL_KEY = r"""\b\w*?(?:token|password|passwd|pwd|secret|api[_-]?key|authorization)"""
 _SECRET_PATTERNS = (
-    re.compile(r"(?i)\bBearer\s+\S+"),
-    re.compile(rf"""(?i)(["']){_CREDENTIAL_KEY}\s*[=:](?:(?:\\.|(?!\1)[^\\]){{0,256}}\1|[\s\S]*)"""),
-    re.compile(
-        rf"""(?i)["']?{_CREDENTIAL_KEY}["']?"""
-        r"""\s*[=:]\s*(?:"(?:\\.|[^"\\]){0,256}"|'(?:\\.|[^'\\]){0,256}'|["'][\s\S]*|[^\s"',}]+["']?)"""
-    ),
-    re.compile(r"\bsk[-_][A-Za-z0-9_\-]{6,}"),
+	re.compile(r"(?i)\bBearer\s+\S+"),
+	re.compile(rf"""(?i)(["']){_CREDENTIAL_KEY}\s*[=:](?:(?:\\.|(?!\1)[^\\]){{0,256}}\1|[\s\S]*)"""),
+	re.compile(
+		rf"""(?i)["']?{_CREDENTIAL_KEY}["']?"""
+		r"""\s*[=:]\s*(?:"(?:\\.|[^"\\]){0,256}"|'(?:\\.|[^'\\]){0,256}'|["'][\s\S]*|[^\s"',}]+["']?)"""
+	),
+	re.compile(r"\bsk[-_][A-Za-z0-9_\-]{6,}"),
 )
 
 
 def scrub_message(message: str) -> str:
-    """Redact secret/token/credential substrings from a human-readable failure message."""
-    scrubbed = message
-    for pattern in _SECRET_PATTERNS:
-        scrubbed = pattern.sub("[redacted]", scrubbed)
-    return scrubbed
+	"""Redact secret/token/credential substrings from a human-readable failure message."""
+	scrubbed = message
+	for pattern in _SECRET_PATTERNS:
+		scrubbed = pattern.sub("[redacted]", scrubbed)
+	return scrubbed
 
 
 # DP2 outcome-ack contract: RejectionReason.message is 1..1000 chars (outcome-ack.dto.ts).
@@ -105,26 +105,26 @@ _WHITESPACE_RE = re.compile(r"\s+")
 
 
 def plain_bounded_message(message: str) -> str:
-    """Plain-text, secret-scrubbed, whitespace-collapsed message within the ack length bounds."""
-    text = _ANY_TAG_RE.sub("", _BLOCK_TAG_RE.sub(" ", message))
-    # RT-409: entity-encoded markup (`&lt;b&gt;`) becomes a tag only once unescaped — strip it again.
-    text = _DECODED_TAG_RE.sub("", _BLOCK_TAG_RE.sub(" ", html.unescape(text)))
-    text = _WHITESPACE_RE.sub(" ", text).strip()
-    text = scrub_message(text)
-    if not text:
-        return _EMPTY_REASON
-    if len(text) > REASON_MESSAGE_MAX:
-        text = text[: REASON_MESSAGE_MAX - 1].rstrip() + "…"
-    return text
+	"""Plain-text, secret-scrubbed, whitespace-collapsed message within the ack length bounds."""
+	text = _ANY_TAG_RE.sub("", _BLOCK_TAG_RE.sub(" ", message))
+	# RT-409: entity-encoded markup (`&lt;b&gt;`) becomes a tag only once unescaped — strip it again.
+	text = _DECODED_TAG_RE.sub("", _BLOCK_TAG_RE.sub(" ", html.unescape(text)))
+	text = _WHITESPACE_RE.sub(" ", text).strip()
+	text = scrub_message(text)
+	if not text:
+		return _EMPTY_REASON
+	if len(text) > REASON_MESSAGE_MAX:
+		text = text[: REASON_MESSAGE_MAX - 1].rstrip() + "…"
+	return text
 
 
 def to_rejection_reason(kind: FailureKind, *, message: str) -> RejectionReason:
-    """Build a 012 ``RejectionReason`` for a non-retryable failure.
+	"""Build a 012 ``RejectionReason`` for a non-retryable failure.
 
-    Raises :class:`UnmappedFailureKind` for an unrecognised kind (never invents a category).
-    The message is scrubbed of secrets (Gate G4), reduced to plain text and bounded to the ack
-    contract length (RT-48).
-    """
-    if not isinstance(kind, FailureKind) or kind not in _CATEGORY_BY_KIND:
-        raise UnmappedFailureKind(f"no 012 category for failure kind {kind!r} (FR-007)")
-    return RejectionReason(category=_CATEGORY_BY_KIND[kind], message=plain_bounded_message(message))
+	Raises :class:`UnmappedFailureKind` for an unrecognised kind (never invents a category).
+	The message is scrubbed of secrets (Gate G4), reduced to plain text and bounded to the ack
+	contract length (RT-48).
+	"""
+	if not isinstance(kind, FailureKind) or kind not in _CATEGORY_BY_KIND:
+		raise UnmappedFailureKind(f"no 012 category for failure kind {kind!r} (FR-007)")
+	return RejectionReason(category=_CATEGORY_BY_KIND[kind], message=plain_bounded_message(message))

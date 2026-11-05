@@ -260,7 +260,14 @@ class TestRefundIsHeldToTheFrozenWarehouse:
 
 def _expected(rate="10.00"):
 	"""RT-378: the representation a replay rebuilds from the work item (both sale lines)."""
-	line = {"qty": "1", "uom": "Nos", "rate": rate, "price_list_rate": rate, "amount": "10.00", "warehouse": "WH-F"}
+	line = {
+		"qty": "1",
+		"uom": "Nos",
+		"rate": rate,
+		"price_list_rate": rate,
+		"amount": "10.00",
+		"warehouse": "WH-F",
+	}
 	payload = {
 		"currency": "EGP",
 		"customer": "Walk-in",

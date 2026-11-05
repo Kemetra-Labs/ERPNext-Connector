@@ -20,15 +20,10 @@ _TABLE = "tabPosting Log"
 
 
 def execute() -> None:
-    # No-op if the DocType table isn't there yet (defensive; post_model_sync should have created it).
-    if not frappe.db.table_exists("Posting Log"):
-        return
-    existing = frappe.db.sql(
-        f"SHOW INDEX FROM `{_TABLE}` WHERE Key_name = %s", (_INDEX,)
-    )
-    if existing:
-        return  # already applied — idempotent re-run
-    frappe.db.sql(
-        f"ALTER TABLE `{_TABLE}` "
-        f"ADD UNIQUE INDEX `{_INDEX}` (`source_system`, `external_id`)"
-    )
+	# No-op if the DocType table isn't there yet (defensive; post_model_sync should have created it).
+	if not frappe.db.table_exists("Posting Log"):
+		return
+	existing = frappe.db.sql(f"SHOW INDEX FROM `{_TABLE}` WHERE Key_name = %s", (_INDEX,))
+	if existing:
+		return  # already applied — idempotent re-run
+	frappe.db.sql(f"ALTER TABLE `{_TABLE}` ADD UNIQUE INDEX `{_INDEX}` (`source_system`, `external_id`)")

@@ -36,7 +36,10 @@ packages = []
 
 [tool.ruff]
 line-length = 110
-target-version = "py314"
+# Format and lint target py313 on purpose: tools/contracts-check parses connector sources with
+# Python 3.12, and under py314 ruff format drops the parentheses of `except (A, B):` (PEP 758),
+# which 3.12 cannot parse. The runtime is still Python 3.14 (requires-python).
+target-version = "py313"
 
 [tool.ruff.lint]
 select = [

@@ -117,7 +117,11 @@ class TestResolveConfig(_CacheReset):
 class TestFailureNeverPropagates(_CacheReset):
 	def test_no_dsn_never_imports_the_sdk(self):
 		with mock.patch.object(sentry_client, "_load_sdk", side_effect=AssertionError("imported")):
-			self.assertFalse(capture_tick_error(_raised(ValueError("x")), request_id=_REQUEST_ID, job_name="posting_poll", environ={}))
+			self.assertFalse(
+				capture_tick_error(
+					_raised(ValueError("x")), request_id=_REQUEST_ID, job_name="posting_poll", environ={}
+				)
+			)
 
 	def test_missing_sdk_is_inert(self):
 		real_import = builtins.__import__
@@ -127,17 +131,26 @@ class TestFailureNeverPropagates(_CacheReset):
 				raise ImportError(name)
 			return real_import(name, *args, **kwargs)
 
-		with mock.patch.dict(sys.modules, {"sentry_sdk": None}), mock.patch.object(builtins, "__import__", _no_sentry):
+		with (
+			mock.patch.dict(sys.modules, {"sentry_sdk": None}),
+			mock.patch.object(builtins, "__import__", _no_sentry),
+		):
 			self.assertIsNone(sentry_client._load_sdk())
 			self.assertFalse(
-				capture_tick_error(_raised(ValueError("x")), request_id=_REQUEST_ID, job_name="posting_poll", environ=_ENV)
+				capture_tick_error(
+					_raised(ValueError("x")), request_id=_REQUEST_ID, job_name="posting_poll", environ=_ENV
+				)
 			)
 
 	def test_failing_sdk_constructor_returns_false(self):
-		broken = types.SimpleNamespace(Client=mock.Mock(side_effect=TypeError("unknown option")), Hub=mock.Mock())
+		broken = types.SimpleNamespace(
+			Client=mock.Mock(side_effect=TypeError("unknown option")), Hub=mock.Mock()
+		)
 		with mock.patch.object(sentry_client, "_load_sdk", return_value=broken):
 			self.assertFalse(
-				capture_tick_error(_raised(ValueError("x")), request_id=_REQUEST_ID, job_name="posting_poll", environ=_ENV)
+				capture_tick_error(
+					_raised(ValueError("x")), request_id=_REQUEST_ID, job_name="posting_poll", environ=_ENV
+				)
 			)
 
 	def test_failing_capture_returns_false(self):
@@ -146,7 +159,9 @@ class TestFailureNeverPropagates(_CacheReset):
 		sdk = types.SimpleNamespace(Client=mock.Mock(), Hub=mock.Mock(return_value=hub))
 		with mock.patch.object(sentry_client, "_load_sdk", return_value=sdk):
 			self.assertFalse(
-				capture_tick_error(_raised(ValueError("x")), request_id=_REQUEST_ID, job_name="posting_poll", environ=_ENV)
+				capture_tick_error(
+					_raised(ValueError("x")), request_id=_REQUEST_ID, job_name="posting_poll", environ=_ENV
+				)
 			)
 
 	def test_report_unhandled_reraises_the_original_exception(self):
@@ -213,7 +228,9 @@ class TestRealSdk(_CacheReset):
 		return capture_tick_error(exc, request_id=request_id, job_name="posting_poll", environ=_ENV)
 
 	def test_tick_error_becomes_one_scrubbed_tagged_event(self):
-		exc = _raised(ConnectionError("GET https://u:p@dp2.example/v1/feed?token=abc failed for jane@example.com"))
+		exc = _raised(
+			ConnectionError("GET https://u:p@dp2.example/v1/feed?token=abc failed for jane@example.com")
+		)
 		self.assertTrue(self._capture(exc))
 
 		(event,) = self.events
@@ -281,8 +298,9 @@ class TestRealSdk(_CacheReset):
 		def _blocked(self, *_a, **_k):
 			raise OSError("network unreachable")
 
-		with mock.patch.object(self.transport_cls, "capture_envelope", _blocked), mock.patch.object(
-			self.transport_cls, "capture_event", _blocked
+		with (
+			mock.patch.object(self.transport_cls, "capture_envelope", _blocked),
+			mock.patch.object(self.transport_cls, "capture_event", _blocked),
 		):
 			self._capture(_raised(ValueError("blocked")))
 		self.assertTrue(self._capture(_raised(ValueError("after"))))

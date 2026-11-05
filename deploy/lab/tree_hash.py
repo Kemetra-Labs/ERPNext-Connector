@@ -30,53 +30,53 @@ IGNORED_FILE_SUFFIXES = (".pyc",)
 
 
 def _object(kind: bytes, body: bytes) -> bytes:
-    return hashlib.sha1(kind + b" " + str(len(body)).encode() + b"\0" + body).digest()
+	return hashlib.sha1(kind + b" " + str(len(body)).encode() + b"\0" + body).digest()
 
 
 def _ignored_dir(name: str) -> bool:
-    return name in IGNORED_DIRS or name.endswith(IGNORED_DIR_SUFFIXES)
+	return name in IGNORED_DIRS or name.endswith(IGNORED_DIR_SUFFIXES)
 
 
 def _tree(path: Path) -> bytes | None:
-    """The 20-byte tree id of `path`, or None when nothing in it is part of the tree."""
-    entries: list[tuple[bytes, bytes, bytes]] = []  # (sort key, mode, name + id)
-    with os.scandir(path) as it:
-        for entry in it:
-            name = entry.name.encode("utf-8")
-            info = entry.stat(follow_symlinks=False)
-            if stat.S_ISLNK(info.st_mode):
-                body = os.readlink(entry.path).encode("utf-8")
-                entries.append((name, b"120000", name + b"\0" + _object(b"blob", body)))
-            elif stat.S_ISDIR(info.st_mode):
-                if _ignored_dir(entry.name):
-                    continue
-                sub = _tree(Path(entry.path))
-                if sub is not None:  # git cannot store an empty directory
-                    entries.append((name + b"/", b"40000", name + b"\0" + sub))
-            elif stat.S_ISREG(info.st_mode):
-                if entry.name.endswith(IGNORED_FILE_SUFFIXES):
-                    continue
-                mode = b"100755" if info.st_mode & stat.S_IXUSR else b"100644"
-                body = Path(entry.path).read_bytes()
-                entries.append((name, mode, name + b"\0" + _object(b"blob", body)))
-    if not entries:
-        return None
-    entries.sort(key=lambda item: item[0])
-    return _object(b"tree", b"".join(mode + b" " + rest for _, mode, rest in entries))
+	"""The 20-byte tree id of `path`, or None when nothing in it is part of the tree."""
+	entries: list[tuple[bytes, bytes, bytes]] = []  # (sort key, mode, name + id)
+	with os.scandir(path) as it:
+		for entry in it:
+			name = entry.name.encode("utf-8")
+			info = entry.stat(follow_symlinks=False)
+			if stat.S_ISLNK(info.st_mode):
+				body = os.readlink(entry.path).encode("utf-8")
+				entries.append((name, b"120000", name + b"\0" + _object(b"blob", body)))
+			elif stat.S_ISDIR(info.st_mode):
+				if _ignored_dir(entry.name):
+					continue
+				sub = _tree(Path(entry.path))
+				if sub is not None:  # git cannot store an empty directory
+					entries.append((name + b"/", b"40000", name + b"\0" + sub))
+			elif stat.S_ISREG(info.st_mode):
+				if entry.name.endswith(IGNORED_FILE_SUFFIXES):
+					continue
+				mode = b"100755" if info.st_mode & stat.S_IXUSR else b"100644"
+				body = Path(entry.path).read_bytes()
+				entries.append((name, mode, name + b"\0" + _object(b"blob", body)))
+	if not entries:
+		return None
+	entries.sort(key=lambda item: item[0])
+	return _object(b"tree", b"".join(mode + b" " + rest for _, mode, rest in entries))
 
 
 def tree_hash(directory: Path) -> str:
-    result = _tree(Path(directory))
-    return (result if result is not None else _object(b"tree", b"")).hex()
+	result = _tree(Path(directory))
+	return (result if result is not None else _object(b"tree", b"")).hex()
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 1 or not Path(argv[0]).is_dir():
-        print("usage: tree_hash.py DIR", file=sys.stderr)
-        return 2
-    print(tree_hash(Path(argv[0])))
-    return 0
+	if len(argv) != 1 or not Path(argv[0]).is_dir():
+		print("usage: tree_hash.py DIR", file=sys.stderr)
+		return 2
+	print(tree_hash(Path(argv[0])))
+	return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+	sys.exit(main(sys.argv[1:]))

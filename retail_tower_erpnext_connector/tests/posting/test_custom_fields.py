@@ -20,22 +20,22 @@ _FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "custom_field.json
 
 
 def _fixture() -> list[dict]:
-    return json.loads(_FIXTURE.read_text(encoding="utf-8"))
+	return json.loads(_FIXTURE.read_text(encoding="utf-8"))
 
 
 def _exported_names() -> set[str]:
-    (entry,) = [f for f in hooks.fixtures if f["dt"] == "Custom Field"]
-    ((_field, _op, names),) = entry["filters"]
-    return set(names)
+	(entry,) = [f for f in hooks.fixtures if f["dt"] == "Custom Field"]
+	((_field, _op, names),) = entry["filters"]
+	return set(names)
 
 
 def test_every_custom_field_in_the_fixture_is_exported_by_hooks():
-    assert {f["name"] for f in _fixture()} == _exported_names()
+	assert {f["name"] for f in _fixture()} == _exported_names()
 
 
 def test_sales_invoice_item_line_ref_field_exists_read_only():
-    by_name = {f["name"]: f for f in _fixture()}
-    f = by_name["Sales Invoice Item-rt_line_ref"]
-    assert (f["dt"], f["fieldname"], f["fieldtype"]) == ("Sales Invoice Item", "rt_line_ref", "Data")
-    # Set only by the connector; never copied onto a new document by ERPNext's mapper.
-    assert (f["read_only"], f["no_copy"]) == (1, 1)
+	by_name = {f["name"]: f for f in _fixture()}
+	f = by_name["Sales Invoice Item-rt_line_ref"]
+	assert (f["dt"], f["fieldname"], f["fieldtype"]) == ("Sales Invoice Item", "rt_line_ref", "Data")
+	# Set only by the connector; never copied onto a new document by ERPNext's mapper.
+	assert (f["read_only"], f["no_copy"]) == (1, 1)

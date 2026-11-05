@@ -32,40 +32,51 @@ _TABLE = "tabSales Invoice"
 # recorded as applied and NEVER re-run (patches do not auto-re-run) — silently leaving the F-002
 # dedup disabled on fresh installs. So the patch OWNS its prerequisite: ensure the columns, then index.
 _INDEXED_FIELDS = {
-    "Sales Invoice": [
-        {
-            "fieldname": "rt_source_system", "label": "RT Source System", "fieldtype": "Data",
-            "length": 100, "insert_after": "naming_series", "read_only": 1, "no_copy": 1,
-            "print_hide": 1, "translatable": 0,
-        },
-        {
-            "fieldname": "rt_external_id", "label": "RT External Id", "fieldtype": "Data",
-            "length": 200, "insert_after": "rt_source_system", "read_only": 1, "no_copy": 1,
-            "print_hide": 1, "translatable": 0,
-        },
-    ]
+	"Sales Invoice": [
+		{
+			"fieldname": "rt_source_system",
+			"label": "RT Source System",
+			"fieldtype": "Data",
+			"length": 100,
+			"insert_after": "naming_series",
+			"read_only": 1,
+			"no_copy": 1,
+			"print_hide": 1,
+			"translatable": 0,
+		},
+		{
+			"fieldname": "rt_external_id",
+			"label": "RT External Id",
+			"fieldtype": "Data",
+			"length": 200,
+			"insert_after": "rt_source_system",
+			"read_only": 1,
+			"no_copy": 1,
+			"print_hide": 1,
+			"translatable": 0,
+		},
+	]
 }
 
 
 def execute() -> None:
-    if not frappe.db.table_exists("Sales Invoice"):
-        return  # defensive — erpnext should have created it
-    # OWN the prerequisite: upsert the indexed provenance Custom Fields (idempotent — safe whether or
-    # not the fixture sync already ran). Do NOT rely on fixture-sync ordering.
-    create_custom_fields(_INDEXED_FIELDS, ignore_validate=True)
-    cols = {c["Field"] for c in frappe.db.sql(f"SHOW COLUMNS FROM `{_TABLE}`", as_dict=True)}
-    if "rt_source_system" not in cols or "rt_external_id" not in cols:
-        # FAIL LOUD: a fail-closed dedup guard that can't install its columns must FAIL the migrate,
-        # never record itself green having done nothing (Principle VI — silent success is the bug the
-        # reviewer flagged). Raising leaves the patch UN-logged, so a fixed re-run can apply it.
-        raise RuntimeError(
-            "sales_invoice_unique_provenance: rt_source_system/rt_external_id columns absent after "
-            "create_custom_fields — cannot add the F-002 dedup index; aborting migrate."
-        )
-    existing = frappe.db.sql(f"SHOW INDEX FROM `{_TABLE}` WHERE Key_name = %s", (_INDEX,))
-    if existing:
-        return  # index already present — idempotent (guards against the line being re-added)
-    frappe.db.sql(
-        f"ALTER TABLE `{_TABLE}` "
-        f"ADD UNIQUE INDEX `{_INDEX}` (`rt_source_system`, `rt_external_id`)"
-    )
+	if not frappe.db.table_exists("Sales Invoice"):
+		return  # defensive — erpnext should have created it
+	# OWN the prerequisite: upsert the indexed provenance Custom Fields (idempotent — safe whether or
+	# not the fixture sync already ran). Do NOT rely on fixture-sync ordering.
+	create_custom_fields(_INDEXED_FIELDS, ignore_validate=True)
+	cols = {c["Field"] for c in frappe.db.sql(f"SHOW COLUMNS FROM `{_TABLE}`", as_dict=True)}
+	if "rt_source_system" not in cols or "rt_external_id" not in cols:
+		# FAIL LOUD: a fail-closed dedup guard that can't install its columns must FAIL the migrate,
+		# never record itself green having done nothing (Principle VI — silent success is the bug the
+		# reviewer flagged). Raising leaves the patch UN-logged, so a fixed re-run can apply it.
+		raise RuntimeError(
+			"sales_invoice_unique_provenance: rt_source_system/rt_external_id columns absent after "
+			"create_custom_fields — cannot add the F-002 dedup index; aborting migrate."
+		)
+	existing = frappe.db.sql(f"SHOW INDEX FROM `{_TABLE}` WHERE Key_name = %s", (_INDEX,))
+	if existing:
+		return  # index already present — idempotent (guards against the line being re-added)
+	frappe.db.sql(
+		f"ALTER TABLE `{_TABLE}` ADD UNIQUE INDEX `{_INDEX}` (`rt_source_system`, `rt_external_id`)"
+	)

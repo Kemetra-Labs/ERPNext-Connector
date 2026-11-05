@@ -75,10 +75,25 @@ class _Frappe(types.ModuleType):
 
 def _legacy_refund_invoice():
 	"""The legacy (pre-RT-71, pre-RT-377) refund credit note as ERPNext holds it."""
-	row = {"item_code": "ITEM-A", "qty": -2.0, "uom": "Nos", "rate": 100.0, "amount": -200.0,
-		"warehouse": "Stores - A", "price_list_rate": 100.0}
-	return {"docstatus": 1, "currency": "EGP", "customer": "Walk-in", "company": "RT Company",
-		"ignore_pricing_rule": 0, "grand_total": -200.0, "taxes": [], "items": [row]}
+	row = {
+		"item_code": "ITEM-A",
+		"qty": -2.0,
+		"uom": "Nos",
+		"rate": 100.0,
+		"amount": -200.0,
+		"warehouse": "Stores - A",
+		"price_list_rate": 100.0,
+	}
+	return {
+		"docstatus": 1,
+		"currency": "EGP",
+		"customer": "Walk-in",
+		"company": "RT Company",
+		"ignore_pricing_rule": 0,
+		"grand_total": -200.0,
+		"taxes": [],
+		"items": [row],
+	}
 
 
 class _Client:
@@ -214,4 +229,6 @@ class TestRefundContainmentInGlue:
 		assert _post(glue, store, client) == "posted"
 		assert client.acks[0]["ack"]["documentRef"]["name"] == "ACC-SINV-2026-00028"
 		# The replay guard answered first: no recovery lookup by the reversal's own provenance.
-		assert all(f["rt_external_id"] != "44444444-4444-4444-8444-444444444444" for _d, f, _x in fake.lookups)
+		assert all(
+			f["rt_external_id"] != "44444444-4444-4444-8444-444444444444" for _d, f, _x in fake.lookups
+		)

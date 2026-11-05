@@ -77,9 +77,7 @@ def _create_sales_invoice_index() -> None:
 
 	create_custom_fields(patch._INDEXED_FIELDS, ignore_validate=True)
 	frappe.db.commit()
-	frappe.db.add_unique(
-		"Sales Invoice", list(SALES_INVOICE_COLUMNS), constraint_name=SALES_INVOICE_INDEX
-	)
+	frappe.db.add_unique("Sales Invoice", list(SALES_INVOICE_COLUMNS), constraint_name=SALES_INVOICE_INDEX)
 
 
 def ensure_g5_indexes() -> None:

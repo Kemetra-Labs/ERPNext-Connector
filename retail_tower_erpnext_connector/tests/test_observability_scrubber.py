@@ -259,17 +259,23 @@ class TestMessageMasking(unittest.TestCase):
 		self.assertEqual(sanitize_message("bad https:///nohost?q=1 end"), "bad [url] end")
 
 	def test_email_is_masked(self):
-		self.assertEqual(sanitize_message("customer jane.doe@example.com missing"), "customer [email] missing")
+		self.assertEqual(
+			sanitize_message("customer jane.doe@example.com missing"), "customer [email] missing"
+		)
 
 	def test_postgres_key_detail_is_masked_to_the_end(self):
 		self.assertEqual(
-			sanitize_message('duplicate key value violates unique constraint "u" Key (email)=(a@b.c) already exists.'),
+			sanitize_message(
+				'duplicate key value violates unique constraint "u" Key (email)=(a@b.c) already exists.'
+			),
 			'duplicate key value violates unique constraint "u" Key (...)=(...)',
 		)
 
 	def test_postgres_failing_row_is_masked_to_the_end(self):
 		self.assertEqual(
-			sanitize_message("null value in column violates not-null constraint Failing row contains (1, x, (y))."),
+			sanitize_message(
+				"null value in column violates not-null constraint Failing row contains (1, x, (y))."
+			),
 			"null value in column violates not-null constraint Failing row contains (...)",
 		)
 
@@ -322,15 +328,17 @@ class TestMessageMasking(unittest.TestCase):
 		self.assertEqual(sanitize_message("basic validation failed"), "basic validation failed")
 
 	def test_credential_in_a_token_that_also_holds_a_url_is_masked(self):
-		self.assertEqual(
-			sanitize_message("token=xyz,url=https://h.example/p?q=1"), "token=[redacted]"
-		)
+		self.assertEqual(sanitize_message("token=xyz,url=https://h.example/p?q=1"), "token=[redacted]")
 		self.assertEqual(sanitize_message("password=ab/cd?x=1"), "password=[redacted]")
 		self.assertEqual(sanitize_message("dp2_token=abc/def#f"), "dp2_token=[redacted]")
 
 	def test_credential_key_value_forms_are_masked(self):
-		self.assertEqual(sanitize_message("dp2_token=abc123 api_key:xyz ok"), "dp2_token=[redacted] api_key:[redacted] ok")
-		self.assertEqual(sanitize_message('{"password": "hunter2", "qty": 1}'), '{"password": [redacted] "qty": 1}')
+		self.assertEqual(
+			sanitize_message("dp2_token=abc123 api_key:xyz ok"), "dp2_token=[redacted] api_key:[redacted] ok"
+		)
+		self.assertEqual(
+			sanitize_message('{"password": "hunter2", "qty": 1}'), '{"password": [redacted] "qty": 1}'
+		)
 		self.assertEqual(sanitize_message("headers={'dp2_token': 'abc'}"), "headers={'dp2_token': [redacted]")
 		self.assertEqual(sanitize_message("cfg=x;client_secret=s3"), "cfg=x;client_secret=[redacted]")
 
@@ -506,5 +514,7 @@ class TestRt879RedactionVectors(unittest.TestCase):
 		linear = _UNION["linearTime"]
 		started = time.perf_counter()
 		for item in linear["inputs"]:
-			self.assertLessEqual(len(sanitize_message(item["pattern"] * item["repeat"])), linear["maxOutputLength"])
+			self.assertLessEqual(
+				len(sanitize_message(item["pattern"] * item["repeat"])), linear["maxOutputLength"]
+			)
 		self.assertLess((time.perf_counter() - started) * 1000, linear["maxTotalMs"])

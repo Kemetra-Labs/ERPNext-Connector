@@ -410,8 +410,13 @@ class TestReplayVerification:
 
 	def test_a_correct_pre_rt377_legacy_invoice_acks_posted(self, load_glue):
 		# ERPNext's own list price and an invented discount, but the rate Retail Tower sent (flag 0).
-		row = {"item_code": "ITEM-A", "warehouse": "X", "rt_line_ref": _A, "price_list_rate": 110.0,
-			"discount_amount": 10.0}
+		row = {
+			"item_code": "ITEM-A",
+			"warehouse": "X",
+			"rt_line_ref": _A,
+			"price_list_rate": 110.0,
+			"discount_amount": 10.0,
+		}
 		fake = _Frappe(items=[row], flag=0, company="ERPNext Default Co")
 		outcome, _client = _post(load_glue(fake), _work_item(version=None), _Store(existing=_EXISTING))
 		assert outcome == "posted"
@@ -525,7 +530,13 @@ class TestReplayRepresentation:
 	"""RT-378 (RT-283 B.3): a replay also verifies the persisted representation."""
 
 	def test_a_repriced_existing_invoice_acks_reconciliation_required(self, load_glue):
-		row = {"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A, "rate": 90.0, "amount": 90.0}
+		row = {
+			"item_code": "ITEM-A",
+			"warehouse": "Frozen WH",
+			"rt_line_ref": _A,
+			"rate": 90.0,
+			"amount": 90.0,
+		}
 		fake = _Frappe(items=[row])
 		glue = load_glue(fake)
 		outcome, client = _post(glue, _work_item(), _Store(existing=_EXISTING))
@@ -575,7 +586,9 @@ class TestReplayRepresentation:
 	def test_a_sale_replay_does_not_depend_on_todays_site_default_company(self, load_glue, company):
 		# Codex PR #66: the sale's company was checked at insert; a site default that is blank or has
 		# changed since must not read as document drift on replay (the existing invoice is on RT Company).
-		fake = _Frappe(items=[{"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A}], company=company)
+		fake = _Frappe(
+			items=[{"item_code": "ITEM-A", "warehouse": "Frozen WH", "rt_line_ref": _A}], company=company
+		)
 		outcome, _client = _post(load_glue(fake), _work_item(), _Store(existing=_EXISTING))
 		assert outcome == "posted"
 

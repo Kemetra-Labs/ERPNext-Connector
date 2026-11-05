@@ -65,8 +65,13 @@ class _Invoice:
 	def insert(self):
 		grand = sum(Decimal(i["amount"]) for i in self.payload["items"])
 		paid = sum(Decimal(p["amount"]) for p in self.payload.get("payments") or [])
-		self.values = {"grand_total": float(grand), "paid_amount": float(paid), "change_amount": 0.0,
-			"write_off_amount": 0.0, "outstanding_amount": float(grand - paid)}
+		self.values = {
+			"grand_total": float(grand),
+			"paid_amount": float(paid),
+			"change_amount": 0.0,
+			"write_off_amount": 0.0,
+			"outstanding_amount": float(grand - paid),
+		}
 		self._fake.events.append("insert")
 
 	def get(self, field):
@@ -97,7 +102,12 @@ class _Frappe(types.ModuleType):
 		self._logger = _Logger()
 		self.logger = lambda name=None: self._logger
 		self.events, self.payloads, self.reads = [], [], []
-		self.flags, self.batch_item, self.original_bundle, self.posted = flags, batch_item, original_bundle, posted
+		self.flags, self.batch_item, self.original_bundle, self.posted = (
+			flags,
+			batch_item,
+			original_bundle,
+			posted,
+		)
 		self.submit_error = None
 		self.db = types.SimpleNamespace(
 			get_value=self._get_value,
@@ -116,8 +126,13 @@ class _Frappe(types.ModuleType):
 		assert filters == _ORIGINAL
 		if fields == ["posting_date", "posting_time"]:
 			return {"posting_date": datetime.date(2026, 6, 1), "posting_time": datetime.timedelta(hours=10)}
-		return {"update_stock": 1, "disable_rounded_total": 1, "is_pos": 0, "customer": "Original Customer",
-			"company": "RT Company"}
+		return {
+			"update_stock": 1,
+			"disable_rounded_total": 1,
+			"is_pos": 0,
+			"customer": "Original Customer",
+			"company": "RT Company",
+		}
 
 	def get_all(self, doctype, filters=None, fields=None, **_):
 		self.reads.append(doctype)
@@ -129,7 +144,13 @@ class _Frappe(types.ModuleType):
 		if doctype == "Sales Invoice Item":
 			return self._invoice_rows(filters)
 		if doctype == "Stock Ledger Entry":
-			return [{"voucher_detail_no": "new-row-1", "actual_qty": self._moved(), "serial_and_batch_bundle": "SABB-1"}]
+			return [
+				{
+					"voucher_detail_no": "new-row-1",
+					"actual_qty": self._moved(),
+					"serial_and_batch_bundle": "SABB-1",
+				}
+			]
 		if doctype == "Serial and Batch Entry":
 			wanted = filters["parent"][1]
 			entries = [{"parent": "SABB-0", "batch_no": "B1", "qty": -2.0}] if "SABB-0" in wanted else []
@@ -142,10 +163,22 @@ class _Frappe(types.ModuleType):
 		if "name" in filters:  # the original batch rows' bundles (G7-10)
 			return [{"name": "row-a", "serial_and_batch_bundle": self.original_bundle}]
 		if filters.get("parent") == _ORIGINAL:
-			return [{"name": "row-a", "item_code": "ITEM-A", "qty": 2.0, "idx": 1, "warehouse": "Stores - A",
-				"rt_line_ref": _A, "uom": "Nos", "conversion_factor": 1.0}]
+			return [
+				{
+					"name": "row-a",
+					"item_code": "ITEM-A",
+					"qty": 2.0,
+					"idx": 1,
+					"warehouse": "Stores - A",
+					"rt_line_ref": _A,
+					"uom": "Nos",
+					"conversion_factor": 1.0,
+				}
+			]
 		assert filters.get("parent") == _NEW  # the submitted invoice, read back for verification
-		stock_qty = float(self.payloads[-1]["items"][0]["qty"])  # the row as sent: + for a sale, - for a credit note
+		stock_qty = float(
+			self.payloads[-1]["items"][0]["qty"]
+		)  # the row as sent: + for a sale, - for a credit note
 		return [{"name": "new-row-1", "idx": 1, "stock_qty": stock_qty, "serial_and_batch_bundle": "SABB-1"}]
 
 	def _moved(self):
@@ -208,36 +241,72 @@ _B1 = {"doctype": "Batch", "name": "B1"}
 
 
 def _line(**tracking):
-	return {"lineRef": _A, "lineName": "ITEM-A", "unitPrice": "100.00", "currencyCode": "EGP", "quantity": "2",
-		"lineAmount": "200.00", "unit": "each", "erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"}, **tracking}
+	return {
+		"lineRef": _A,
+		"lineName": "ITEM-A",
+		"unitPrice": "100.00",
+		"currencyCode": "EGP",
+		"quantity": "2",
+		"lineAmount": "200.00",
+		"unit": "each",
+		"erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
+		**tracking,
+	}
 
 
 def _sale_wire(**tracking):
-	return {"saleRef": "22222222-2222-4222-8222-222222222222", "storeId": _STORE, "currencyCode": "EGP",
-		"posTotal": "200.00", "occurredAt": "2026-06-01T10:00:00Z", "businessDate": "2026-06-01",
-		"sourceSystem": "pos-pulse", "externalId": "POS-9001", "lines": [_line(**tracking)]}
+	return {
+		"saleRef": "22222222-2222-4222-8222-222222222222",
+		"storeId": _STORE,
+		"currencyCode": "EGP",
+		"posTotal": "200.00",
+		"occurredAt": "2026-06-01T10:00:00Z",
+		"businessDate": "2026-06-01",
+		"sourceSystem": "pos-pulse",
+		"externalId": "POS-9001",
+		"lines": [_line(**tracking)],
+	}
 
 
 def _sale(**tracking):
 	tracking = tracking or {"trackingMode": "batch", "erpnextBatchRef": _B1}
-	return c.PostingWorkItem.from_wire({
-		"workItemRef": "11111111-1111-4111-8111-111111111111", "kind": "sale_post", "sourceSystem": "pos-pulse",
-		"externalId": "POS-9001", "payloadHash": "a" * 64, "businessDate": "2026-06-01", "itemCursor": "c-1",
-		"sale": _sale_wire(**tracking),
-	})
+	return c.PostingWorkItem.from_wire(
+		{
+			"workItemRef": "11111111-1111-4111-8111-111111111111",
+			"kind": "sale_post",
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-9001",
+			"payloadHash": "a" * 64,
+			"businessDate": "2026-06-01",
+			"itemCursor": "c-1",
+			"sale": _sale_wire(**tracking),
+		}
+	)
 
 
 def _return(**tracking):
 	tracking = tracking or {"trackingMode": "batch", "erpnextBatchRef": _B1}
-	return c.PostingWorkItem.from_wire({
-		"workItemRef": "88888888-8888-4888-8888-888888888888", "kind": "reversal", "sourceSystem": "pos-pulse",
-		"externalId": "POS-9001", "payloadHash": "e" * 64, "businessDate": "2026-06-01", "itemCursor": "c-2",
-		"reversalOf": {"sourceSystem": "pos-pulse", "externalId": "POS-9001", "reversalKind": "return",
-			"recordedAt": "2026-06-05T09:30:00Z", "businessDate": "2026-06-05",
-			"returnLines": [{"lineRef": _A, "quantity": "1", "lineAmount": "100.00"}],
-			"refundTenders": [{"method": "cash", "amount": "100.00"}]},
-		"sale": _sale_wire(**tracking),
-	})
+	return c.PostingWorkItem.from_wire(
+		{
+			"workItemRef": "88888888-8888-4888-8888-888888888888",
+			"kind": "reversal",
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-9001",
+			"payloadHash": "e" * 64,
+			"businessDate": "2026-06-01",
+			"itemCursor": "c-2",
+			"reversalOf": {
+				"sourceSystem": "pos-pulse",
+				"externalId": "POS-9001",
+				"reversalKind": "return",
+				"recordedAt": "2026-06-05T09:30:00Z",
+				"businessDate": "2026-06-05",
+				"returnLines": [{"lineRef": _A, "quantity": "1", "lineAmount": "100.00"}],
+				"refundTenders": [{"method": "cash", "amount": "100.00"}],
+			},
+			"sale": _sale_wire(**tracking),
+		}
+	)
 
 
 def _post(glue, work_item, *, store=None):

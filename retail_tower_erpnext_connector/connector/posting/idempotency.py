@@ -38,66 +38,66 @@ Key = tuple[str, str]
 
 
 class IdempotencyConflict(Exception):
-    """The same replay key already maps to a DIFFERENT document (012 409-class conflict).
+	"""The same replay key already maps to a DIFFERENT document (012 409-class conflict).
 
-    Reusing an idempotency key with a different logical outcome is rejected — the connector
-    never silently overwrites a recorded posting (Principle IV).
-    """
+	Reusing an idempotency key with a different logical outcome is rejected — the connector
+	never silently overwrites a recorded posting (Principle IV).
+	"""
 
-    def __init__(self, key: Key, existing: ErpnextDocumentRef, attempted: ErpnextDocumentRef) -> None:
-        super().__init__(
-            f"idempotency conflict for {key}: already posted as {existing}, "
-            f"attempted {attempted} (409 idempotency_key_conflict)"
-        )
-        self.key = key
-        self.existing = existing
-        self.attempted = attempted
+	def __init__(self, key: Key, existing: ErpnextDocumentRef, attempted: ErpnextDocumentRef) -> None:
+		super().__init__(
+			f"idempotency conflict for {key}: already posted as {existing}, "
+			f"attempted {attempted} (409 idempotency_key_conflict)"
+		)
+		self.key = key
+		self.existing = existing
+		self.attempted = attempted
 
 
 class IdempotencyStore(Protocol):
-    """Persistence for ``(sourceSystem, externalId) → documentRef``.
+	"""Persistence for ``(sourceSystem, externalId) → documentRef``.
 
-    ``record_posted`` MUST raise :class:`IdempotencyConflict` if the key already maps to a
-    different ``documentRef`` (re-recording the same ref is a no-op replay)."""
+	``record_posted`` MUST raise :class:`IdempotencyConflict` if the key already maps to a
+	different ``documentRef`` (re-recording the same ref is a no-op replay)."""
 
-    def get_document_ref(self, key: Key) -> ErpnextDocumentRef | None: ...
+	def get_document_ref(self, key: Key) -> ErpnextDocumentRef | None: ...
 
-    def record_posted(self, key: Key, document_ref: ErpnextDocumentRef) -> None: ...
+	def record_posted(self, key: Key, document_ref: ErpnextDocumentRef) -> None: ...
 
 
 def provenance_id(work_item: PostingWorkItem) -> str:
-    """The per-posting-distinct provenance value for a work-item (the #28 discriminator).
+	"""The per-posting-distinct provenance value for a work-item (the #28 discriminator).
 
-    - ``sale_post`` → ``external_id`` (the 012 O-3 anchor; forward 1:1, UNCHANGED).
-    - ``reversal`` → ``work_item_ref`` (the per-reversal-distinct on-wire value; ``external_id``
-      on a reversal is the ORIGINAL sale's id and is NOT distinct per reversal).
+	- ``sale_post`` → ``external_id`` (the 012 O-3 anchor; forward 1:1, UNCHANGED).
+	- ``reversal`` → ``work_item_ref`` (the per-reversal-distinct on-wire value; ``external_id``
+	  on a reversal is the ORIGINAL sale's id and is NOT distinct per reversal).
 
-    This single value is the second element of the replay key (:func:`key_for`), the
-    ``rt_external_id`` written by the reversal builder, and the lookup value
-    ``frappe_glue._find_posted_invoice`` queries by — they MUST all read it (see module docstring).
-    """
-    if work_item.kind == "reversal":
-        return work_item.work_item_ref
-    if work_item.kind == "sale_post":
-        return work_item.external_id
-    raise ValueError(f"provenance_id: unexpected work-item kind {work_item.kind!r}")
+	This single value is the second element of the replay key (:func:`key_for`), the
+	``rt_external_id`` written by the reversal builder, and the lookup value
+	``frappe_glue._find_posted_invoice`` queries by — they MUST all read it (see module docstring).
+	"""
+	if work_item.kind == "reversal":
+		return work_item.work_item_ref
+	if work_item.kind == "sale_post":
+		return work_item.external_id
+	raise ValueError(f"provenance_id: unexpected work-item kind {work_item.kind!r}")
 
 
 def key_for(work_item: PostingWorkItem) -> Key:
-    """The replay key for a work-item.
+	"""The replay key for a work-item.
 
-    ``sale_post`` → ``(sourceSystem, externalId)`` (the 012 O-3 anchor — UNCHANGED). ``reversal``
-    → ``(sourceSystem, workItemRef)`` (Connector #28 re-key — see module docstring): a reversal's
-    top-level ``externalId`` is the ORIGINAL sale's id, so keying on it would collide with the
-    original sale's replay slot and silently echo the original invoice.
-    """
-    return (work_item.source_system, provenance_id(work_item))
+	``sale_post`` → ``(sourceSystem, externalId)`` (the 012 O-3 anchor — UNCHANGED). ``reversal``
+	→ ``(sourceSystem, workItemRef)`` (Connector #28 re-key — see module docstring): a reversal's
+	top-level ``externalId`` is the ORIGINAL sale's id, so keying on it would collide with the
+	original sale's replay slot and silently echo the original invoice.
+	"""
+	return (work_item.source_system, provenance_id(work_item))
 
 
 def replay_guard(store: IdempotencyStore, key: Key) -> ErpnextDocumentRef | None:
-    """Return the recorded ``documentRef`` if this key was already posted, else ``None``.
+	"""Return the recorded ``documentRef`` if this key was already posted, else ``None``.
 
-    A non-``None`` result means the caller MUST short-circuit — echo the existing
-    ``documentRef`` as an idempotent duplicate ``posted`` and NOT re-build/re-submit.
-    """
-    return store.get_document_ref(key)
+	A non-``None`` result means the caller MUST short-circuit — echo the existing
+	``documentRef`` as an idempotent duplicate ``posted`` and NOT re-build/re-submit.
+	"""
+	return store.get_document_ref(key)

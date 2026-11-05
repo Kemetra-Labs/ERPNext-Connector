@@ -90,7 +90,9 @@ class TestTrackingMatrix:
 
 	def test_a_serial_and_batch_item_stays_fail_closed(self):
 		with pytest.raises(UnsupportedTrackedItem):
-			bp.assert_tracking_postable(_doc("A"), [_lt("batch", "B1")], {"A": {"has_batch_no": 1, "has_serial_no": 1}})
+			bp.assert_tracking_postable(
+				_doc("A"), [_lt("batch", "B1")], {"A": {"has_batch_no": 1, "has_serial_no": 1}}
+			)
 
 	def test_two_lines_of_one_item_are_checked_per_row(self):
 		# Two lines of one batch Item: the second has no ref, so the sale fails closed.
@@ -127,9 +129,14 @@ class TestBatchMaster:
 
 class TestSaleIntents:
 	def test_each_batch_row_intends_its_own_batch(self):
-		doc = {"update_stock": 1, "items": [
-			{"item_code": "A", "batch_no": "B1"}, {"item_code": "P"}, {"item_code": "A", "batch_no": "B2"}
-		]}
+		doc = {
+			"update_stock": 1,
+			"items": [
+				{"item_code": "A", "batch_no": "B1"},
+				{"item_code": "P"},
+				{"item_code": "A", "batch_no": "B2"},
+			],
+		}
 		assert bp.sale_batch_intents(doc, {"A": _BATCH, "P": _PLAIN}) == {1: "B1", 3: "B2"}
 
 	def test_an_untracked_sale_has_no_intent(self):
@@ -147,7 +154,10 @@ class TestReturnIntents:
 	"""G7-10: the credit note row carries no Batch; ERPNext rebuilds the original row's."""
 
 	def test_a_batch_row_intends_the_original_rows_batch(self):
-		doc = _credit({"item_code": "A", "sales_invoice_item": "row-a"}, {"item_code": "P", "sales_invoice_item": "row-p"})
+		doc = _credit(
+			{"item_code": "A", "sales_invoice_item": "row-a"},
+			{"item_code": "P", "sales_invoice_item": "row-p"},
+		)
 		lines = [_lt("batch", "B1"), _lt("none")]
 		intents = bp.return_batch_intents(doc, lines, {"A": _BATCH, "P": _PLAIN}, {"row-a": ["B1"]})
 		assert intents == {1: "B1"}
@@ -269,23 +279,46 @@ class TestPostWriteVerification:
 
 
 def _line(ref, item, **tracking):
-	return {"lineRef": ref, "lineName": item, "unitPrice": "10.00", "currencyCode": "EGP", "quantity": "2",
-		"lineAmount": "20.00", "unit": "each", "erpnextItemRef": {"doctype": "Item", "name": item}, **tracking}
+	return {
+		"lineRef": ref,
+		"lineName": item,
+		"unitPrice": "10.00",
+		"currencyCode": "EGP",
+		"quantity": "2",
+		"lineAmount": "20.00",
+		"unit": "each",
+		"erpnextItemRef": {"doctype": "Item", "name": item},
+		**tracking,
+	}
 
 
 def _work_item(kind="sale_post", reversal=None):
-	return c.PostingWorkItem.from_wire({
-		"workItemRef": "11111111-1111-4111-8111-111111111111", "kind": kind, "sourceSystem": "pos-pulse",
-		"externalId": "POS-1", "payloadHash": "a" * 64, "businessDate": "2026-06-01", "itemCursor": "c",
-		**({"reversalOf": reversal} if reversal else {}),
-		"sale": {"saleRef": "22222222-2222-4222-8222-222222222222", "storeId": "s", "currencyCode": "EGP",
-			"posTotal": "40.00", "occurredAt": "2026-06-01T10:00:00Z", "businessDate": "2026-06-01",
-			"sourceSystem": "pos-pulse", "externalId": "POS-1",
-			"lines": [
-				_line(_A, "A", trackingMode="batch", erpnextBatchRef={"doctype": "Batch", "name": "B1"}),
-				_line(_B, "P", trackingMode="none", erpnextBatchRef=None),
-			]},
-	})
+	return c.PostingWorkItem.from_wire(
+		{
+			"workItemRef": "11111111-1111-4111-8111-111111111111",
+			"kind": kind,
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-1",
+			"payloadHash": "a" * 64,
+			"businessDate": "2026-06-01",
+			"itemCursor": "c",
+			**({"reversalOf": reversal} if reversal else {}),
+			"sale": {
+				"saleRef": "22222222-2222-4222-8222-222222222222",
+				"storeId": "s",
+				"currencyCode": "EGP",
+				"posTotal": "40.00",
+				"occurredAt": "2026-06-01T10:00:00Z",
+				"businessDate": "2026-06-01",
+				"sourceSystem": "pos-pulse",
+				"externalId": "POS-1",
+				"lines": [
+					_line(_A, "A", trackingMode="batch", erpnextBatchRef={"doctype": "Batch", "name": "B1"}),
+					_line(_B, "P", trackingMode="none", erpnextBatchRef=None),
+				],
+			},
+		}
+	)
 
 
 class TestLineTracking:
@@ -293,9 +326,16 @@ class TestLineTracking:
 		assert bp.line_tracking(_work_item()) == (_lt("batch", "B1"), _lt("none"))
 
 	def test_a_return_has_one_intent_per_returned_line_in_return_order(self):
-		reversal = {"sourceSystem": "pos-pulse", "externalId": "POS-1", "reversalKind": "return",
-			"recordedAt": "2026-06-02T10:00:00Z", "businessDate": "2026-06-02",
-			"returnLines": [{"lineRef": _B, "quantity": "1", "lineAmount": "10.00"},
-				{"lineRef": _A, "quantity": "1", "lineAmount": "10.00"}],
-			"refundTenders": [{"method": "cash", "amount": "20.00"}]}
+		reversal = {
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-1",
+			"reversalKind": "return",
+			"recordedAt": "2026-06-02T10:00:00Z",
+			"businessDate": "2026-06-02",
+			"returnLines": [
+				{"lineRef": _B, "quantity": "1", "lineAmount": "10.00"},
+				{"lineRef": _A, "quantity": "1", "lineAmount": "10.00"},
+			],
+			"refundTenders": [{"method": "cash", "amount": "20.00"}],
+		}
 		assert bp.line_tracking(_work_item("reversal", reversal)) == (_lt("none"), _lt("batch", "B1"))

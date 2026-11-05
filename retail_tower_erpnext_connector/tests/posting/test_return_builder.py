@@ -220,7 +220,10 @@ class TestKindGuard:
 	def test_rejects_a_non_return_work_item(self):
 		wi = _return()
 		void = dataclasses.replace(
-			wi, reversal_of=dataclasses.replace(wi.reversal_of, reversal_kind="void", return_lines=(), refund_tenders=())
+			wi,
+			reversal_of=dataclasses.replace(
+				wi.reversal_of, reversal_kind="void", return_lines=(), refund_tenders=()
+			),
 		)
 		with pytest.raises(ValueError, match="return"):
 			_build(void)
