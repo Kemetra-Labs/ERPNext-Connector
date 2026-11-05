@@ -12,7 +12,6 @@ recorded (never an abort that strands valid or already-acked items). No frappe.
 
 import pytest
 
-from retail_tower_erpnext_connector.connector.posting import contracts as c
 from retail_tower_erpnext_connector.connector.posting import transport as t
 from retail_tower_erpnext_connector.connector.posting import worker as w
 
