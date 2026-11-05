@@ -25,6 +25,8 @@ reflect a slightly later instant. Bench evidence for this is a recorded follow-u
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import frappe
 
 from .worker import RawBin
@@ -36,12 +38,9 @@ class UtcClock:
 	"""Connector ``readAt`` clock — ISO-8601 UTC (millisecond precision, trailing 'Z')."""
 
 	def now_iso(self) -> str:
-		# frappe.utils.now_datetime is naive-local; use a UTC instant + the contract's
-		# date-time shape. get_datetime() round-trips through frappe's tz handling.
-		from frappe.utils import now_datetime
-
-		dt = now_datetime()
-		return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+		# RT-1237: an aware UTC instant, never frappe.utils.now_datetime() — that is the
+		# site's naive local wall time, so on a non-UTC site it would be mislabelled 'Z'.
+		return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 class FrappeBinReader:
