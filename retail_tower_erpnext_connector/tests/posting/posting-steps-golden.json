@@ -1,0 +1,4381 @@
+{
+ "refund_recovered": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00150"
+     },
+     "outcome": "reconciliation_required",
+     "reason": {
+      "category": "validation",
+      "message": "representation: document currency None is not the sent 'EGP'"
+     }
+    },
+    "idempotency_key": "55555555-5555-4555-8555-555555555555:reconciliation_required",
+    "work_item_ref": "55555555-5555-4555-8555-555555555555"
+   }
+  ],
+  "documents": [],
+  "events": [
+   "commit"
+  ],
+  "outcome": "reconciliation_required",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "55555555-5555-4555-8555-555555555555"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "55555555-5555-4555-8555-555555555555"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "55555555-5555-4555-8555-555555555555"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00150"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "document_ref": "ACC-SINV-2026-00150",
+     "event": "posting.reconciliation_required",
+     "external_id": "POS-9001",
+     "reason_message": "representation: document currency None is not the sent 'EGP'",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "55555555-5555-4555-8555-555555555555"
+    }
+   ]
+  ]
+ },
+ "refund_rejected": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "UnsupportedReversal: reversalKind 'refund' is not posted: an amount-only refund carries no returned lines, so posting it would credit the whole sale. Line-aware returns are pending (RT-14 / RT-16); recover with the Backend-Core re_post repair once returns are supported."
+     }
+    },
+    "idempotency_key": "55555555-5555-4555-8555-555555555555:permanently_rejected",
+    "work_item_ref": "55555555-5555-4555-8555-555555555555"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "55555555-5555-4555-8555-555555555555"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "55555555-5555-4555-8555-555555555555"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "UnsupportedReversal: reversalKind 'refund' is not posted: an amount-only refund carries no returned lines, so posting it would credit the whole sale. Line-aware returns are pending (RT-14 / RT-16); recover with the Backend-Core re_post repair once returns are supported.",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "55555555-5555-4555-8555-555555555555"
+    }
+   ]
+  ]
+ },
+ "return:duplicate_recovered": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted"
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:posted",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Original Customer",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-100.00",
+      "conversion_factor": 12.0,
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Box",
+      "warehouse": "Stores - A"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-100.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-05",
+    "posting_time": "09:30:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "88888888-8888-4888-8888-888888888888",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback",
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.recovered",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return:duplicate_recovered_conflict": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted"
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:posted",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Original Customer",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-100.00",
+      "conversion_factor": 12.0,
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Box",
+      "warehouse": "Stores - A"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-100.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-05",
+    "posting_time": "09:30:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "88888888-8888-4888-8888-888888888888",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback",
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.recovered",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return:duplicate_unresolved": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "other",
+      "message": "UniqueValidationError: Duplicate entry"
+     }
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:permanently_rejected",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Original Customer",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-100.00",
+      "conversion_factor": 12.0,
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Box",
+      "warehouse": "Stores - A"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-100.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-05",
+    "posting_time": "09:30:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "88888888-8888-4888-8888-888888888888",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback"
+  ],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "other",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "UniqueValidationError: Duplicate entry",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return:other_insert": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "other",
+      "message": "RuntimeError: boom"
+     }
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:permanently_rejected",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Original Customer",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-100.00",
+      "conversion_factor": 12.0,
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Box",
+      "warehouse": "Stores - A"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-100.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-05",
+    "posting_time": "09:30:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "88888888-8888-4888-8888-888888888888",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback"
+  ],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "other",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "RuntimeError: boom",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return:posted": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted"
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:posted",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Original Customer",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-100.00",
+      "conversion_factor": 12.0,
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Box",
+      "warehouse": "Stores - A"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-100.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-05",
+    "posting_time": "09:30:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "88888888-8888-4888-8888-888888888888",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "reload",
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.posted",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return:readback_mismatch": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "reconciliation_required",
+     "reason": {
+      "category": "validation",
+      "message": "representation: document grand_total 1.0 is not the line total -100.00"
+     }
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:reconciliation_required",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Original Customer",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-100.00",
+      "conversion_factor": 12.0,
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Box",
+      "warehouse": "Stores - A"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-100.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-05",
+    "posting_time": "09:30:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "88888888-8888-4888-8888-888888888888",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "reload",
+   "commit"
+  ],
+  "outcome": "reconciliation_required",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.reconciliation_required",
+     "external_id": "POS-9001",
+     "reason_message": "representation: document grand_total 1.0 is not the line total -100.00",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return:readback_unreadable": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "failed_transient"
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:failed_transient:cursor-return",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Original Customer",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-100.00",
+      "conversion_factor": 12.0,
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Box",
+      "warehouse": "Stores - A"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-100.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-05",
+    "posting_time": "09:30:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "88888888-8888-4888-8888-888888888888",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "reload",
+   "commit"
+  ],
+  "outcome": "failed_transient",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "detail": "reload timeout",
+     "event": "posting.verify.transient",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return:record_conflict": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted"
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:posted",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Original Customer",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-100.00",
+      "conversion_factor": 12.0,
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Box",
+      "warehouse": "Stores - A"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-100.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-05",
+    "posting_time": "09:30:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "88888888-8888-4888-8888-888888888888",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00202"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.conflict",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return:replay": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted"
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:posted",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [],
+  "events": [
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.replay",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return:transient_insert": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "failed_transient"
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:failed_transient:cursor-return",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Original Customer",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-100.00",
+      "conversion_factor": 12.0,
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Box",
+      "warehouse": "Stores - A"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-100.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-05",
+    "posting_time": "09:30:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "88888888-8888-4888-8888-888888888888",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback"
+  ],
+  "outcome": "failed_transient",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "detail": "lock wait timeout",
+     "event": "posting.transient",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return:transient_submit": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "failed_transient"
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:failed_transient:cursor-return",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Original Customer",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-100.00",
+      "conversion_factor": 12.0,
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Box",
+      "warehouse": "Stores - A"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-100.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-05",
+    "posting_time": "09:30:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "88888888-8888-4888-8888-888888888888",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "rollback"
+  ],
+  "outcome": "failed_transient",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "detail": "timed out",
+     "event": "posting.transient",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return:unmapped_store": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "UnmappedStore: store '33333333-3333-4333-8333-333333333333' has no configured ERPNext Customer \u2014 fail-closed \u2192 validation (F-009: the connector never invents a customer; configure the store\u2192customer map)"
+     }
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:permanently_rejected",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "UnmappedStore: store '33333333-3333-4333-8333-333333333333' has no configured ERPNext Customer \u2014 fail-closed \u2192 validation (F-009: the connector never invents a customer; configure the store\u2192customer map)",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return:unmapped_unit": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "UnmappedUnit: unit 'each' has no ERPNext UOM mapping (fail-closed \u2192 validation)"
+     }
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:permanently_rejected",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "UnmappedUnit: unit 'each' has no ERPNext UOM mapping (fail-closed \u2192 validation)",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return:validation_insert": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "ValidationError: Item ITEM-A is disabled"
+     }
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:permanently_rejected",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Original Customer",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-100.00",
+      "conversion_factor": 12.0,
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Box",
+      "warehouse": "Stores - A"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-100.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-05",
+    "posting_time": "09:30:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "88888888-8888-4888-8888-888888888888",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback"
+  ],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "ValidationError: Item ITEM-A is disabled",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "return_awaiting_original": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "failed_transient"
+    },
+    "idempotency_key": "88888888-8888-4888-8888-888888888888:failed_transient:cursor-return",
+    "work_item_ref": "88888888-8888-4888-8888-888888888888"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "failed_transient",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "88888888-8888-4888-8888-888888888888"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "event": "posting.reversal.awaiting_original",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "reversal_kind": "return",
+     "source_system": "pos-pulse",
+     "work_item_ref": "88888888-8888-4888-8888-888888888888"
+    }
+   ]
+  ]
+ },
+ "sale:duplicate_recovered": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted",
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:posted:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [
+   {
+    "company": "RT Company",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "items": [
+     {
+      "amount": "300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     },
+     {
+      "amount": "100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "400.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-01",
+    "posting_time": "10:00:00.000000",
+    "rt_external_id": "POS-7001",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback",
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.recovered",
+     "external_id": "POS-7001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale:duplicate_recovered_conflict": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted",
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:posted:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [
+   {
+    "company": "RT Company",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "items": [
+     {
+      "amount": "300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     },
+     {
+      "amount": "100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "400.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-01",
+    "posting_time": "10:00:00.000000",
+    "rt_external_id": "POS-7001",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback",
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.recovered",
+     "external_id": "POS-7001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale:duplicate_unresolved": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "other",
+      "message": "UniqueValidationError: Duplicate entry"
+     },
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:permanently_rejected:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [
+   {
+    "company": "RT Company",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "items": [
+     {
+      "amount": "300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     },
+     {
+      "amount": "100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "400.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-01",
+    "posting_time": "10:00:00.000000",
+    "rt_external_id": "POS-7001",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback"
+  ],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "other",
+     "event": "posting.rejected",
+     "external_id": "POS-7001",
+     "reason_message": "UniqueValidationError: Duplicate entry",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale:other_insert": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "other",
+      "message": "RuntimeError: boom"
+     },
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:permanently_rejected:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [
+   {
+    "company": "RT Company",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "items": [
+     {
+      "amount": "300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     },
+     {
+      "amount": "100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "400.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-01",
+    "posting_time": "10:00:00.000000",
+    "rt_external_id": "POS-7001",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback"
+  ],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "other",
+     "event": "posting.rejected",
+     "external_id": "POS-7001",
+     "reason_message": "RuntimeError: boom",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale:posted": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted",
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:posted:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [
+   {
+    "company": "RT Company",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "items": [
+     {
+      "amount": "300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     },
+     {
+      "amount": "100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "400.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-01",
+    "posting_time": "10:00:00.000000",
+    "rt_external_id": "POS-7001",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "reload",
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.posted",
+     "external_id": "POS-7001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "tender_refs": [
+      "77777777-7777-4777-8777-777777777777"
+     ],
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale:readback_mismatch": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "reconciliation_required",
+     "reason": {
+      "category": "validation",
+      "message": "representation: document grand_total 1.0 is not the line total 400.00"
+     },
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:reconciliation_required:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [
+   {
+    "company": "RT Company",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "items": [
+     {
+      "amount": "300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     },
+     {
+      "amount": "100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "400.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-01",
+    "posting_time": "10:00:00.000000",
+    "rt_external_id": "POS-7001",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "reload",
+   "commit"
+  ],
+  "outcome": "reconciliation_required",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.reconciliation_required",
+     "external_id": "POS-7001",
+     "reason_message": "representation: document grand_total 1.0 is not the line total 400.00",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale:readback_unreadable": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "failed_transient",
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:failed_transient:cursor-sale",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [
+   {
+    "company": "RT Company",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "items": [
+     {
+      "amount": "300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     },
+     {
+      "amount": "100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "400.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-01",
+    "posting_time": "10:00:00.000000",
+    "rt_external_id": "POS-7001",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "reload",
+   "commit"
+  ],
+  "outcome": "failed_transient",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "detail": "reload timeout",
+     "event": "posting.verify.transient",
+     "external_id": "POS-7001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale:record_conflict": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted",
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:posted:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [
+   {
+    "company": "RT Company",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "items": [
+     {
+      "amount": "300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     },
+     {
+      "amount": "100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "400.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-01",
+    "posting_time": "10:00:00.000000",
+    "rt_external_id": "POS-7001",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00202"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.conflict",
+     "external_id": "POS-7001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale:replay": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted",
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:posted:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [],
+  "events": [
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.replay",
+     "external_id": "POS-7001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale:transient_insert": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "failed_transient",
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:failed_transient:cursor-sale",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [
+   {
+    "company": "RT Company",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "items": [
+     {
+      "amount": "300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     },
+     {
+      "amount": "100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "400.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-01",
+    "posting_time": "10:00:00.000000",
+    "rt_external_id": "POS-7001",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback"
+  ],
+  "outcome": "failed_transient",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "detail": "lock wait timeout",
+     "event": "posting.transient",
+     "external_id": "POS-7001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale:transient_submit": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "failed_transient",
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:failed_transient:cursor-sale",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [
+   {
+    "company": "RT Company",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "items": [
+     {
+      "amount": "300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     },
+     {
+      "amount": "100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "400.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-01",
+    "posting_time": "10:00:00.000000",
+    "rt_external_id": "POS-7001",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "rollback"
+  ],
+  "outcome": "failed_transient",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "detail": "timed out",
+     "event": "posting.transient",
+     "external_id": "POS-7001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale:unmapped_store": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "UnmappedStore: store '33333333-3333-4333-8333-333333333333' has no configured ERPNext Customer \u2014 fail-closed \u2192 validation (F-009: the connector never invents a customer; configure the store\u2192customer map)"
+     },
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:permanently_rejected:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-7001",
+     "reason_message": "UnmappedStore: store '33333333-3333-4333-8333-333333333333' has no configured ERPNext Customer \u2014 fail-closed \u2192 validation (F-009: the connector never invents a customer; configure the store\u2192customer map)",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale:unmapped_unit": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "UnmappedUnit: unit 'each' has no ERPNext UOM mapping (fail-closed \u2192 validation)"
+     },
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:permanently_rejected:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-7001",
+     "reason_message": "UnmappedUnit: unit 'each' has no ERPNext UOM mapping (fail-closed \u2192 validation)",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale:validation_insert": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "ValidationError: Item ITEM-A is disabled"
+     },
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:permanently_rejected:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [
+   {
+    "company": "RT Company",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "items": [
+     {
+      "amount": "300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     },
+     {
+      "amount": "100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "uom": "Nos",
+      "warehouse": "Map WH"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "400.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-01",
+    "posting_time": "10:00:00.000000",
+    "rt_external_id": "POS-7001",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback"
+  ],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-7001",
+     "reason_message": "ValidationError: Item ITEM-A is disabled",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale_frozen_warehouse_posted": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted",
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:posted:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [
+   {
+    "company": "RT Company",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "items": [
+     {
+      "amount": "300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "uom": "Nos",
+      "warehouse": "Frozen WH"
+     },
+     {
+      "amount": "100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "uom": "Nos",
+      "warehouse": "Frozen WH"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "400.00",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-01",
+    "posting_time": "10:00:00.000000",
+    "rt_external_id": "POS-7001",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "reload",
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.posted",
+     "external_id": "POS-7001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "tender_refs": [
+      "77777777-7777-4777-8777-777777777777"
+     ],
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale_frozen_warehouse_recovered": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted",
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:posted:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [],
+  "events": [
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.recovered",
+     "external_id": "POS-7001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale_frozen_warehouse_rejected": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "FrozenWarehouseRejected: feed warehouseRef 'Frozen WH' is a group warehouse (cannot hold stock) \u2014 rejected as validation before insert (RT-434)"
+     },
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:permanently_rejected:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-7001",
+     "reason_message": "FrozenWarehouseRejected: feed warehouseRef 'Frozen WH' is a group warehouse (cannot hold stock) \u2014 rejected as validation before insert (RT-434)",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "sale_site_company_missing": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "SiteCompanyNotConfigured: the site default company (Global Defaults default_company) is not configured \u2014 rejected as validation before insert (RT-378: every sale is posted on an explicit company)"
+     },
+     "resolutionVersion": 2
+    },
+    "idempotency_key": "66666666-6666-4666-8666-666666666666:permanently_rejected:v2",
+    "work_item_ref": "66666666-6666-4666-8666-666666666666"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "POS-7001"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-7001",
+     "reason_message": "SiteCompanyNotConfigured: the site default company (Global Defaults default_company) is not configured \u2014 rejected as validation before insert (RT-378: every sale is posted on an explicit company)",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "66666666-6666-4666-8666-666666666666"
+    }
+   ]
+  ]
+ },
+ "unsupported_kind": {
+  "acks": [],
+  "documents": [],
+  "events": [],
+  "outcome": "raised ValueError: provenance_id: unexpected work-item kind 'adjustment'",
+  "posting_log": [],
+  "signals": []
+ },
+ "void:duplicate_recovered": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted"
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:posted",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Nos",
+      "warehouse": "Stores - A"
+     },
+     {
+      "amount": "-100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "sales_invoice_item": "row-b",
+      "uom": "Nos",
+      "warehouse": "Stores - B"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-400.0",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-03",
+    "posting_time": "08:00:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "99999999-9999-4999-8999-999999999999",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback",
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.recovered",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void:duplicate_recovered_conflict": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted"
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:posted",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Nos",
+      "warehouse": "Stores - A"
+     },
+     {
+      "amount": "-100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "sales_invoice_item": "row-b",
+      "uom": "Nos",
+      "warehouse": "Stores - B"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-400.0",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-03",
+    "posting_time": "08:00:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "99999999-9999-4999-8999-999999999999",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback",
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.recovered",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void:duplicate_unresolved": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "other",
+      "message": "UniqueValidationError: Duplicate entry"
+     }
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:permanently_rejected",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Nos",
+      "warehouse": "Stores - A"
+     },
+     {
+      "amount": "-100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "sales_invoice_item": "row-b",
+      "uom": "Nos",
+      "warehouse": "Stores - B"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-400.0",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-03",
+    "posting_time": "08:00:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "99999999-9999-4999-8999-999999999999",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback"
+  ],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "other",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "UniqueValidationError: Duplicate entry",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void:other_insert": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "other",
+      "message": "RuntimeError: boom"
+     }
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:permanently_rejected",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Nos",
+      "warehouse": "Stores - A"
+     },
+     {
+      "amount": "-100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "sales_invoice_item": "row-b",
+      "uom": "Nos",
+      "warehouse": "Stores - B"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-400.0",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-03",
+    "posting_time": "08:00:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "99999999-9999-4999-8999-999999999999",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback"
+  ],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "other",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "RuntimeError: boom",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void:posted": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted"
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:posted",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Nos",
+      "warehouse": "Stores - A"
+     },
+     {
+      "amount": "-100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "sales_invoice_item": "row-b",
+      "uom": "Nos",
+      "warehouse": "Stores - B"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-400.0",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-03",
+    "posting_time": "08:00:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "99999999-9999-4999-8999-999999999999",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "reload",
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.posted",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void:readback_mismatch": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "reconciliation_required",
+     "reason": {
+      "category": "validation",
+      "message": "representation: document grand_total 1.0 is not the line total -400.00"
+     }
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:reconciliation_required",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Nos",
+      "warehouse": "Stores - A"
+     },
+     {
+      "amount": "-100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "sales_invoice_item": "row-b",
+      "uom": "Nos",
+      "warehouse": "Stores - B"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-400.0",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-03",
+    "posting_time": "08:00:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "99999999-9999-4999-8999-999999999999",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "reload",
+   "commit"
+  ],
+  "outcome": "reconciliation_required",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.reconciliation_required",
+     "external_id": "POS-9001",
+     "reason_message": "representation: document grand_total 1.0 is not the line total -400.00",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void:readback_unreadable": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "failed_transient"
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:failed_transient:cursor-void",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Nos",
+      "warehouse": "Stores - A"
+     },
+     {
+      "amount": "-100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "sales_invoice_item": "row-b",
+      "uom": "Nos",
+      "warehouse": "Stores - B"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-400.0",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-03",
+    "posting_time": "08:00:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "99999999-9999-4999-8999-999999999999",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "reload",
+   "commit"
+  ],
+  "outcome": "failed_transient",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00201"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "detail": "reload timeout",
+     "event": "posting.verify.transient",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void:record_conflict": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted"
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:posted",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Nos",
+      "warehouse": "Stores - A"
+     },
+     {
+      "amount": "-100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "sales_invoice_item": "row-b",
+      "uom": "Nos",
+      "warehouse": "Stores - B"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-400.0",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-03",
+    "posting_time": "08:00:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "99999999-9999-4999-8999-999999999999",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "record_posted",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ],
+    {
+     "__type__": "ErpnextDocumentRef",
+     "doctype": "Sales Invoice",
+     "name": "ACC-SINV-2026-00202"
+    }
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.conflict",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void:replay": {
+  "acks": [
+   {
+    "body": {
+     "documentRef": {
+      "doctype": "Sales Invoice",
+      "name": "ACC-SINV-2026-00201"
+     },
+     "outcome": "posted"
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:posted",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [],
+  "events": [
+   "commit"
+  ],
+  "outcome": "posted",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "document_ref": "ACC-SINV-2026-00201",
+     "event": "posting.replay",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void:transient_insert": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "failed_transient"
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:failed_transient:cursor-void",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Nos",
+      "warehouse": "Stores - A"
+     },
+     {
+      "amount": "-100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "sales_invoice_item": "row-b",
+      "uom": "Nos",
+      "warehouse": "Stores - B"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-400.0",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-03",
+    "posting_time": "08:00:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "99999999-9999-4999-8999-999999999999",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback"
+  ],
+  "outcome": "failed_transient",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "detail": "lock wait timeout",
+     "event": "posting.transient",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void:transient_submit": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "failed_transient"
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:failed_transient:cursor-void",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Nos",
+      "warehouse": "Stores - A"
+     },
+     {
+      "amount": "-100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "sales_invoice_item": "row-b",
+      "uom": "Nos",
+      "warehouse": "Stores - B"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-400.0",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-03",
+    "posting_time": "08:00:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "99999999-9999-4999-8999-999999999999",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "submit",
+   "rollback"
+  ],
+  "outcome": "failed_transient",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "detail": "timed out",
+     "event": "posting.transient",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void:unmapped_store": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "UnmappedStore: store '33333333-3333-4333-8333-333333333333' has no configured ERPNext Customer \u2014 fail-closed \u2192 validation (F-009: the connector never invents a customer; configure the store\u2192customer map)"
+     }
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:permanently_rejected",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "UnmappedStore: store '33333333-3333-4333-8333-333333333333' has no configured ERPNext Customer \u2014 fail-closed \u2192 validation (F-009: the connector never invents a customer; configure the store\u2192customer map)",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void:unmapped_unit": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "UnmappedUnit: unit 'each' has no ERPNext UOM mapping (fail-closed \u2192 validation)"
+     }
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:permanently_rejected",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "UnmappedUnit: unit 'each' has no ERPNext UOM mapping (fail-closed \u2192 validation)",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void:validation_insert": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "ValidationError: Item ITEM-A is disabled"
+     }
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:permanently_rejected",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [
+   {
+    "company": "Original Co",
+    "currency": "EGP",
+    "customer": "Walk-in",
+    "disable_rounded_total": 1,
+    "doctype": "Sales Invoice",
+    "ignore_pricing_rule": 1,
+    "is_pos": 1,
+    "is_return": 1,
+    "items": [
+     {
+      "amount": "-300.00",
+      "currency": "EGP",
+      "item_code": "ITEM-A",
+      "price_list_rate": "100.00",
+      "qty": "-3",
+      "rate": "100.00",
+      "rt_line_ref": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "sales_invoice_item": "row-a",
+      "uom": "Nos",
+      "warehouse": "Stores - A"
+     },
+     {
+      "amount": "-100.00",
+      "currency": "EGP",
+      "item_code": "ITEM-B",
+      "price_list_rate": "100.00",
+      "qty": "-1",
+      "rate": "100.00",
+      "rt_line_ref": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "sales_invoice_item": "row-b",
+      "uom": "Nos",
+      "warehouse": "Stores - B"
+     }
+    ],
+    "payments": [
+     {
+      "amount": "-400.0",
+      "mode_of_payment": "Cash"
+     }
+    ],
+    "posting_date": "2026-06-03",
+    "posting_time": "08:00:00.000000",
+    "return_against": "ACC-SINV-2026-00100",
+    "rt_external_id": "99999999-9999-4999-8999-999999999999",
+    "rt_sale_ref": "22222222-2222-4222-8222-222222222222",
+    "rt_source_system": "pos-pulse",
+    "set_posting_time": 1,
+    "update_stock": 1
+   }
+  ],
+  "events": [
+   "savepoint",
+   "insert",
+   "rollback"
+  ],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "ValidationError: Item ITEM-A is disabled",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void_awaiting_original": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "failed_transient"
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:failed_transient:cursor-void",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "failed_transient",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "info",
+    {
+     "event": "posting.reversal.awaiting_original",
+     "external_id": "POS-9001",
+     "request_id": "rt1228-test",
+     "reversal_kind": "void",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void_line_mismatch": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "ReturnLineMismatch: void carries 2 line(s) but the original invoice has 1 row(s)"
+     }
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:permanently_rejected",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "ReturnLineMismatch: void carries 2 line(s) but the original invoice has 1 row(s)",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void_no_reversal_of": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "validation",
+      "message": "reversal work-item carries no reversalOf (return_against unresolvable)"
+     }
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:permanently_rejected",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "validation",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "reversal work-item carries no reversalOf (return_against unresolvable)",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ },
+ "void_original_posting_unreadable": {
+  "acks": [
+   {
+    "body": {
+     "outcome": "permanently_rejected",
+     "reason": {
+      "category": "other",
+      "message": "ValueError: original Sales Invoice 'ACC-SINV-2026-00100' not readable for its posting time"
+     }
+    },
+    "idempotency_key": "99999999-9999-4999-8999-999999999999:permanently_rejected",
+    "work_item_ref": "99999999-9999-4999-8999-999999999999"
+   }
+  ],
+  "documents": [],
+  "events": [],
+  "outcome": "permanently_rejected",
+  "posting_log": [
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ],
+   [
+    "get_document_ref",
+    [
+     "pos-pulse",
+     "99999999-9999-4999-8999-999999999999"
+    ]
+   ]
+  ],
+  "signals": [
+   [
+    "error",
+    {
+     "category": "other",
+     "event": "posting.rejected",
+     "external_id": "POS-9001",
+     "reason_message": "ValueError: original Sales Invoice 'ACC-SINV-2026-00100' not readable for its posting time",
+     "request_id": "rt1228-test",
+     "source_system": "pos-pulse",
+     "work_item_ref": "99999999-9999-4999-8999-999999999999"
+    }
+   ]
+  ]
+ }
+}

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 import frappe
 
@@ -592,10 +593,56 @@ def post_work_item(
 	# Build the Sales-Invoice payload from the pure-Python core (no frappe in the build).
 	# build_sales_invoice self-validates money (FR-009), raises on an unmapped unit (FR-008) or a
 	# non-conformant amount, and warehouse_for raises UnresolvedWarehouse on a store with no
-	# pre-resolved warehouse (rider R5 — should have DLQ'd in DP2). All are non-retryable; a final
-	# `except Exception` guarantees no build error escapes the terminal-outcome invariant
-	# (Codex-P2 / SC-001 / Principle VI).
-	try:
+	# pre-resolved warehouse (rider R5 — should have DLQ'd in DP2). All are non-retryable
+	# (:func:`_build_or_reject`).
+	built = _build_sale_or_reject(
+		work_item,
+		client=client,
+		uom_map=uom_map,
+		warehouses=warehouses,
+		customers=customers,
+		tenders=tenders,
+		correlation_id=correlation_id,
+	)
+	if isinstance(built, str):
+		return built  # the rejection outcome
+	stamp, doc_payload = built
+	_log_stamp_adjustments(stamp, work_item, correlation_id)
+
+	# RT-48 / RT-47 D4 — the sale moves stock, so a serial Item fails closed and a batch Item posts
+	# only with its feed Batch (RT-452; ERPNext would otherwise auto-pick one, i.e. guess). After the
+	# replay guard, before insert. Then T031 — submit on ERPNext (interim SI-only; rider R1 — no
+	# Payment Entry here), record in the Posting Log and ack (T032).
+	return _submit_and_record(
+		work_item,
+		key,
+		doc_payload,
+		prepare=lambda payload: _on_sale_company(work_item, payload),
+		client=client,
+		store=store,
+		correlation_id=correlation_id,
+	)
+
+
+def _build_sale_or_reject(
+	work_item: PostingWorkItem,
+	*,
+	client: PostingFeedClient,
+	uom_map: UomMap,
+	warehouses: PreResolvedWarehouse,
+	customers: StoreCustomerMap,
+	tenders: TenderModeMap,
+	correlation_id: str,
+) -> tuple[PostingStamp, dict] | str:
+	"""Build the sale's Sales-Invoice payload; a build error returns its rejection outcome string instead.
+
+	UnmappedStore (F-009): a store with no configured Customer fails closed → validation, exactly like
+	an unresolved warehouse — never fabricate a customer (Principle VI). RT-78: an unmapped tender
+	method (D5) or a tender total that differs from the lines (amendment 4a) is the same — the
+	connector never guesses a mode or forces a match.
+	"""
+
+	def build() -> tuple[PostingStamp, dict]:
 		stamp = _posting_stamp(work_item, work_item.sale.business_date)
 		doc_payload = build_sales_invoice(
 			work_item,
@@ -605,45 +652,124 @@ def post_work_item(
 			posting_stamp=stamp,
 			mode_of_payment_for=tenders.resolve,
 		)
+		return stamp, doc_payload
+
+	return _build_or_reject(
+		work_item, build, _SALE_BUILD_VALIDATION_ERRORS, client=client, correlation_id=correlation_id
+	)
+
+
+def _on_sale_company(work_item: PostingWorkItem, doc_payload: dict) -> dict:
+	"""The sale payload on its explicit company (RT-378 finding 2: the site default).
+
+	Runs inside the submit stage (:func:`_submit_or_reject`), so a transient DB error is
+	failed_transient and a blank default is validation (SiteCompanyNotConfigured), before insert.
+	RT-434: a feed warehouseRef is checked against that company here, before insert.
+	"""
+	company = _sale_company()
+	_assert_frozen_warehouse(work_item, company)
+	return {**doc_payload, "company": company}
+
+
+def _build_or_reject(
+	work_item: PostingWorkItem,
+	build,
+	validation_errors: tuple[type[BaseException], ...],
+	*,
+	client: PostingFeedClient,
+	correlation_id: str,
+) -> tuple[PostingStamp, dict] | str:
+	"""Run a pure ``build`` → ``(stamp, payload)``; a build error returns its rejection outcome instead.
+
+	The shared fail-closed mapping of both legs: an unmapped unit → ``unmapped_unit``; a
+	``validation_errors`` member → ``validation``; anything else → ``other``. The final
+	``except Exception`` guarantees no build error escapes the terminal-outcome invariant
+	(Codex-P2 / SC-001 / Principle VI).
+	"""
+	try:
+		return build()
 	except UnmappedUnit as exc:
 		return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, _exception_message(exc))
-	except _SALE_BUILD_VALIDATION_ERRORS as exc:
-		# UnmappedStore (F-009): a store with no configured Customer fails closed → validation,
-		# exactly like an unresolved warehouse — never fabricate a customer (Principle VI).
-		# RT-78: an unmapped tender method (D5) or a tender total that differs from the lines
-		# (amendment 4a) is the same — the connector never guesses a mode or forces a match.
+	except validation_errors as exc:
 		return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
 	except Exception as exc:  # any other build error is non-retryable — never let it escape.
 		return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
 
-	_log_stamp_adjustments(stamp, work_item, correlation_id)
 
-	# RT-48 / RT-47 D4 — the sale moves stock, so a serial Item fails closed and a batch Item posts
-	# only with its feed Batch (RT-452; ERPNext would otherwise auto-pick one, i.e. guess). After the
-	# replay guard, before insert.
+class _Submitted(NamedTuple):
+	"""A Sales Invoice this run submitted, with the representation ERPNext must hold (RT-378)."""
+
+	sinv: object
+	document_ref: ErpnextDocumentRef
+	expected: ExpectedInvoice
+
+
+def _submit_and_record(
+	work_item: PostingWorkItem,
+	key,
+	doc_payload: dict,
+	*,
+	client: PostingFeedClient,
+	store: IdempotencyStore,
+	correlation_id: str,
+	prepare=None,
+) -> str:
+	"""The shared tail of both legs: batch guard → submit → record in the Posting Log → ack.
+
+	``prepare`` (the sale's explicit company) runs inside the submit stage, after the batch guard.
+	"""
+	# RT-48 / RT-452 — the batch policy before insert; a rejection returns its outcome string.
 	batch_intents = _guard_tracked_items(doc_payload, work_item, client, correlation_id)
 	if isinstance(batch_intents, str):
 		return batch_intents  # the rejection outcome
+	submitted = _submit_or_reject(
+		work_item,
+		key,
+		doc_payload,
+		batch_intents,
+		prepare=prepare,
+		client=client,
+		store=store,
+		correlation_id=correlation_id,
+	)
+	if isinstance(submitted, str):
+		return submitted  # the failure outcome
+	return _record_and_ack(
+		work_item, key, submitted, client=client, store=store, correlation_id=correlation_id
+	)
 
-	# T031 — submit on ERPNext (interim SI-only; rider R1 — no Payment Entry here).
+
+def _submit_or_reject(
+	work_item: PostingWorkItem,
+	key,
+	doc_payload: dict,
+	batch_intents: dict[int, str],
+	*,
+	prepare,
+	client: PostingFeedClient,
+	store: IdempotencyStore,
+	correlation_id: str,
+) -> _Submitted | str:
+	"""Submit on ERPNext; a failure acks its outcome and returns that outcome string instead.
+
+	The `unique_rt_si_provenance` index spans ALL Sales Invoices (incl. is_return=1), so a second
+	submit of the SAME key collides and is recovered the same way on both legs — and because the
+	reversal builder writes the reversal's work_item_ref into rt_external_id (#28 re-key), a reversal
+	does NOT collide with the original SI's slot.
+
+	FrozenWarehouseRejected and SiteCompanyNotConfigured are raised only by the sale's ``prepare``
+	(:func:`_on_sale_company`); on the reversal leg those clauses never match.
+	"""
 	try:
-		# RT-378 finding 2: the explicit company (site default). Read here, so a transient DB error is
-		# failed_transient and a blank default is validation (RepresentationMismatch), before insert.
-		company = _sale_company()
-		_assert_frozen_warehouse(work_item, company)  # RT-434: a feed warehouseRef, before insert
-		doc_payload = {**doc_payload, "company": company}
-		expected = expected_from_payload(doc_payload)  # what ERPNext must persist
+		if prepare is not None:
+			doc_payload = prepare(doc_payload)
+		# RT-378: what ERPNext must persist (a reversal: company = the original's, linked).
+		expected = expected_from_payload(doc_payload)
 		sinv = _submit_atomically(doc_payload, expected, batch_intents)
 		document_ref = ErpnextDocumentRef(doctype=_SALES_INVOICE, name=sinv.name)
 	except _transient_exceptions() as exc:
 		# T051 — transient (timeout/lock) → failed_transient; DP2 re-offers (no self-retry).
-		client.ack_outcome(
-			work_item.work_item_ref,
-			OutcomeAckRequest.failed_transient(resolution_version=work_item.resolution_version),
-			idempotency_key=_ack_key(work_item, "failed_transient"),
-		)
-		_log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
-		return "failed_transient"
+		return _ack_transient(client, work_item, correlation_id, exc)
 	except FrozenWarehouseRejected as exc:
 		# RT-434 — the feed warehouseRef is a group / other-company / missing Warehouse: nothing was
 		# inserted. An invoice already submitted under this provenance (a crash before record_posted,
@@ -661,13 +787,13 @@ def post_work_item(
 		return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
 	except _dup_provenance_exceptions() as exc:
 		# GATE G5 / F-002 — the crash-window recovery. The `unique_rt_si_provenance` index rejected
-		# a SECOND submit of an already-posted sale (a crash between the FIRST submit and
-		# record_posted left no Posting Log row, so the replay guard above found nothing). This is
-		# NOT a rejection: a matching SI already exists. Resolve to it (echo its documentRef), back-
-		# fill the Posting Log so future re-offers fast-path through the replay guard, and fall
-		# through to the normal `posted` ack. Catching this BEFORE frappe.ValidationError is load-
-		# bearing — UniqueValidationError ⊂ ValidationError, so the generic handler would otherwise
-		# FALSELY reject a legitimately-posted sale (Principle VI inversion).
+		# a SECOND submit of an already-posted document (a crash between the FIRST submit and
+		# record_posted left no Posting Log row, so the replay guard found nothing). This is NOT a
+		# rejection: a matching SI already exists. Resolve to it (echo its documentRef), back-fill
+		# the Posting Log so future re-offers fast-path through the replay guard, and fall through to
+		# the normal `posted` ack. Catching this BEFORE frappe.ValidationError is load-bearing —
+		# UniqueValidationError ⊂ ValidationError, so the generic handler would otherwise FALSELY
+		# reject a legitimately-posted sale (Principle VI inversion).
 		return _recover_duplicate_provenance(
 			work_item, key, exc, client=client, store=store, correlation_id=correlation_id
 		)
@@ -677,25 +803,49 @@ def post_work_item(
 	except Exception as exc:  # any OTHER error is non-retryable (F-005), not transient.
 		# Decision table row 9: an unclassified non-retryable error → permanently_rejected / other.
 		return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
+	return _Submitted(sinv, document_ref, expected)
 
-	# Record the posting, then ack. A concurrent double-record (another worker recorded a
-	# different ref for this key first) is resolved by echoing the recorded ref.
-	#
-	# F-002 (the crash-BETWEEN-submit-and-record window) is now CLOSED by the
-	# `unique_rt_si_provenance` index on Sales Invoice + the `_dup_provenance_exceptions` recovery
-	# above: if a crash here leaves no Posting Log row, a DP2 re-offer's second submit fails on the
-	# unique index, is caught, and resolves to the existing SI (no duplicate). Gate G5 holds against
-	# both concurrent double-record (this IdempotencyConflict echo) and the crash window.
+
+def _record_and_ack(
+	work_item: PostingWorkItem,
+	key,
+	submitted: _Submitted,
+	*,
+	client: PostingFeedClient,
+	store: IdempotencyStore,
+	correlation_id: str,
+) -> str:
+	"""Record the posting in the Posting Log, then ack it (T032) once the persisted invoice is verified.
+
+	A concurrent double-record (another worker recorded a different ref for this key first) is
+	resolved by echoing the recorded ref, verified against the frozen resolution like any other
+	existing document (RT-331).
+
+	F-002 (the crash-BETWEEN-submit-and-record window) is CLOSED by the `unique_rt_si_provenance`
+	index on Sales Invoice + the `_dup_provenance_exceptions` recovery in :func:`_submit_or_reject`:
+	if a crash here leaves no Posting Log row, a DP2 re-offer's second submit fails on the unique
+	index, is caught, and resolves to the existing SI (no duplicate). Gate G5 holds against both
+	concurrent double-record (this IdempotencyConflict echo) and the crash window.
+	"""
 	try:
-		store.record_posted(key, document_ref)
+		store.record_posted(key, submitted.document_ref)
 	except IdempotencyConflict as conflict:
-		# Another worker recorded a DIFFERENT document for this key first: that document is an
-		# EXISTING one, so it is verified against the frozen resolution like any other (RT-331).
 		return _ack_existing(client, work_item, conflict.existing, correlation_id, "posting.conflict")
+	# RT-378 read-back before `posted`; the DP2 sale fact is never mutated.
+	return _ack_submitted(client, work_item, submitted.sinv, submitted.expected, correlation_id)
 
-	# T032 — ack posted + documentRef once the persisted invoice is verified (RT-378); the DP2 sale
-	# fact is never mutated.
-	return _ack_submitted(client, work_item, sinv, expected, correlation_id)
+
+def _ack_transient(
+	client: PostingFeedClient, work_item: PostingWorkItem, correlation_id: str, exc: BaseException
+) -> str:
+	"""T051 — a transient submit failure acks ``failed_transient`` (per-offer key, RT-171)."""
+	client.ack_outcome(
+		work_item.work_item_ref,
+		OutcomeAckRequest.failed_transient(resolution_version=work_item.resolution_version),
+		idempotency_key=_ack_key(work_item, "failed_transient"),
+	)
+	_log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
+	return "failed_transient"
 
 
 def _resolve_original_invoice(work_item: PostingWorkItem) -> str | None:
@@ -827,52 +977,11 @@ def _post_reversal(
 
 	# RT-452 / G7-10 — a batch row carries no Batch of its own: ERPNext rebuilds the original row's
 	# Batch through sales_invoice_item, so the original row must hold exactly one in its bundle.
-	batch_intents = _guard_tracked_items(doc_payload, work_item, client, correlation_id)
-	if isinstance(batch_intents, str):
-		return batch_intents  # the rejection outcome
-
-	# Submit on ERPNext. The `unique_rt_si_provenance` index spans ALL Sales Invoices (incl.
-	# is_return=1), so a second submit of the SAME reversal key (its work_item_ref) collides and is
-	# recovered exactly like the forward path — and because the builder wrote the reversal's
-	# work_item_ref into rt_external_id (#28 re-key), it does NOT collide with the original SI's slot.
-	try:
-		expected = expected_from_payload(doc_payload)  # RT-378: company = the original's (linked)
-		sinv = _submit_atomically(doc_payload, expected, batch_intents)
-		document_ref = ErpnextDocumentRef(doctype=_SALES_INVOICE, name=sinv.name)
-	except _transient_exceptions() as exc:
-		client.ack_outcome(
-			work_item.work_item_ref,
-			OutcomeAckRequest.failed_transient(resolution_version=work_item.resolution_version),
-			idempotency_key=_ack_key(work_item, "failed_transient"),
-		)
-		_log_signal("posting.transient", work_item, correlation_id, detail=scrub_message(str(exc)))
-		return "failed_transient"
-	except (SettlementDrift, RepresentationMismatch, BatchPostingMismatch) as exc:
-		# RT-78 — ERPNext's computed totals left change/outstanding/write-off on a settled invoice.
-		# RT-378 / D1 — ERPNext holds a value Retail Tower did not send ("representation: ...").
-		# RT-452 — the return bundle's Batch or quantity is not the original row's.
-		# _submit_atomically already rolled the insert back; nothing was submitted. Caught BEFORE the
-		# dup-provenance clause, whose fallback catches Exception on a frappe missing those names.
-		return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
-	except _dup_provenance_exceptions() as exc:
-		# Crash-window recovery, keyed on the reversal's work_item_ref provenance (#28 re-key): a
-		# re-offer whose second submit hits the unique index resolves to the already-posted
-		# reversing doc (via _find_posted_invoice, which reads the same provenance_id discriminator).
-		return _recover_duplicate_provenance(
-			work_item, key, exc, client=client, store=store, correlation_id=correlation_id
-		)
-	except frappe.ValidationError as exc:  # type: ignore[attr-defined]
-		return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
-	except Exception as exc:  # any OTHER error is non-retryable (F-005), not transient.
-		return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
-
-	try:
-		store.record_posted(key, document_ref)
-	except IdempotencyConflict as conflict:
-		# Same as the forward sale: the concurrently recorded document is verified first (RT-331).
-		return _ack_existing(client, work_item, conflict.existing, correlation_id, "posting.conflict")
-
-	return _ack_submitted(client, work_item, sinv, expected, correlation_id)  # RT-378 read-back
+	# Then submit, record and ack exactly like the forward path (:func:`_submit_or_reject`: the
+	# crash-window recovery is keyed on the reversal's work_item_ref provenance, #28 re-key).
+	return _submit_and_record(
+		work_item, key, doc_payload, client=client, store=store, correlation_id=correlation_id
+	)
 
 
 def _build_reversal_or_reject(
@@ -885,22 +994,23 @@ def _build_reversal_or_reject(
 	tenders: TenderModeMap,
 	correlation_id: str,
 ) -> tuple[PostingStamp, dict] | str:
-	"""Build the reversing payload; a build error returns its rejection outcome string instead."""
-	try:
+	"""Build the reversing payload; a build error returns its rejection outcome string instead.
+
+	RT-16: a return without refundTenders, or priced other than unitPrice x qty, is rejected like an
+	unmapped store — never posted as an outstanding credit note or at a guessed amount.
+	"""
+
+	def build() -> tuple[PostingStamp, dict]:
 		# RT-16 / RT-63: the reversal's own recordedAt + businessDate (RT-49 fallback when absent).
 		stamp = stamp_for(*reversal_stamp_source(work_item), _posting_clock())
 		doc_payload = _build_reversal(
 			work_item, stamp, uom_map=uom_map, warehouses=warehouses, customers=customers, tenders=tenders
 		)
-	except UnmappedUnit as exc:
-		return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, _exception_message(exc))
-	except _REVERSAL_BUILD_VALIDATION_ERRORS as exc:
-		# RT-16: a return without refundTenders, or priced other than unitPrice x qty, is rejected
-		# like an unmapped store — never posted as an outstanding credit note or at a guessed amount.
-		return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
-	except Exception as exc:  # any other build error is non-retryable — never let it escape.
-		return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
-	return stamp, doc_payload
+		return stamp, doc_payload
+
+	return _build_or_reject(
+		work_item, build, _REVERSAL_BUILD_VALIDATION_ERRORS, client=client, correlation_id=correlation_id
+	)
 
 
 def _link_original_or_reject(

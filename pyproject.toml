@@ -73,7 +73,8 @@ quote-style = "double"
 indent-style = "tab"
 docstring-code-format = true
 
-# RT-1201: complexity ratchet. Set to the current worst function (15: frappe_glue.post_work_item
-# and _post_reversal). Lower it as functions are split; never raise it.
+# RT-1201: complexity ratchet. Set to the current worst function (10: deploy/lab/rollback_class
+# _doctype_reasons; RT-1228 split frappe_glue.post_work_item and _post_reversal, both 15). Lower it
+# as functions are split; never raise it.
 [tool.ruff.lint.mccabe]
-max-complexity = 15
+max-complexity = 10
