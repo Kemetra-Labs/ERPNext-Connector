@@ -86,7 +86,7 @@ class _Frappe(types.ModuleType):
 
 
 class _Requests(types.ModuleType):
-	"""A ``requests`` stand-in for the pollers' ``_RequestsTransport`` (not installed in CI)."""
+	"""A ``requests`` stand-in for the shared ``http_transport.RequestsTransport`` (not installed in CI)."""
 
 	def __init__(self, *, status=200, body=None, error=None):
 		super().__init__("requests")

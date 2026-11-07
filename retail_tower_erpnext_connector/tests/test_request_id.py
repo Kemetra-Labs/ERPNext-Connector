@@ -30,6 +30,7 @@ import uuid
 
 import pytest
 
+from retail_tower_erpnext_connector.connector import http_transport
 from retail_tower_erpnext_connector.connector.request_id import new_request_id
 
 # Mirrors Backend-Core apps/api/src/common/request-id.interceptor.ts ``UUID_RE`` verbatim.
@@ -200,7 +201,7 @@ def _posting_tick(monkeypatch, transport=None):
 	# RT-379: a compatible site (the profile itself is covered by test_compatibility_*).
 	profile = importlib.import_module("retail_tower_erpnext_connector.connector.posting.compatibility_glue")
 	monkeypatch.setattr(profile, "run_preflight", lambda _settings, _maps: True)
-	monkeypatch.setattr(poller, "_build_http_transport", lambda _settings: transport)
+	monkeypatch.setattr(http_transport, "build_http_transport", lambda _settings: transport)
 	monkeypatch.setattr(poller, "_warn_credential_lifecycle", lambda _settings: None)
 	monkeypatch.setattr(poller, "_load_uom_map", lambda _s: {"each": "Nos"})
 	monkeypatch.setattr(poller, "_load_warehouse_map", lambda _s: {_STORE: {"warehouse": "Stores - RT"}})
@@ -281,11 +282,10 @@ def _bin_view_page() -> dict:
 def _bin_view_tick(monkeypatch, transport=None):
 	"""Run one real ``run_bin_view_poll`` tick over faked frappe/HTTP seams; return what it sent."""
 	poller = importlib.import_module(_BIN_VIEW_POLLER)
-	posting_poller = importlib.import_module(_POSTING_POLLER)
 	glue = importlib.import_module(_BIN_VIEW_GLUE)
 
 	transport = transport or _RecordingTransport(_bin_view_page())
-	monkeypatch.setattr(posting_poller, "_build_http_transport", lambda _settings: transport)
+	monkeypatch.setattr(http_transport, "build_http_transport", lambda _settings: transport)
 	monkeypatch.setattr(glue, "FrappeBinReader", _Reader)
 	monkeypatch.setattr(glue, "UtcClock", _Clock)
 	poller.run_bin_view_poll()

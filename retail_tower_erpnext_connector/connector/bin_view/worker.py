@@ -50,7 +50,7 @@ from .transport import BinViewClient, ReportResult
 _QTY_QUANTUM = Decimal("0.000001")
 
 # Paged-attempt time budget (Codex P1 on #56). One report call is bounded by the DP2 transport
-# timeout (``posting.poller._RequestsTransport``: 30 s); the keyset Bin read gets a fixed
+# timeout (``http_transport.RequestsTransport``: 30 s); the keyset Bin read gets a fixed
 # allowance. A paged attempt's budget is therefore ``maxWindows x 30 s + 60 s`` — enough for
 # every window even at the worst-case call time — capped so the long-queue job that runs it
 # (budget + margin, see ``poller``) stays under Frappe v15/v16's 1500 s long-queue timeout.

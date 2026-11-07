@@ -25,13 +25,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+
+from ..http_transport import HttpTransport
+from ..text import error_code
 
 # spec-003 substrate: the request_id correlation travels on every call (RT-39).
 CORRELATION_HEADER = "X-Request-Id"
 HEARTBEAT_PATH = "/api/connector/v1/erpnext/health/heartbeat"
 
 _VERSION_MAX_LEN = 64
+_CODE_LIMIT = 64  # characters of a refusal code kept on HeartbeatError
 _INT4_MAX = 2147483647
 
 
@@ -50,13 +53,6 @@ class HeartbeatUnauthorized(HeartbeatError):
 
 class HeartbeatRejected(HeartbeatError):
 	"""400 ``validation_error`` — the body broke the strict ``HeartbeatReport`` schema."""
-
-
-class HttpTransport(Protocol):
-	"""The minimal HTTP surface the client needs. ``post`` returns a status-aware response
-	(``.status`` / ``.headers`` / ``.body``) or, for simple fakes, a plain body ``dict``."""
-
-	def post(self, path: str, *, json: dict, headers: dict) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -139,24 +135,12 @@ def _interpret(resp: object) -> HeartbeatAck:
 	if status == 200:
 		return _ack(body)
 	if status == 401:
-		raise HeartbeatUnauthorized(status, _error_code(body, "unauthorized"))
+		raise HeartbeatUnauthorized(status, error_code(body, "unauthorized", flat=False, limit=_CODE_LIMIT))
 	if status == 400:
-		raise HeartbeatRejected(status, _error_code(body, "validation_error"))
-	raise HeartbeatError(status, _error_code(body, "unexpected_status"))
+		raise HeartbeatRejected(status, error_code(body, "validation_error", flat=False, limit=_CODE_LIMIT))
+	raise HeartbeatError(status, error_code(body, "unexpected_status", flat=False, limit=_CODE_LIMIT))
 
 
 def _ack(body: object) -> HeartbeatAck:
 	value = body.get("acknowledgedAt") if isinstance(body, dict) else None
 	return HeartbeatAck(acknowledged_at=None if value is None else str(value))
-
-
-def _error_code(body: object, default: str) -> str:
-	"""The ``code`` of Backend-Core's ``{"error": {"code": ...}}`` envelope, else ``default``.
-
-	Only the code is kept — never the message or the rest of the body.
-	"""
-	if isinstance(body, dict):
-		envelope = body.get("error")
-		if isinstance(envelope, dict) and envelope.get("code"):
-			return str(envelope["code"])[:64]
-	return default

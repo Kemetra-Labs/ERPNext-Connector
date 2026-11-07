@@ -17,8 +17,8 @@ concrete HTTP/auth-backed transport and the live round-trip are ⏳ BENCH-VALIDA
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
 
+from ..http_transport import HttpTransport
 from .contracts import MissingErpnextItemRef, OutcomeAckRequest, PostingWorkItem
 
 # spec-003 substrate: the DP2 request_id correlation travels on every call (Principle V).
@@ -53,19 +53,6 @@ class AckResult:
 	recorded: bool
 	replayed: bool
 	body: dict
-
-
-class HttpTransport(Protocol):
-	"""The minimal HTTP surface the client needs. Implemented by a real auth-backed
-	client in the deferred bench glue, and by a fake in unit tests.
-
-	``post`` may return either a plain body ``dict`` (legacy/simple transports — treated as a
-	201 success) or a status-aware response object exposing ``.status``, ``.headers``, ``.body``
-	(so the client can distinguish 201/200-replay/409/404, per the served DP2 contract)."""
-
-	def get(self, path: str, *, params: dict, headers: dict) -> dict: ...
-
-	def post(self, path: str, *, json: dict, headers: dict) -> dict: ...
 
 
 @dataclass(frozen=True)

@@ -38,6 +38,7 @@ from datetime import UTC, datetime
 import frappe
 
 from ..request_id import new_request_id
+from ..text import scrub
 from .heartbeat import (
 	HeartbeatClient,
 	HeartbeatError,
@@ -71,7 +72,7 @@ def run_heartbeat() -> None:
 				"event": "connector.heartbeat.failed",
 				"request_id": request_id,
 				"error_class": type(exc).__name__,
-				"detail": _safe(str(exc)),
+				"detail": scrub(str(exc)),
 			}
 		)
 
@@ -81,7 +82,7 @@ def _send_heartbeat(request_id: str) -> None:
 		client = _build_client(request_id)
 	except Exception as exc:  # config/auth not ready — skip the beat, like the pollers do.
 		frappe.logger(_LOGGER).warning(
-			{"event": "connector.heartbeat.skipped", "request_id": request_id, "reason": _safe(str(exc))}
+			{"event": "connector.heartbeat.skipped", "request_id": request_id, "reason": scrub(str(exc))}
 		)
 		return
 	report = HeartbeatReport(
@@ -104,10 +105,10 @@ def _build_client(correlation_id: str) -> HeartbeatClient:
 
 	Raises when ``dp2_base_url`` or ``dp2_token`` is unset, so the tick skips cleanly.
 	"""
-	from ..posting.poller import _build_http_transport  # reuse the auth-backed transport
+	from .. import http_transport  # the shared auth-backed transport
 
 	settings = frappe.get_doc("Connector Settings")
-	return HeartbeatClient(_build_http_transport(settings), correlation_id=correlation_id)
+	return HeartbeatClient(http_transport.build_http_transport(settings), correlation_id=correlation_id)
 
 
 def _connector_version() -> str:
@@ -129,9 +130,3 @@ def _log_refusal(level: str, event: str, request_id: str, exc: HeartbeatError) -
 	getattr(frappe.logger(_LOGGER), level)(
 		{"event": event, "request_id": request_id, "status": exc.status, "code": exc.code}
 	)
-
-
-def _safe(message: str) -> str:
-	from ..posting.reasons import scrub_message
-
-	return scrub_message(message)

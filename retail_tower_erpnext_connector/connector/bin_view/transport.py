@@ -17,8 +17,9 @@ concrete HTTP/auth-backed transport + the live round-trip are bench-validated. N
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
 
+from ..http_transport import HttpTransport
+from ..text import error_code
 from .contracts import BinViewRequest, BinViewSnapshotReport, RecordedBinView
 
 # spec-003 substrate: DP2 request_id correlation on every call (Principle V).
@@ -66,16 +67,6 @@ class ReportNotFound(Exception):
 class SnapshotRequired(Exception):
 	"""DP2 returned 409 snapshot_required on the pull — the `since` cursor is stale.
 	The connector MUST re-baseline (pull from the start)."""
-
-
-class HttpTransport(Protocol):
-	"""The minimal HTTP surface the client needs (real auth-backed impl in the bench glue,
-	a fake in unit tests). ``get`` returns a body dict or raises on stale-cursor 409;
-	``post`` returns a status-aware response (``.status``/``.headers``/``.body``)."""
-
-	def get(self, path: str, *, params: dict, headers: dict) -> dict: ...
-
-	def post(self, path: str, *, json: dict, headers: dict) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -172,25 +163,13 @@ class BinViewClient:
 		headers = getattr(resp, "headers", {}) or {}
 		body = getattr(resp, "body", {}) or {}
 		if status == 409:
-			code = _error_code(body, "idempotency_key_conflict")
+			code = error_code(body, "idempotency_key_conflict", flat=True, limit=None)
 			if code == _WINDOW_SEQUENCE_CONFLICT:
 				raise WindowSequenceConflict(code, window_seq=window_seq)
 			raise ReportConflict(code)
 		if status == 404:
-			raise ReportNotFound(_error_code(body, "not_found"))
+			raise ReportNotFound(error_code(body, "not_found", flat=True, limit=None))
 		if status in (200, 201):
 			replayed = str(headers.get("Idempotent-Replayed", "")).lower() == "true"
 			return ReportResult(recorded=True, replayed=replayed, body=body)
 		raise RuntimeError(f"unexpected report status {status}: {body!r}")
-
-
-def _error_code(body: object, default: str) -> str:
-	"""The error ``code`` from DP2's canonical envelope ``{"error": {"code": ...}}`` (or a flat
-	``{"code": ...}`` body, as older fakes/transports return); ``default`` when neither is set."""
-	if isinstance(body, dict):
-		envelope = body.get("error")
-		if isinstance(envelope, dict) and envelope.get("code"):
-			return str(envelope["code"])
-		if body.get("code"):
-			return str(body["code"])
-	return default

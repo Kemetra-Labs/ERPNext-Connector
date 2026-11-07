@@ -68,6 +68,7 @@ import frappe
 from .. import feed_state
 from ..observability.sentry_client import report_unhandled
 from ..request_id import new_request_id
+from ..text import scrub
 from . import worker
 from .contracts import BinViewRequest
 from .retry import ABANDONED, RetrySet
@@ -178,7 +179,7 @@ def _run_bin_view_tick(request_id: str) -> None:
 	try:
 		client, reader, clock = _build_bin_view_path(request_id)
 	except Exception as exc:  # config/auth not ready — log + skip the tick (no partial work).
-		frappe.logger(_LOGGER).warning({"event": "bin_view.poll.skipped", "reason": _safe(str(exc))})
+		frappe.logger(_LOGGER).warning({"event": "bin_view.poll.skipped", "reason": scrub(str(exc))})
 		return
 
 	retries = RetrySet(_load_retry_state())
@@ -302,7 +303,7 @@ def _run_paged_report(request_wire: dict, retried: bool, request_id: str) -> Non
 		client, reader, clock = _build_bin_view_path(request_id)
 	except Exception as exc:
 		frappe.logger(_LOGGER).warning(
-			{"event": "bin_view.poll.skipped", "reason": _safe(str(exc)), "request_ref": request.request_ref}
+			{"event": "bin_view.poll.skipped", "reason": scrub(str(exc)), "request_ref": request.request_ref}
 		)
 		return
 	deadline = AttemptDeadline(
@@ -360,7 +361,7 @@ def _hand_off(request, retries: RetrySet) -> None:
 			{
 				"event": "bin_view.report.enqueue_failed",
 				"request_ref": request.request_ref,
-				"detail": _safe(str(exc)),
+				"detail": scrub(str(exc)),
 			}
 		)
 
@@ -437,15 +438,15 @@ def _attempt(io: _Io, request, *, deadline=None, retried: bool = False) -> _Outc
 	except WindowSequenceConflict as exc:
 		if exc.window_seq != 0:
 			# This attempt was superseded / went stale mid-sequence — retry with a fresh one.
-			return _Outcome(False, "window_sequence_conflict", _safe(str(exc)))
+			return _Outcome(False, "window_sequence_conflict", scrub(str(exc)))
 		# Window 0 of a NEW attempt is refused only once another attempt of this request is
 		# already complete (stock-view 1.2) — the run has its report; nothing to retry.
-		log.info({"event": "bin_view.report.already_complete", "request_ref": ref, "detail": _safe(str(exc))})
+		log.info({"event": "bin_view.report.already_complete", "request_ref": ref, "detail": scrub(str(exc))})
 	except ReportConflict as exc:
 		_log_key_conflict(ref, exc, retried=retried)
 	except ReportNotFound as exc:
 		# The run completed / went away between pull and report (non-disclosing).
-		log.info({"event": "bin_view.report.stale", "request_ref": ref, "detail": _safe(str(exc))})
+		log.info({"event": "bin_view.report.stale", "request_ref": ref, "detail": scrub(str(exc))})
 	except WindowOverflowError as exc:
 		# v1 request: the warehouse exceeds the single window — REFUSE to report a
 		# known-incomplete snapshot (no silent truncation). Deterministic: not retried.
@@ -454,7 +455,7 @@ def _attempt(io: _Io, request, *, deadline=None, retried: bool = False) -> _Outc
 				"event": "bin_view.window.overflow",
 				"request_ref": ref,
 				"warehouse": request.erpnext_warehouse_ref,
-				"detail": _safe(str(exc)),
+				"detail": scrub(str(exc)),
 			}
 		)
 	except WindowLimitExceeded as exc:
@@ -465,13 +466,13 @@ def _attempt(io: _Io, request, *, deadline=None, retried: bool = False) -> _Outc
 				"request_ref": ref,
 				"warehouse": request.erpnext_warehouse_ref,
 				"limit": exc.limit,
-				"detail": _safe(str(exc)),
+				"detail": scrub(str(exc)),
 			}
 		)
 	except (AttemptDeadlineExceeded, ReportIncomplete) as exc:
 		return _incomplete_attempt(ref, exc)
 	except Exception as exc:  # transport / unexpected DP2 status / read failure — retryable.
-		return _Outcome(False, type(exc).__name__, _safe(str(exc)))
+		return _Outcome(False, type(exc).__name__, scrub(str(exc)))
 	return _Outcome(True)
 
 
@@ -484,11 +485,11 @@ def _log_key_conflict(ref: str, exc: Exception, *, retried: bool) -> None:
 	"""
 	if retried:
 		frappe.logger(_LOGGER).info(
-			{"event": "bin_view.report.already_reported", "request_ref": ref, "detail": _safe(str(exc))}
+			{"event": "bin_view.report.already_reported", "request_ref": ref, "detail": scrub(str(exc))}
 		)
 		return
 	frappe.logger(_LOGGER).error(
-		{"event": "bin_view.report.conflict", "request_ref": ref, "detail": _safe(str(exc))}
+		{"event": "bin_view.report.conflict", "request_ref": ref, "detail": scrub(str(exc))}
 	)
 
 
@@ -501,11 +502,11 @@ def _incomplete_attempt(ref: str, exc: Exception) -> _Outcome:
 				"event": "bin_view.report.deadline_reached",
 				"request_ref": ref,
 				"window_seq": exc.window_seq,
-				"detail": _safe(str(exc)),
+				"detail": scrub(str(exc)),
 			}
 		)
-		return _Outcome(False, "attempt_deadline", _safe(str(exc)))
-	return _Outcome(False, "report_incomplete", _safe(str(exc)))
+		return _Outcome(False, "attempt_deadline", scrub(str(exc)))
+	return _Outcome(False, "report_incomplete", scrub(str(exc)))
 
 
 def _log_failure(request, failure, outcome: _Outcome) -> None:
@@ -535,11 +536,11 @@ def _build_bin_view_path(correlation_id: str):
 	Reuses the Connector Settings ``dp2_base_url`` + ``dp2_token`` (the posting poller's
 	transport pattern). Raises if base-URL/token unset → the tick skips cleanly.
 	"""
-	from ..posting.poller import _build_http_transport  # reuse the auth-backed transport
+	from .. import http_transport  # the shared auth-backed transport
 	from .frappe_glue import FrappeBinReader, UtcClock
 
 	settings = frappe.get_doc("Connector Settings")
-	transport = _build_http_transport(settings)
+	transport = http_transport.build_http_transport(settings)
 	client = BinViewClient(transport, correlation_id=correlation_id)
 	return client, FrappeBinReader(), UtcClock()
 
@@ -564,9 +565,3 @@ def _load_retry_state():
 
 def _save_retry_state(retries: RetrySet) -> None:
 	feed_state.save_json(_RETRY_KEY, _RETRY_FIELD, retries.to_state())
-
-
-def _safe(message: str) -> str:
-	from ..posting.reasons import scrub_message
-
-	return scrub_message(message)

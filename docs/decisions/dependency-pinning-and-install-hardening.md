@@ -30,7 +30,7 @@ The ticket's baseline was `9cb465e4` (2026-10-13). `main` has moved since then.
 - No `requirements*.txt`, no `setup.py`, no `[dependency-groups]`.
 
 **Third-party imports in app code.** Apart from the standard library, `frappe` and `erpnext`, the
-production code imports only `requests` (`connector/posting/poller.py`) and `sentry_sdk`
+production code imports only `requests` (`connector/http_transport.py`, since RT-1218) and `sentry_sdk`
 (`connector/observability/sentry_client.py`, lazily, only when `RT_CONNECTOR_SENTRY_DSN` is set).
 Both come from Frappe's own environment (Frappe v15/v16 ship `requests` and
 `sentry-sdk~=1.45.1`). The app therefore has **no runtime dependency of its own to lock**.

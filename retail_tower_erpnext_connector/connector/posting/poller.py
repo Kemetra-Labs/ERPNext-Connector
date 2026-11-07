@@ -23,6 +23,7 @@ import frappe
 
 from ..observability.sentry_client import report_unhandled
 from ..request_id import new_request_id
+from ..text import scrub
 from . import worker
 from .frappe_store import FrappePostingLogStore
 
@@ -61,7 +62,7 @@ def _run_posting_tick(request_id: str) -> None:
 			{
 				"event": "posting.guard.missing_index",
 				"missing": list(guard.missing),
-				"detail": _safe(guard.error or ""),
+				"detail": scrub(guard.error or ""),
 			}
 		)
 		return
@@ -82,7 +83,7 @@ def _run_posting_tick(request_id: str) -> None:
 		# an operational alert so DP2 can fix the feed contract; polling continues.
 		if result.degraded:
 			frappe.logger(_LOGGER).error(
-				{"event": "posting.feed.degraded", "detail": _safe(result.degraded_message or "")}
+				{"event": "posting.feed.degraded", "detail": scrub(result.degraded_message or "")}
 			)
 		pages += 1
 		_save_cursor(result.cursor)  # advance regardless of degraded — all items are terminal
@@ -102,12 +103,12 @@ def _ready_posting_path(correlation_id: str):
 	try:
 		client, post_valid, preflight = _build_posting_path(correlation_id)
 	except Exception as exc:  # config/auth not ready — log and skip this tick (no partial work).
-		frappe.logger(_LOGGER).warning({"event": "posting.poll.skipped", "reason": _safe(str(exc))})
+		frappe.logger(_LOGGER).warning({"event": "posting.poll.skipped", "reason": scrub(str(exc))})
 		return None
 	try:
 		ready = preflight()
 	except Exception as exc:  # RT-379: a profile error never lets the tick pull.
-		frappe.logger(_LOGGER).error({"event": "compatibility.failed", "detail": _safe(str(exc))})
+		frappe.logger(_LOGGER).error({"event": "compatibility.failed", "detail": scrub(str(exc))})
 		return None
 	return (client, post_valid) if ready else None
 
@@ -120,6 +121,7 @@ def _build_posting_path(correlation_id: str):
 	``preflight()`` runs the Compatibility Profile against the SAME parsed maps (no second read).
 	Finalised at bench time (reads Connector Settings + signed decisions).
 	"""
+	from .. import http_transport
 	from . import compatibility_glue
 	from .config import require_configured_maps
 	from .frappe_glue import post_work_item  # local import: glue imports frappe-only symbols
@@ -147,7 +149,7 @@ def _build_posting_path(correlation_id: str):
 	# a tender-bearing sale with an unmapped method then fails closed per item (validation).
 	tender_modes = _load_tender_mode_map(settings)
 
-	transport = _build_http_transport(settings)  # auth-backed HTTP client to DP2 (spec 003)
+	transport = http_transport.build_http_transport(settings)  # auth-backed HTTP client to DP2 (spec 003)
 	client = PostingFeedClient(transport, correlation_id=correlation_id)
 	store = FrappePostingLogStore()
 	uom_map = UomMap(uom)
@@ -182,55 +184,6 @@ def _build_posting_path(correlation_id: str):
 # pure parse logic lives in config.py (unit-tested locally); these are the thin frappe shell.
 
 
-class _Resp:
-	"""Status-aware response wrapper so PostingFeedClient._interpret_ack can read 201/200/409/404."""
-
-	def __init__(self, r) -> None:
-		self.status = r.status_code
-		self.headers = dict(r.headers)
-		try:
-			self.body = r.json()
-		except Exception:
-			self.body = {}
-
-
-class _RequestsTransport:
-	"""Concrete HttpTransport to DP2 over the spec-003 connectorBearer (Authorization: Bearer).
-
-	Bench-only (imports ``requests``, carries the secret token). GET raises for HTTP errors; POST
-	returns a status-aware :class:`_Resp` so the client distinguishes 201/200-replay/409/404.
-	"""
-
-	def __init__(self, base: str, token: str) -> None:
-		self._base = base.rstrip("/")
-		self._auth = {"Authorization": "Bearer " + token}
-
-	def get(self, path: str, *, params: dict, headers: dict) -> dict:
-		import requests
-
-		r = requests.get(self._base + path, params=params, headers={**self._auth, **headers}, timeout=30)
-		r.raise_for_status()
-		return r.json()
-
-	def post(self, path: str, *, json: dict, headers: dict):
-		import requests
-
-		r = requests.post(self._base + path, json=json, headers={**self._auth, **headers}, timeout=30)
-		return _Resp(r)
-
-
-def _build_http_transport(settings) -> _RequestsTransport:
-	"""Construct the auth-backed transport from Connector Settings (Gate G4 — token via get_password).
-
-	Raises if base-URL or token is unset, so the tick skips cleanly rather than posting blind.
-	"""
-	base_url = (settings.dp2_base_url or "").strip()
-	token = settings.get_password("dp2_token")  # decrypted; never get_single_value (masks it)
-	if not base_url or not token:
-		raise ValueError("Connector Settings: dp2_base_url and dp2_token are required")
-	return _RequestsTransport(base_url, token)
-
-
 def _warn_credential_lifecycle(settings) -> None:
 	"""Emit structured ops alerts for the configured credential's lifecycle (007 OQ-1 + OQ-2).
 
@@ -245,7 +198,7 @@ def _warn_credential_lifecycle(settings) -> None:
 	Neither helper raises — a malformed warn-days comes back as a ``warn_check_failed`` payload — so
 	an advisory warning never aborts a posting tick. The outer ``try/except`` guards only an
 	irreducible frappe read failure (e.g. a corrupt stored timestamp). For the link check the token's
-	PRESENCE (a bool) is passed, never the token value (S-1 / Gate G4); ``_safe`` scrubs every detail.
+	PRESENCE (a bool) is passed, never the token value (S-1 / Gate G4); ``scrub`` scrubs every detail.
 	"""
 	from .credential_lifecycle import build_expiry_warning, check_registration_link
 
@@ -265,12 +218,12 @@ def _warn_credential_lifecycle(settings) -> None:
 		]
 	except Exception as exc:  # irreducible frappe read failure — advisory only, never stop posting.
 		frappe.logger(_LOGGER).warning(
-			{"event": "posting.credential.warn_check_failed", "reason": _safe(str(exc))}
+			{"event": "posting.credential.warn_check_failed", "reason": scrub(str(exc))}
 		)
 		return
 	for payload in payloads:
 		if payload is not None:
-			payload["detail"] = _safe(payload["detail"])
+			payload["detail"] = scrub(payload["detail"])
 			frappe.logger(_LOGGER).warning(payload)
 
 
@@ -309,9 +262,3 @@ def _save_cursor(cursor: str) -> None:
 	from ..feed_state import save
 
 	save(_CURSOR_KEY, _CURSOR_FIELD, cursor)
-
-
-def _safe(message: str) -> str:
-	from .reasons import scrub_message
-
-	return scrub_message(message)

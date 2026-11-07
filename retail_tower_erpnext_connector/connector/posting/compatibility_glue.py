@@ -36,10 +36,12 @@ from dataclasses import dataclass
 
 import frappe
 
+from ..text import scrub
 from .compatibility_profile import REQUIRED_CUSTOM_FIELDS, MappedRecord, SiteSnapshot, drift_event, evaluate
 
 _SETTINGS = "Connector Settings"
 _LOGGER = "retail_tower_posting"
+_DETAIL_LIMIT = 500  # characters of a logged / recorded failure detail
 _MODE_OF_PAYMENT = "Mode of Payment"
 _ACCOUNTS_SETTINGS = "Accounts Settings"
 _TAXES_TEMPLATE = "Sales Taxes and Charges Template"
@@ -60,7 +62,8 @@ def run_preflight(settings, maps: Mapping[str, Mapping]) -> bool:
 	except Exception as exc:  # an unreadable site must pause posting, never wave it through
 		# Best effort: show the pause on Connector Settings (Codex PR #67).
 		_pause(
-			"compatibility.unreadable", f"the site could not be read: {_safe(f'{type(exc).__name__}: {exc}')}"
+			"compatibility.unreadable",
+			f"the site could not be read: {scrub(f'{type(exc).__name__}: {exc}', limit=_DETAIL_LIMIT)}",
 		)
 		return False
 	try:
@@ -73,7 +76,7 @@ def run_preflight(settings, maps: Mapping[str, Mapping]) -> bool:
 	except Exception as exc:  # never a stale OK and never a pull on a profile error
 		_pause(
 			"compatibility.failed",
-			f"the profile could not be evaluated: {_safe(f'{type(exc).__name__}: {exc}')}",
+			f"the profile could not be evaluated: {scrub(f'{type(exc).__name__}: {exc}', limit=_DETAIL_LIMIT)}",
 		)
 		return False
 	_record(result)
@@ -461,15 +464,14 @@ def _write(values: dict) -> None:
 			update_modified=False,
 		)
 	except Exception as exc:
-		_log({"event": "compatibility.record_failed", "detail": _safe(f"{type(exc).__name__}: {exc}")})
+		_log(
+			{
+				"event": "compatibility.record_failed",
+				"detail": scrub(f"{type(exc).__name__}: {exc}", limit=_DETAIL_LIMIT),
+			}
+		)
 
 
 def _log(record: dict) -> None:
 	"""ERROR level: Frappe drops lower levels in production (the RT-49 convention)."""
 	frappe.logger(_LOGGER).error(record)
-
-
-def _safe(message: str) -> str:
-	from .reasons import scrub_message
-
-	return scrub_message(message)[:500]
