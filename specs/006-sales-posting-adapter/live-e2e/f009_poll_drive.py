@@ -7,7 +7,7 @@
 #   bench --site retail.localhost execute
 #     retail_tower_erpnext_connector.connector.posting.f009_poll_drive.main
 #
-# Env (set by the runner): RT_E2E_EXTERNAL_ID = the seed's external_id (E2E-SALE-...), so the
+# Env (set by the runner; RT_CONNECTOR_ALLOW_INSECURE_DP2=1 is defaulted below, RT-1259): RT_E2E_EXTERNAL_ID = the seed's external_id (E2E-SALE-...), so the
 # verification can find the exact SI/posting row this run created.
 
 import os
@@ -18,6 +18,8 @@ from retail_tower_erpnext_connector.connector.posting import poller
 
 # The seed's fixed identifiers (dp2-seed.sql).
 STORE_ID = "22222222-2222-2222-2222-222222222222"
+# The bench DP2 is plain http on a non-loopback address; the builder refuses that unless opted in (RT-1259).
+os.environ.setdefault("RT_CONNECTOR_ALLOW_INSECURE_DP2", "1")
 DP2_BASE = os.environ.get("RT_E2E_DP2_BASE", "http://172.20.0.1:3000")
 RAW_TOKEN = os.environ.get("RT_E2E_TOKEN", "rt_e2e_connector_token_0123456789abcdefghijABCD")
 EXTERNAL_ID = os.environ.get("RT_E2E_EXTERNAL_ID", "")

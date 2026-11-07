@@ -16,9 +16,17 @@ This module imports NO frappe; ``requests`` is imported on use (bench-only, not 
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from typing import Protocol
+from urllib.parse import urlsplit
 
 _TIMEOUT_S = 30
+
+# Development-only opt-in (RT-1259): exactly "1" lets ``dp2_base_url`` be plain ``http://``. Off by
+# default. An env var, not a Connector Settings field: no DocType/migration change, and a site
+# cannot be put on cleartext by editing a setting in the UI.
+ALLOW_INSECURE_ENV = "RT_CONNECTOR_ALLOW_INSECURE_DP2"
 
 
 class HttpTransport(Protocol):
@@ -74,13 +82,22 @@ class RequestsTransport:
 		return StatusResponse(r)
 
 
-def build_http_transport(settings) -> RequestsTransport:
+def build_http_transport(settings, *, environ: Mapping[str, str] | None = None) -> RequestsTransport:
 	"""Construct the auth-backed transport from Connector Settings (Gate G4 — token via get_password).
 
-	Raises if base-URL or token is unset, so the tick skips cleanly rather than posting blind.
+	Raises ``ValueError`` — which the ticks turn into a clean skip, before any request is made — if the
+	base URL or token is unset, or if the URL is not ``https://``. The bearer token must not cross a
+	cleartext link (CWE-319); ``RT_CONNECTOR_ALLOW_INSECURE_DP2=1`` allows ``http://`` for a bench.
 	"""
+	env = os.environ if environ is None else environ
 	base_url = (settings.dp2_base_url or "").strip()
 	token = settings.get_password("dp2_token")  # decrypted; never get_single_value (masks it)
 	if not base_url or not token:
 		raise ValueError("Connector Settings: dp2_base_url and dp2_token are required")
+	scheme = urlsplit(base_url).scheme.lower()
+	if scheme != "https" and not (scheme == "http" and env.get(ALLOW_INSECURE_ENV) == "1"):
+		raise ValueError(
+			"Connector Settings: dp2_base_url must be https:// "
+			f"(set {ALLOW_INSECURE_ENV}=1 to allow http:// in development)"
+		)
 	return RequestsTransport(base_url, token)
