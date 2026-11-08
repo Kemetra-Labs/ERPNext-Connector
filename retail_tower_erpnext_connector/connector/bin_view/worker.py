@@ -30,6 +30,13 @@ Two paths, chosen by the pulled request (stock-view 1.2, RT-176):
 exact-decimal STRING deterministically (round HALF-EVEN to 6 fractional digits — the
 019 contract precision cap) so DP2 never receives a float. NO valuation is read.
 
+RT-918 (stock-view 1.4): when the poller passes a ``tracking_reader`` (the Connector's
+tracking release switch is on), EVERY entry carries ``tracking``: the ERPNext Item flags and,
+for a batch Item, its Batches in the warehouse with their book quantity, expiry and disabled
+flag. The tracking of the whole read is read BEFORE any window is reported, so a refusal
+(:class:`BatchLimitExceeded`, :class:`TrackingReadError`) reports nothing. Without a
+``tracking_reader`` the report is byte-for-byte the pre-1.4 shape.
+
 This module imports NO frappe — the Bin read is behind :class:`BinReader`; tested
 locally against a fake. The live composition root is :mod:`.poller` (bench-validated).
 """
@@ -43,7 +50,15 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Protocol
 
-from .contracts import BinEntry, BinViewReportWindow, BinViewRequest, BinViewSnapshotReport
+from .contracts import (
+	MAX_BATCHES_PER_ENTRY,
+	BinEntry,
+	BinEntryBatch,
+	BinEntryTracking,
+	BinViewReportWindow,
+	BinViewRequest,
+	BinViewSnapshotReport,
+)
 from .transport import BinViewClient, ReportResult
 
 # 019 BinEntry.quantity precision cap — at most 6 fractional digits.
@@ -131,6 +146,24 @@ def attempt_budget_s(max_windows: int) -> int:
 	return min(int(max_windows) * TRANSPORT_TIMEOUT_S + READ_ALLOWANCE_S, MAX_ATTEMPT_BUDGET_S)
 
 
+class BatchLimitExceeded(Exception):
+	"""An Item holds MORE than 200 Batches in the warehouse (stock-view 1.4
+	``BinEntryTracking.batches`` maxItems). Reporting a truncated list would be known-incomplete
+	evidence and more is a 400 at Backend-Core, so the read is refused and NOTHING is reported
+	(the poller logs ``bin_view.tracking.batch_limit_exceeded``; deterministic, not retried)."""
+
+	def __init__(self, message: str, *, item_code: str, batch_count: int) -> None:
+		super().__init__(message)
+		self.item_code = item_code
+		self.batch_count = batch_count
+
+
+class TrackingReadError(Exception):
+	"""The tracking read could not produce evidence for an Item (its Item flags or a Batch master
+	row is missing). The Connector never guesses "untracked": nothing is reported and the attempt
+	is retried like any read failure."""
+
+
 class ReportIncomplete(Exception):
 	"""The final window of an attempt was acknowledged, but DP2 explicitly said the report is
 	NOT complete (``complete: false``). The run has not reached completion, so the poller
@@ -145,6 +178,48 @@ class RawBin:
 	item_code: str
 	actual_qty: float
 	stock_uom: str
+
+
+@dataclass(frozen=True)
+class RawItemTracking:
+	"""One ERPNext Item's tracking flags (``has_batch_no``, ``has_serial_no``, ``has_expiry_date``)."""
+
+	item_code: str
+	has_batch_no: bool
+	has_serial_no: bool
+	has_expiry_date: bool
+
+
+@dataclass(frozen=True)
+class RawBatch:
+	"""One Batch of a batch Item with its summed book quantity in the warehouse + its master row.
+
+	``qty`` is the ERPNext float sum (quantized by :func:`quantize_qty`, never sent as a float);
+	``expiry_date`` is an ISO calendar date or ``None``.
+	"""
+
+	item_code: str
+	batch_no: str
+	qty: float
+	expiry_date: str | None
+	disabled: bool
+
+
+@dataclass(frozen=True)
+class RawTrackingRead:
+	"""What one tracking read returned for a set of Items in one warehouse."""
+
+	items: tuple[RawItemTracking, ...]
+	batches: tuple[RawBatch, ...]
+
+
+class TrackingReader(Protocol):
+	"""Reads the ERPNext tracking master + batch-wise book quantity (the frappe-touching seam)."""
+
+	def read_tracking(self, *, erpnext_warehouse_ref: str, item_codes: list[str]) -> RawTrackingRead:
+		"""The Item flags of ``item_codes`` and, for the batch Items among them, every Batch that has
+		stock-ledger presence in the warehouse with its summed book quantity and master row."""
+		...
 
 
 class BinReader(Protocol):
@@ -180,19 +255,108 @@ def quantize_qty(actual_qty: float) -> str:
 	return f"{d:f}"
 
 
+def is_zero_qty(qty: float) -> bool:
+	"""True when ``qty`` is zero at the contract precision (6 fractional digits, half-even)."""
+	return Decimal(quantize_qty(qty)) == 0
+
+
 def build_report(
-	bins: list[RawBin], *, read_at: str, window: BinViewReportWindow | None = None
+	bins: list[RawBin],
+	*,
+	read_at: str,
+	window: BinViewReportWindow | None = None,
+	tracking: dict[str, BinEntryTracking] | None = None,
 ) -> BinViewSnapshotReport:
-	"""Build the snapshot report (or one window of it) from raw Bin rows — pure, no valuation."""
+	"""Build the snapshot report (or one window of it) from raw Bin rows — pure, no valuation.
+
+	``tracking`` (RT-918) maps every ``item_code`` of ``bins`` to its evidence; ``None`` builds the
+	pre-1.4 shape (no ``tracking`` on any entry). A missing Item in a given map is a bug, not
+	"untracked" — :class:`TrackingReadError`.
+	"""
+
+	def _tracking_of(item_code: str) -> BinEntryTracking | None:
+		if tracking is None:
+			return None
+		if item_code not in tracking:
+			raise TrackingReadError(f"no tracking evidence was built for Item {item_code!r}")
+		return tracking[item_code]
+
 	entries = tuple(
 		BinEntry(
 			erpnext_item_ref=b.item_code,
 			quantity=quantize_qty(b.actual_qty),
 			stock_uom=b.stock_uom,
+			tracking=_tracking_of(b.item_code),
 		)
 		for b in bins
 	)
 	return BinViewSnapshotReport(entries=entries, read_at=read_at, window=window)
+
+
+def build_tracking(item_codes: list[str], read: RawTrackingRead) -> dict[str, BinEntryTracking]:
+	"""Turn one tracking read into per-Item ``BinEntryTracking`` evidence — pure, no valuation.
+
+	* Every Item of ``item_codes`` must have its flags in ``read`` (else :class:`TrackingReadError`).
+	* Only a ``has_batch_no`` Item lists Batches; a Batch row of another Item is ignored.
+	* A Batch whose book quantity quantizes to zero is omitted (captain decision, RT-918; RT-1283
+	  comment 16225): a used-up Batch has no presence in the warehouse in the 1.4 sense, and keeping
+	  every lifetime Batch would push a fast-batched Item over the 200 cap. Negative stays listed.
+	* Batches are listed once each, ordered by Batch name, so a re-read of the same ledger gives the
+	  same body (the report's idempotency fingerprint).
+	* More than :data:`MAX_BATCHES_PER_ENTRY` Batches for one Item → :class:`BatchLimitExceeded`.
+	"""
+	flags = {i.item_code: i for i in read.items}
+	missing = [code for code in item_codes if code not in flags]
+	if missing:
+		raise TrackingReadError(
+			f"ERPNext returned no Item tracking flags for {len(missing)} Item(s), e.g. {missing[0]!r}"
+		)
+	batches_by_item: dict[str, dict[str, RawBatch]] = {}
+	for batch in read.batches:
+		if is_zero_qty(batch.qty):
+			continue
+		if batch.item_code in flags and flags[batch.item_code].has_batch_no:
+			batches_by_item.setdefault(batch.item_code, {})[batch.batch_no] = batch
+	return {code: _entry_tracking(flags[code], batches_by_item.get(code, {})) for code in item_codes}
+
+
+def _entry_tracking(item: RawItemTracking, batches: dict[str, RawBatch]) -> BinEntryTracking:
+	if len(batches) > MAX_BATCHES_PER_ENTRY:
+		raise BatchLimitExceeded(
+			f"Item {item.item_code!r} has {len(batches)} Batches in the warehouse; stock-view 1.4 "
+			f"carries at most {MAX_BATCHES_PER_ENTRY} per entry, so the read is refused",
+			item_code=item.item_code,
+			batch_count=len(batches),
+		)
+	return BinEntryTracking(
+		has_batch_no=item.has_batch_no,
+		has_serial_no=item.has_serial_no,
+		has_expiry_date=item.has_expiry_date,
+		batches=tuple(
+			BinEntryBatch(
+				batch_ref=b.batch_no,
+				quantity=quantize_qty(b.qty),
+				expiry_date=b.expiry_date,
+				disabled=b.disabled,
+			)
+			for _name, b in sorted(batches.items())
+		),
+	)
+
+
+def read_tracking(
+	reader: TrackingReader, *, erpnext_warehouse_ref: str, bins: list[RawBin], chunk_size: int
+) -> dict[str, BinEntryTracking]:
+	"""Read and build the tracking evidence for every Item of ``bins``, ``chunk_size`` Items per read
+	(one report window's worth, so each ERPNext query stays bounded)."""
+	codes = [b.item_code for b in bins]
+	tracking: dict[str, BinEntryTracking] = {}
+	step = max(int(chunk_size), 1)
+	for i in range(0, len(codes), step):
+		chunk = codes[i : i + step]
+		read = reader.read_tracking(erpnext_warehouse_ref=erpnext_warehouse_ref, item_codes=chunk)
+		tracking.update(build_tracking(chunk, read))
+	return tracking
 
 
 def derive_idempotency_key(request_ref: str) -> str:
@@ -240,12 +404,13 @@ def process_request(
 	clock: Clock,
 	attempt_ref_factory: Callable[[], str] = new_attempt_ref,
 	deadline: AttemptDeadline | None = None,
+	tracking_reader: TrackingReader | None = None,
 ) -> ReportResult:
 	"""Read the warehouse's Bin for one request and report it to DP2 (v1 or paged).
 
 	Dispatches on ``itemWindow.maxWindows``: ``> 1`` → :func:`process_paged_request` (with the
 	optional ``deadline``); absent or 1 → the unchanged v1 single-window path
-	(:func:`process_v1_request`).
+	(:func:`process_v1_request`). ``tracking_reader`` set → every entry carries 1.4 ``tracking``.
 	"""
 	if request.item_window.is_paged:
 		return process_paged_request(
@@ -255,8 +420,11 @@ def process_request(
 			clock=clock,
 			attempt_ref_factory=attempt_ref_factory,
 			deadline=deadline,
+			tracking_reader=tracking_reader,
 		)
-	return process_v1_request(request, client=client, reader=reader, clock=clock)
+	return process_v1_request(
+		request, client=client, reader=reader, clock=clock, tracking_reader=tracking_reader
+	)
 
 
 def process_v1_request(
@@ -265,6 +433,7 @@ def process_v1_request(
 	client: BinViewClient,
 	reader: BinReader,
 	clock: Clock,
+	tracking_reader: TrackingReader | None = None,
 ) -> ReportResult:
 	"""v1: read the warehouse's Bin for one request and report the snapshot to DP2.
 
@@ -290,7 +459,15 @@ def process_v1_request(
 			f"Bin items; v1 single-window cannot report it completely (request "
 			f"{request.request_ref})"
 		)
-	report = build_report(bins, read_at=read_at)
+	tracking = None
+	if tracking_reader is not None:
+		tracking = read_tracking(
+			tracking_reader,
+			erpnext_warehouse_ref=request.erpnext_warehouse_ref,
+			bins=bins,
+			chunk_size=max_items,
+		)
+	report = build_report(bins, read_at=read_at, tracking=tracking)
 	return client.report_snapshot(
 		request.request_ref,
 		report,
@@ -306,6 +483,7 @@ def process_paged_request(
 	clock: Clock,
 	attempt_ref_factory: Callable[[], str] = new_attempt_ref,
 	deadline: AttemptDeadline | None = None,
+	tracking_reader: TrackingReader | None = None,
 ) -> ReportResult:
 	"""v1.2: one read attempt, reported as windows 0..N (``maxWindows > 1``).
 
@@ -335,6 +513,15 @@ def process_paged_request(
 			f"snapshot (request {request.request_ref})",
 			limit=limit,
 		)
+	# RT-918: all of the attempt's tracking is read before window 0, so a refusal reports nothing.
+	tracking = None
+	if tracking_reader is not None:
+		tracking = read_tracking(
+			tracking_reader,
+			erpnext_warehouse_ref=request.erpnext_warehouse_ref,
+			bins=bins,
+			chunk_size=max_items,
+		)
 	chunks = split_windows(bins, max_items)
 	attempt_ref = attempt_ref_factory()
 	last_seq = len(chunks) - 1
@@ -346,6 +533,7 @@ def process_paged_request(
 			chunk,
 			read_at=read_at,
 			window=BinViewReportWindow(attempt_ref=attempt_ref, window_seq=seq, is_final=(seq == last_seq)),
+			tracking=tracking,
 		)
 		result = client.report_snapshot(
 			request.request_ref,

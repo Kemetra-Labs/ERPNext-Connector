@@ -12,7 +12,9 @@ Wire shapes consumed/produced here:
     the optional v1.2 ``itemWindow.maxWindows`` (absent/1 = v1 single window) lets the
     connector page its read into up to ``maxWindows`` windows (RT-176);
   - ``BinEntry`` (produced): one ERPNext Item's on-hand QUANTITY (exact-decimal
-    string, NEVER a float — Principle III) + its ``stockUom``; NO valuation;
+    string, NEVER a float — Principle III) + its ``stockUom``; NO valuation. The optional
+    v1.4 ``tracking`` (``BinEntryTracking`` + ``BinEntryBatch``, RT-918) carries the Item
+    tracking flags and its batch-wise book quantity in the warehouse;
   - ``BinViewReportWindow`` (produced, v1.2): ``{attemptRef, windowSeq, isFinal}`` —
     sent ONLY when the request advertised ``maxWindows > 1``;
   - ``BinViewSnapshotReport`` (produced): the per-item snapshot (or one window of it) +
@@ -110,20 +112,81 @@ class BinViewRequest:
 		}
 
 
+# stock-view 1.4 ``BinEntryTracking.batches`` maxItems: at most 200 Batches per Item and warehouse.
+MAX_BATCHES_PER_ENTRY = 200
+
+
+@dataclass(frozen=True)
+class BinEntryBatch:
+	"""1.4 ``BinEntryBatch`` (RT-918) — one ERPNext Batch of the entry's Item in this warehouse.
+
+	Evidence only: the Batch ref, its book QUANTITY in the warehouse (exact-decimal string, may be
+	zero or negative, need not sum to the entry quantity), its calendar expiry (``None`` when the
+	Batch has none) and its ``disabled`` flag. NO valuation.
+	"""
+
+	batch_ref: str
+	quantity: str
+	expiry_date: str | None
+	disabled: bool
+
+	def to_wire(self) -> dict[str, object]:
+		return {
+			"batchRef": {"doctype": "Batch", "name": self.batch_ref},
+			"quantity": self.quantity,
+			"expiryDate": self.expiry_date,
+			"disabled": self.disabled,
+		}
+
+
+@dataclass(frozen=True)
+class BinEntryTracking:
+	"""1.4 ``BinEntryTracking`` (RT-918) — what the Connector read about one Item's tracking.
+
+	The ERPNext Item flags ``has_batch_no`` / ``has_serial_no`` / ``has_expiry_date`` and, for a
+	batch Item that has Batches in this warehouse, those Batches. ``batches`` empty → the key is
+	omitted on the wire (every non-batch Item, and a batch Item with no Batch here).
+	"""
+
+	has_batch_no: bool
+	has_serial_no: bool
+	has_expiry_date: bool
+	batches: tuple[BinEntryBatch, ...] = ()
+
+	def to_wire(self) -> dict[str, object]:
+		wire: dict[str, object] = {
+			"hasBatchNo": self.has_batch_no,
+			"hasSerialNo": self.has_serial_no,
+			"hasExpiryDate": self.has_expiry_date,
+		}
+		if self.batches:
+			wire["batches"] = [b.to_wire() for b in self.batches]
+		return wire
+
+
 @dataclass(frozen=True)
 class BinEntry:
-	"""019 ``BinEntry`` — one Item's on-hand quantity, exact-decimal string, NO valuation."""
+	"""019 ``BinEntry`` — one Item's on-hand quantity, exact-decimal string, NO valuation.
+
+	``tracking`` (stock-view 1.4, RT-918) is sent only when the Connector's tracking release
+	switch is on; ``None`` keeps the pre-1.4 wire shape exactly (no ``tracking`` key), which
+	Backend-Core reads as tracking UNKNOWN, never "untracked".
+	"""
 
 	erpnext_item_ref: str
 	quantity: str
 	stock_uom: str
+	tracking: BinEntryTracking | None = None
 
 	def to_wire(self) -> dict[str, object]:
-		return {
+		wire: dict[str, object] = {
 			"erpnextItemRef": {"doctype": "Item", "name": self.erpnext_item_ref},
 			"quantity": self.quantity,
 			"stockUom": self.stock_uom,
 		}
+		if self.tracking is not None:
+			wire["tracking"] = self.tracking.to_wire()
+		return wire
 
 
 @dataclass(frozen=True)

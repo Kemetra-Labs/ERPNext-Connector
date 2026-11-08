@@ -48,8 +48,13 @@ an unexpected DP2 status, a mid-attempt failure, a superseded attempt, an explic
 cursor advances past its page — so a failed run is never stranded behind the saved cursor (the
 pre-RT-176 defect). After ``retry.MAX_RETRY_TICKS`` failed retries it is abandoned with
 ``bin_view.report.incomplete_abandoned``. Deterministic refusals are terminal and logged, not
-retried: the v1 overflow, the paged ``bin_view.window.limit_exceeded``, a 409 idempotency-key
-conflict, and a 404 stale run.
+retried: the v1 overflow, the paged ``bin_view.window.limit_exceeded``, the RT-918
+``bin_view.tracking.batch_limit_exceeded`` (an Item with more than 200 Batches), a 409
+idempotency-key conflict, and a 404 stale run.
+
+RT-918: every attempt asks :func:`_tracking_reader` whether the site's release switch
+(``frappe_glue.TRACKING_SWITCH``, default off) is on; only then does each entry carry the
+stock-view 1.4 ``tracking`` evidence.
 
 This is the composition root; it imports ``frappe`` and the glue, so it is validated on
 a bench, not locally (standing-rules §6). The pure pull/report/quantize/retry logic lives in
@@ -76,6 +81,7 @@ from .transport import BinViewClient, ReportConflict, ReportNotFound, WindowSequ
 from .worker import (
 	AttemptDeadline,
 	AttemptDeadlineExceeded,
+	BatchLimitExceeded,
 	ReportIncomplete,
 	WindowLimitExceeded,
 	WindowOverflowError,
@@ -434,7 +440,14 @@ def _attempt(io: _Io, request, *, deadline=None, retried: bool = False) -> _Outc
 	ref = request.request_ref
 	log = frappe.logger(_LOGGER)
 	try:
-		worker.process_request(request, client=io.client, reader=io.reader, clock=io.clock, deadline=deadline)
+		worker.process_request(
+			request,
+			client=io.client,
+			reader=io.reader,
+			clock=io.clock,
+			deadline=deadline,
+			tracking_reader=_tracking_reader(),
+		)
 	except WindowSequenceConflict as exc:
 		if exc.window_seq != 0:
 			# This attempt was superseded / went stale mid-sequence — retry with a fresh one.
@@ -458,22 +471,41 @@ def _attempt(io: _Io, request, *, deadline=None, retried: bool = False) -> _Outc
 				"detail": scrub(str(exc)),
 			}
 		)
-	except WindowLimitExceeded as exc:
-		# Paged request: more than maxWindows x maxItems items — nothing was reported.
-		log.error(
-			{
-				"event": "bin_view.window.limit_exceeded",
-				"request_ref": ref,
-				"warehouse": request.erpnext_warehouse_ref,
-				"limit": exc.limit,
-				"detail": scrub(str(exc)),
-			}
-		)
+	except (WindowLimitExceeded, BatchLimitExceeded) as exc:
+		# Nothing was reported; deterministic, not retried.
+		_log_refusal(request, exc)
 	except (AttemptDeadlineExceeded, ReportIncomplete) as exc:
 		return _incomplete_attempt(ref, exc)
 	except Exception as exc:  # transport / unexpected DP2 status / read failure — retryable.
 		return _Outcome(False, type(exc).__name__, scrub(str(exc)))
 	return _Outcome(True)
+
+
+def _log_refusal(request, exc: Exception) -> None:
+	"""A read refused before anything was reported (paged item limit, or RT-918 Batch limit)."""
+	record = {"request_ref": request.request_ref, "warehouse": request.erpnext_warehouse_ref}
+	if isinstance(exc, BatchLimitExceeded):
+		# An Item holds more Batches than stock-view 1.4 can carry (200) — no truncated evidence.
+		record.update(
+			event="bin_view.tracking.batch_limit_exceeded",
+			item_code=exc.item_code,
+			batch_count=exc.batch_count,
+		)
+	else:
+		# Paged request: more than maxWindows x maxItems items.
+		record.update(event="bin_view.window.limit_exceeded", limit=getattr(exc, "limit", None))
+	record["detail"] = scrub(str(exc))
+	frappe.logger(_LOGGER).error(record)
+
+
+def _tracking_reader():
+	"""The RT-918 tracking reader when the site's release switch is on, else ``None`` (pre-1.4 shape).
+
+	Read per attempt, so turning the switch on or off takes effect on the next attempt.
+	"""
+	from .frappe_glue import FrappeTrackingReader, tracking_enabled
+
+	return FrappeTrackingReader() if tracking_enabled() else None
 
 
 def _log_key_conflict(ref: str, exc: Exception, *, retried: bool) -> None:
