@@ -96,7 +96,7 @@ class FrappeContext:
 		# compatibility glue (a non-positive or unparseable value is "unset").
 		try:
 			value = int(float(self._frappe.conf.get("scheduler_tick_interval") or 0))
-		except (TypeError, ValueError, OverflowError):
+		except TypeError, ValueError, OverflowError:
 			return None
 		return value if value > 0 else None
 

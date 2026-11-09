@@ -94,7 +94,7 @@ def process_page(
 		try:
 			post_valid(work_item)
 			posted_count += 1
-		except (AckConflict, AckNotFound):
+		except AckConflict, AckNotFound:
 			# isolate: the item posted (or replayed) but its ack was rejected by DP2 → a
 			# reconciliation case (017), not a connector retry. Record the ref and continue.
 			ack_failed_refs.append(work_item.work_item_ref)

@@ -55,7 +55,7 @@ def parse_warn_within(warn_days: object) -> timedelta:
 		return DEFAULT_WARN_WITHIN
 	try:
 		days = int(warn_days)
-	except (TypeError, ValueError):
+	except TypeError, ValueError:
 		raise ConfigError(
 			f"dp2_credential_warn_days must be a whole number of days, got {warn_days!r}"
 		) from None

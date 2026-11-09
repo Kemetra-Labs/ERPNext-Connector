@@ -95,7 +95,7 @@ def _changes(repo: str, current: str, target: str, subtree: str) -> list[tuple[s
 def _show_json(repo: str, sha: str, path: str) -> dict | None:
 	try:
 		data = json.loads(_blob(repo, sha, path).decode("utf-8"))
-	except (InputError, ValueError):
+	except InputError, ValueError:
 		return None
 	return data if isinstance(data, dict) else None
 
@@ -124,7 +124,7 @@ def _hooks_reasons(repo: str, current: str, target: str, subtree: str, status: s
 	try:
 		old = _hooks_statements(_blob(repo, current, f"{subtree}/{HOOKS}").decode("utf-8"))
 		new = _hooks_statements(_blob(repo, target, f"{subtree}/{HOOKS}").decode("utf-8"))
-	except (InputError, SyntaxError, ValueError):
+	except InputError, SyntaxError, ValueError:
 		return ["hooks.py could not be parsed"]
 	changed = sorted(k for k in set(old) | set(new) if k != SCHEDULER_HOOK and old.get(k) != new.get(k))
 	return [f"hooks.py changed outside {SCHEDULER_HOOK}: {', '.join(changed)}"] if changed else []

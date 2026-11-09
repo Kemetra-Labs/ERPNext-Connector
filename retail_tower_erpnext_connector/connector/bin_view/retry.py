@@ -66,7 +66,7 @@ class RetrySet:
 			try:
 				request = BinViewRequest.from_wire(raw["request"])
 				failures = int(raw["failures"])
-			except (KeyError, TypeError, ValueError):
+			except KeyError, TypeError, ValueError:
 				continue  # unreadable entry (e.g. a pre-upgrade shape) — drop it
 			if request.request_ref == ref and failures >= 1:
 				self._entries[ref] = (request, failures)

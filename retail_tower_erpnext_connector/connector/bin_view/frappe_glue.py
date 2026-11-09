@@ -77,7 +77,7 @@ def tracking_enabled() -> bool:
 		return value
 	try:
 		return int(float(value or 0)) == 1
-	except (TypeError, ValueError, OverflowError):
+	except TypeError, ValueError, OverflowError:
 		return str(value).strip().lower() == "true"
 
 
