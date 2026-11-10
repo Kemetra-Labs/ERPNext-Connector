@@ -217,9 +217,11 @@ def _sale(external_id):
 	}
 
 
-def _sale_post(cursor, *, unit="each"):
+def _sale_post(cursor, *, unit="each", tax_amount=None):
 	sale = _sale("POS-17101")
 	sale["lines"][0]["unit"] = unit
+	if tax_amount is not None:
+		sale["lines"][0]["taxAmount"] = tax_amount
 	return c.PostingWorkItem.from_wire(
 		{
 			"workItemRef": _SALE_REF,
@@ -395,3 +397,69 @@ class TestReversalAwaitsOriginal:
 		assert client.acks[0]["ack"]["reason"]["category"] == "validation"
 		assert client.acks[0]["key"] == f"{_REVERSAL_REF}:permanently_rejected"
 		assert fake.payloads == []
+
+
+class _DeadlockFrappe(_Frappe):
+	"""Frappe v16 raises ``frappe.QueryDeadlockError(Exception)`` on a MariaDB deadlock.
+
+	Source: frappe/frappe v16.52.0 ``frappe/exceptions.py`` (``class QueryDeadlockError(Exception)``)
+	and ``frappe/database/database.py`` (``elif self.is_deadlocked(e): raise frappe.QueryDeadlockError``).
+	It is not a ``ValidationError``, so before RT-1312 it fell through to ``permanently_rejected/other``.
+	"""
+
+	def __init__(self):
+		super().__init__()
+		self.QueryDeadlockError = type("QueryDeadlockError", (Exception,), {})
+		self.deadlock = True
+		self._savepoint_lost = False
+
+		# MariaDB rolls the deadlock victim's WHOLE transaction back, so the savepoint is gone and
+		# ``ROLLBACK TO SAVEPOINT`` fails (ER_SP_DOES_NOT_EXIST, 1305) — Frappe's rollback(save_point=)
+		# runs exactly that statement. A full rollback still works.
+		def _rollback(save_point=None):
+			if save_point is not None and self._savepoint_lost:
+				raise RuntimeError("(1305, 'SAVEPOINT rt_submit does not exist')")
+			self.events.append("rollback" if save_point is not None else "full_rollback")
+
+		self.db.rollback = _rollback
+
+	def get_doc(self, payload):
+		invoice = super().get_doc(payload)
+		if self.deadlock:
+
+			def _raise():
+				self._savepoint_lost = True
+				raise self.QueryDeadlockError("Deadlock found when trying to get lock")
+
+			invoice.insert = _raise
+		return invoice
+
+
+class TestDeadlockIsTransient:
+	"""RT-1312 F3: a database deadlock on insert is retryable, never a permanent rejection."""
+
+	def test_deadlock_on_insert_acks_failed_transient_then_posts(self, load_glue):
+		fake = _DeadlockFrappe()
+		glue = load_glue(fake)
+		client = _Client()
+
+		assert _post(glue, _sale_post(30), client)[0] == "failed_transient"
+		fake.deadlock = False
+		assert _post(glue, _sale_post(32), client)[0] == "posted"
+
+		assert [a["ack"]["outcome"] for a in client.acks] == ["failed_transient", "posted"]
+		assert client.acks[0]["key"] == f"{_SALE_REF}:failed_transient:30"
+		assert fake.events.count("submit") == 1
+		# The lost savepoint did not mask the deadlock: the transaction was fully rolled back.
+		assert fake.events.count("full_rollback") == 1
+
+
+class TestTaxedSaleIsAValidationRejection:
+	"""RT-1312 F5 / D3: a forward sale with a non-zero line ``taxAmount`` acks validation, inserts nothing."""
+
+	def test_taxed_sale_acks_permanently_rejected_validation(self, load_glue):
+		fake = _Frappe()
+		outcome, client, _store = _post(load_glue(fake), _sale_post(40, tax_amount="14.00"))
+		assert outcome == "permanently_rejected"
+		assert client.acks[0]["ack"]["reason"]["category"] == "validation"
+		assert fake.payloads == [] and "insert" not in fake.events

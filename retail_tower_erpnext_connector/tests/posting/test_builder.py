@@ -23,7 +23,7 @@ def _work_item(**overrides) -> c.PostingWorkItem:
 		"currencyCode": "EGP",
 		"quantity": "2",
 		"lineAmount": "200.00",
-		"taxAmount": "30.00",
+		"taxAmount": "0.00",
 		"unit": "each",
 		"erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
 	}
@@ -446,9 +446,7 @@ class TestSettlement:
 		from retail_tower_erpnext_connector.connector.posting import tender as t
 
 		with pytest.raises(t.TenderMismatch):
-			_settle(
-				_tendered([{"method": "cash", "amount": "230.00"}], tax_amount="30.00", pos_total="230.00")
-			)
+			_settle(_tendered([{"method": "cash", "amount": "230.00"}], pos_total="230.00"))
 
 	def test_totals_compare_as_exact_decimals(self):
 		doc = _settle(
@@ -558,7 +556,7 @@ class TestRepricingProtection:
 				"currencyCode": "EGP",
 				"quantity": "2",
 				"lineAmount": "200.00",
-				"taxAmount": "30.00",
+				"taxAmount": "0.00",
 				"unit": "each",
 				"erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
 			},
@@ -900,3 +898,32 @@ class TestBatchLine:
 		doc = rb.build_reversing_invoice(void, uom_for=_uom, warehouse_for=_warehouse, customer_for=_customer)
 		(item,) = doc["items"]
 		assert "batch_no" not in item and "use_serial_batch_fields" not in item
+
+
+class TestForwardSaleTaxNotDropped:
+	"""RT-1312 F5 / D3: no tax rows are posted (VAT 0), so a forward sale line with a non-zero
+	``taxAmount`` is rejected as validation, exactly as returns are (``ReturnTaxNotPosted``) —
+	never posted at the net line amount with the tax silently dropped."""
+
+	def _build(self, tax_amount):
+		return b.build_sales_invoice(
+			_tendered(None, tax_amount=tax_amount),
+			uom_for=_uom,
+			warehouse_for=_warehouse,
+			customer_for=_customer,
+		)
+
+	def test_non_zero_tax_on_a_tender_unknown_sale_is_rejected(self):
+		with pytest.raises(b.SaleTaxNotPosted, match=r"30\.00"):
+			self._build("30.00")
+
+	@pytest.mark.parametrize("tax_amount", [None, "0", "0.00"])
+	def test_absent_or_zero_tax_still_posts(self, tax_amount):
+		doc = self._build(tax_amount)
+		assert [i["amount"] for i in doc["items"]] == ["200.00"]
+
+	@pytest.mark.parametrize("tax_amount", ["abc", "", "1e"])
+	def test_unparseable_tax_is_a_validation_rejection_not_a_crash(self, tax_amount):
+		# A malformed taxAmount must map to validation, never escape as InvalidOperation ("other").
+		with pytest.raises(b.SaleTaxNotPosted):
+			self._build(tax_amount)

@@ -52,7 +52,7 @@ Payment Entry here: a paid sale carries its own payments; a tender-unknown one s
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from decimal import Decimal, localcontext
+from decimal import Decimal, InvalidOperation, localcontext
 
 from .compatibility_profile import ISO_MINOR_UNITS
 from .contracts import PostingWorkItem, SaleLine
@@ -70,6 +70,34 @@ class UnmappedUnit(Exception):
 	def __init__(self, unit: str) -> None:
 		super().__init__(f"unit {unit!r} has no ERPNext UOM mapping (fail-closed → validation)")
 		self.unit = unit
+
+
+class SaleTaxNotPosted(Exception):
+	"""A sale line carries a non-zero ``taxAmount`` while no tax rows are posted (VAT 0) — validation.
+
+	RT-1312 F5 / owner decision D3: the pilot posts no tax, so the line is rejected rather than posted
+	at its net amount with the tax silently dropped. Mirrors ``return_builder.ReturnTaxNotPosted``.
+	"""
+
+	def __init__(self, line: SaleLine) -> None:
+		super().__init__(
+			f"line {line.line_ref or line.line_name!r}: taxAmount {line.tax_amount} cannot be posted "
+			"(no tax rows while VAT is 0) — rejected as validation rather than posted with the tax "
+			"silently dropped"
+		)
+
+
+def _assert_no_tax(lines: Sequence[SaleLine]) -> None:
+	"""RT-1312 F5: refuse any line whose ``taxAmount`` is present and non-zero (or unparseable)."""
+	for line in lines:
+		if line.tax_amount is None:
+			continue
+		try:
+			taxed = Decimal(line.tax_amount) != 0
+		except InvalidOperation:
+			taxed = True  # a malformed amount is a validation rejection, never an unclassified crash
+		if taxed:
+			raise SaleTaxNotPosted(line)
 
 
 class LineDiscountNotPostable(Exception):
@@ -201,6 +229,7 @@ def build_sales_invoice(
 	representation check expects. Without one the document carries no ``company`` key.
 	"""
 	sale = work_item.sale
+	_assert_no_tax(sale.lines)  # RT-1312 F5: never drop a tax amount silently
 	warehouse = warehouse_for(sale.store_id)
 	# F-009: the 012 work-item carries no customer identity — only Sale.store_id. The operator
 	# maps each store to its ERPNext Customer (config, injected) exactly as for the warehouse.

@@ -43,7 +43,7 @@ from .batch_policy import (
 	sale_batch_intents,
 	verify_batch_postings,
 )
-from .builder import LineDiscountNotPostable, UnmappedUnit, build_sales_invoice
+from .builder import LineDiscountNotPostable, SaleTaxNotPosted, UnmappedUnit, build_sales_invoice
 from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
 from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
@@ -139,7 +139,9 @@ def _transient_exceptions() -> tuple[type[BaseException], ...]:
 	maps to ``permanently_rejected`` — never silently re-offered forever. Resolved lazily so
 	the set tracks the installed frappe; unknown names degrade to the base where absent.
 	"""
-	names = ("TimedOutError", "RetryBackoffError", "QueryTimeoutError")
+	# RT-1312 F3: Frappe v16 raises QueryDeadlockError(Exception) on a MariaDB deadlock
+	# (frappe/database/database.py); a deadlock is retryable, never a permanent rejection.
+	names = ("TimedOutError", "RetryBackoffError", "QueryTimeoutError", "QueryDeadlockError")
 	found = tuple(getattr(frappe, n) for n in names if hasattr(frappe, n))
 	# TimeoutError is always a sane transient signal even if frappe names none of the above.
 	return (*found, TimeoutError)
@@ -525,6 +527,7 @@ _SALE_BUILD_VALIDATION_ERRORS = (
 	UnmappedTender,
 	TenderMismatch,
 	LineDiscountNotPostable,  # RT-857 / OD-28-13: fail closed, never a total off by a minor unit
+	SaleTaxNotPosted,  # RT-1312 F5 / D3: no tax rows, so a taxed line is never posted net
 )
 
 
@@ -536,6 +539,7 @@ _REVERSAL_BUILD_VALIDATION_ERRORS = (
 	UnmappedTender,
 	TenderMismatch,
 	LineDiscountNotPostable,  # RT-857: a void / refund composes on the sale builder
+	SaleTaxNotPosted,  # RT-1312 F5: ... and so inherits its tax guard
 	MissingRefundTenders,
 	ReturnPricingMismatch,
 	ReturnTaxNotPosted,
@@ -1148,7 +1152,15 @@ def _submit_atomically(
 		if batch_intents:
 			_verify_batch_postings(sinv.name, batch_intents, inward=bool(doc_payload.get("is_return")))
 	except BaseException:
-		frappe.db.rollback(save_point=_SUBMIT_SAVEPOINT)
+		try:
+			frappe.db.rollback(save_point=_SUBMIT_SAVEPOINT)
+		except Exception:
+			# RT-1312 F3: MariaDB rolls a deadlock victim's WHOLE transaction back, so the savepoint
+			# no longer exists and ROLLBACK TO SAVEPOINT fails. Finish with a full rollback (nothing
+			# un-acked survives a deadlock anyway; acked work was committed per item) and re-raise the
+			# ORIGINAL error, so a deadlock still reaches the transient mapping instead of being
+			# masked as an unclassified permanent rejection.
+			frappe.db.rollback()
 		raise
 	return sinv
 

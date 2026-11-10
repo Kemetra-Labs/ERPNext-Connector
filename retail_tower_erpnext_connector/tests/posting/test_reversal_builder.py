@@ -46,7 +46,7 @@ def _reversal_work_item(
 		"currencyCode": "EGP",
 		"quantity": "2",
 		"lineAmount": "200.00",
-		"taxAmount": "30.00",
+		"taxAmount": "0.00",
 		"unit": "each",
 		"erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
 	}
@@ -202,7 +202,7 @@ class TestNegativeQty:
 				"currencyCode": "EGP",
 				"quantity": "2",
 				"lineAmount": "200.00",
-				"taxAmount": "30.00",
+				"taxAmount": "0.00",
 				"unit": "each",
 				"erpnextItemRef": {"doctype": "Item", "name": "ITEM-A"},
 			},
@@ -615,3 +615,20 @@ class TestDiscountedSaleReversal:
 		assert (item["qty"], item["amount"]) == ("-2", "-180.00")
 		assert (item["price_list_rate"], item["discount_amount"]) == ("100.00", "10.00")
 		assert item["rate"] == "90.00"
+
+
+class TestReversalTaxNotDropped:
+	"""RT-1312 F5: a void or refund composes on the sale builder and inherits its tax guard."""
+
+	def test_taxed_reversal_line_is_rejected(self):
+		from retail_tower_erpnext_connector.connector.posting import builder as b
+
+		wi = _reversal_work_item()
+		taxed = dataclasses.replace(
+			wi,
+			sale=dataclasses.replace(
+				wi.sale, lines=[dataclasses.replace(wi.sale.lines[0], tax_amount="30.00")]
+			),
+		)
+		with pytest.raises(b.SaleTaxNotPosted):
+			_build(taxed)
