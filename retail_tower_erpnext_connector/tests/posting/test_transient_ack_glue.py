@@ -463,3 +463,156 @@ class TestTaxedSaleIsAValidationRejection:
 		assert outcome == "permanently_rejected"
 		assert client.acks[0]["ack"]["reason"]["category"] == "validation"
 		assert fake.payloads == [] and "insert" not in fake.events
+
+
+class _ReadFailFrappe(_Frappe):
+	"""RT-1312 Phase 2 item 6 (RT-1125 R-04): a transient database error in a READ stage.
+
+	``fail`` names the one read that raises a transient error; every other read answers normally.
+	Frappe v16.52.0 raises ``QueryTimeoutError`` for a lock-wait timeout (MariaDB 1205, ``is_timedout``
+	in ``frappe/database/database.py`` ``sql()``) and ``QueryDeadlockError`` for a deadlock.
+	"""
+
+	def __init__(self, fail, *, exc=None, originals=None):
+		super().__init__(originals=originals)
+		self.QueryTimeoutError = type("QueryTimeoutError", (Exception,), {})
+		self.QueryDeadlockError = type("QueryDeadlockError", (Exception,), {})
+		self.fail = fail
+		self.exc = exc or self.QueryTimeoutError("(1205, 'Lock wait timeout exceeded')")
+		self.duplicate = False
+		self.utils = types.SimpleNamespace(get_system_timezone=self._timezone)
+
+	def _raise_if(self, read):
+		if self.fail == read:
+			raise self.exc
+
+	def _timezone(self):
+		self._raise_if("timezone")
+		return "UTC"
+
+	def _get_value(self, doctype, filters, fields, **kwargs):
+		if isinstance(filters, dict):
+			if filters.get("rt_external_id") == _ORIGINAL_EXTERNAL_ID:
+				self._raise_if("resolve_original")
+			else:
+				self._raise_if("find_posted")
+		elif fields == ["posting_date", "posting_time"]:
+			self._raise_if("original_posting")
+		elif isinstance(fields, list) and "update_stock" in fields:
+			self._raise_if("original_invoice")
+		return super()._get_value(doctype, filters, fields, **kwargs)
+
+	def get_all(self, doctype, **kwargs):
+		if doctype == "Item":
+			self._raise_if("item_tracking")
+		return super().get_all(doctype, **kwargs)
+
+	def get_doc(self, payload):
+		invoice = super().get_doc(payload)
+		if self.duplicate:
+
+			def _duplicate():
+				raise self.exceptions.UniqueValidationError("Duplicate entry for unique_rt_si_provenance")
+
+			invoice.insert = _duplicate
+		return invoice
+
+
+class _ReadFailStore(_Store):
+	def __init__(self, exc):
+		super().__init__()
+		self.exc = exc
+
+	def get_document_ref(self, key):
+		raise self.exc
+
+
+def _assert_transient_only(client, fake, ref, cursor):
+	assert [a["ack"]["outcome"] for a in client.acks] == ["failed_transient"]
+	assert client.acks[0]["key"] == f"{ref}:failed_transient:{cursor}"
+	assert "insert" not in fake.events and "submit" not in fake.events
+	(signal,) = [r for r in fake._logger.records if r["event"] == "posting.transient"]
+	assert signal["work_item_ref"] == ref
+
+
+class TestReadStageTransientIsRetryable:
+	"""RT-1312 Phase 2 item 6: a transient error in a read stage acks ``failed_transient``.
+
+	Before it, the read stages mapped any error to ``permanently_rejected / other`` (a sale stranded
+	behind a repair), and the unwrapped reads raised out of ``post_work_item`` and aborted the page.
+	"""
+
+	@pytest.mark.parametrize(
+		("fail", "make", "ref"),
+		[
+			("timezone", lambda: _sale_post(40), _SALE_REF),  # _build_or_reject via _posting_stamp
+			("item_tracking", lambda: _sale_post(40), _SALE_REF),  # _guard_tracked_items
+			("resolve_original", lambda: _reversal("void", 40), _REVERSAL_REF),  # _resolve_original_invoice
+			("original_posting", lambda: _reversal("void", 40), _REVERSAL_REF),  # _read_original_posting
+			("original_invoice", lambda: _reversal("void", 40), _REVERSAL_REF),  # _read_original_invoice
+			("original_invoice", lambda: _reversal("return", 40), _REVERSAL_REF),
+		],
+	)
+	def test_read_stage_lock_wait_acks_failed_transient(self, load_glue, fail, make, ref):
+		fake = _ReadFailFrappe(fail, originals={_ORIGINAL_EXTERNAL_ID: _ORIGINAL})
+		outcome, client, _store = _post(load_glue(fake), make())
+		assert outcome == "failed_transient"
+		_assert_transient_only(client, fake, ref, 40)
+
+	def test_read_stage_deadlock_acks_failed_transient(self, load_glue):
+		fake = _ReadFailFrappe("item_tracking")
+		fake.exc = fake.QueryDeadlockError("(1213, 'Deadlock found when trying to get lock')")
+		outcome, client, _store = _post(load_glue(fake), _sale_post(41))
+		assert outcome == "failed_transient"
+		_assert_transient_only(client, fake, _SALE_REF, 41)
+
+	@pytest.mark.parametrize(
+		("make", "ref"), [(lambda: _sale_post(42), _SALE_REF), (lambda: _reversal("void", 42), _REVERSAL_REF)]
+	)
+	def test_replay_guard_read_acks_failed_transient(self, load_glue, make, ref):
+		fake = _ReadFailFrappe(None, originals={_ORIGINAL_EXTERNAL_ID: _ORIGINAL})
+		glue = load_glue(fake)
+		store = _ReadFailStore(fake.QueryTimeoutError("(1205, 'Lock wait timeout exceeded')"))
+		outcome, client, _store = _post(glue, make(), store=store)
+		assert outcome == "failed_transient"
+		_assert_transient_only(client, fake, ref, 42)
+		assert fake.payloads == []  # nothing built before the replay guard answers
+
+	def test_duplicate_recovery_lookup_acks_failed_transient(self, load_glue):
+		# _find_posted_invoice inside _recover_duplicate_provenance (the G5 crash-window recovery).
+		fake = _ReadFailFrappe("find_posted")
+		fake.duplicate = True
+		outcome, client, store = _post(load_glue(fake), _sale_post(43))
+		assert outcome == "failed_transient"
+		assert [a["ack"]["outcome"] for a in client.acks] == ["failed_transient"]
+		assert client.acks[0]["key"] == f"{_SALE_REF}:failed_transient:43"
+		assert store.writes == [] and "submit" not in fake.events
+
+	def test_unsupported_reversal_lookup_acks_failed_transient(self, load_glue):
+		# _find_posted_invoice inside _recover_or_reject_unsupported (RT-71 amount-only refund).
+		fake = _ReadFailFrappe("find_posted", originals={_ORIGINAL_EXTERNAL_ID: _ORIGINAL})
+		outcome, client, store = _post(load_glue(fake), _reversal("refund", 44))
+		assert outcome == "failed_transient"
+		_assert_transient_only(client, fake, _REVERSAL_REF, 44)
+		assert store.writes == []
+
+	def test_non_transient_read_error_is_still_other(self, load_glue):
+		# Only the transient set changes; an unclassified read error stays a permanent ``other``.
+		fake = _ReadFailFrappe(
+			"original_invoice", exc=RuntimeError("boom"), originals={_ORIGINAL_EXTERNAL_ID: _ORIGINAL}
+		)
+		outcome, client, _store = _post(load_glue(fake), _reversal("void", 45))
+		assert outcome == "permanently_rejected"
+		assert client.acks[0]["ack"]["reason"]["category"] == "other"
+
+	def test_read_stage_transient_then_posts_on_re_offer(self, load_glue):
+		fake = _ReadFailFrappe("original_posting", originals={_ORIGINAL_EXTERNAL_ID: _ORIGINAL})
+		glue = load_glue(fake)
+		client = _Client()
+		assert _post(glue, _reversal("void", 46), client)[0] == "failed_transient"
+		fake.fail = None
+		assert _post(glue, _reversal("void", 48), client)[0] == "posted"
+		assert [a["key"] for a in client.acks] == [
+			f"{_REVERSAL_REF}:failed_transient:46",
+			f"{_REVERSAL_REF}:posted",
+		]

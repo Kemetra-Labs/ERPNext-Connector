@@ -92,7 +92,7 @@ class TestGlueOrdering:
 
 	def test_policy_runs_after_the_replay_guard_and_before_any_build(self):
 		body = self._reversal_source()
-		replay = body.index("store.get_document_ref(key)")
+		replay = body.index("_replay_guard(work_item, key")  # RT-1312 Phase 2 item 6: the shared guard
 		policy = body.index("assert_reversal_supported(work_item)")
 		build = body.index("_build_reversal_or_reject(")  # RT-16: the builder dispatch (RT-468: via helper)
 		assert replay < policy < build

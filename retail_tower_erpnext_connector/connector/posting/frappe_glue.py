@@ -567,9 +567,9 @@ def post_work_item(
 	key = key_for(work_item)
 
 	# T041 — idempotent replay: an already-posted key echoes the existing documentRef.
-	existing = store.get_document_ref(key)
-	if existing is not None:
-		return _ack_existing(client, work_item, existing, correlation_id, "posting.replay")
+	replayed = _replay_guard(work_item, key, client=client, store=store, correlation_id=correlation_id)
+	if replayed is not None:
+		return replayed
 
 	# F-001 — a `reversal` work-item posts a REVERSING document (a return Sales Invoice,
 	# `is_return=1`), NOT a fresh positive Sales Invoice (012: kind=reversal). Arc A S1 routes it
@@ -597,8 +597,8 @@ def post_work_item(
 	# Build the Sales-Invoice payload from the pure-Python core (no frappe in the build).
 	# build_sales_invoice self-validates money (FR-009), raises on an unmapped unit (FR-008) or a
 	# non-conformant amount, and warehouse_for raises UnresolvedWarehouse on a store with no
-	# pre-resolved warehouse (rider R5 — should have DLQ'd in DP2). All are non-retryable
-	# (:func:`_build_or_reject`).
+	# pre-resolved warehouse (rider R5 — should have DLQ'd in DP2). All are non-retryable;
+	# only a transient read of the site clock acks failed_transient (:func:`_build_or_reject`).
 	built = _build_sale_or_reject(
 		work_item,
 		client=client,
@@ -626,6 +626,28 @@ def post_work_item(
 		store=store,
 		correlation_id=correlation_id,
 	)
+
+
+def _replay_guard(
+	work_item: PostingWorkItem,
+	key,
+	*,
+	client: PostingFeedClient,
+	store: IdempotencyStore,
+	correlation_id: str,
+) -> str | None:
+	"""T041 replay guard: the outcome for an already-posted key, or ``None`` to post it now.
+
+	RT-1312 Phase 2 item 6 (RT-1125 R-04): a transient error reading the Posting Log acks
+	``failed_transient`` instead of raising out of the page. Only the read is guarded, never an ack.
+	"""
+	try:
+		existing = store.get_document_ref(key)
+	except _transient_exceptions() as exc:
+		return _ack_transient(client, work_item, correlation_id, exc)
+	if existing is None:
+		return None
+	return _ack_existing(client, work_item, existing, correlation_id, "posting.replay")
 
 
 def _build_sale_or_reject(
@@ -685,13 +707,16 @@ def _build_or_reject(
 ) -> tuple[PostingStamp, dict] | str:
 	"""Run a pure ``build`` → ``(stamp, payload)``; a build error returns its rejection outcome instead.
 
-	The shared fail-closed mapping of both legs: an unmapped unit → ``unmapped_unit``; a
-	``validation_errors`` member → ``validation``; anything else → ``other``. The final
-	``except Exception`` guarantees no build error escapes the terminal-outcome invariant
+	The shared fail-closed mapping of both legs: a transient database error (the site clock read by
+	:func:`_posting_stamp`) → ``failed_transient`` (RT-1312 Phase 2 item 6); an unmapped unit →
+	``unmapped_unit``; a ``validation_errors`` member → ``validation``; anything else → ``other``. The
+	final ``except Exception`` guarantees no build error escapes the terminal-outcome invariant
 	(Codex-P2 / SC-001 / Principle VI).
 	"""
 	try:
 		return build()
+	except _transient_exceptions() as exc:
+		return _ack_transient(client, work_item, correlation_id, exc)
 	except UnmappedUnit as exc:
 		return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, _exception_message(exc))
 	except validation_errors as exc:
@@ -842,7 +867,11 @@ def _record_and_ack(
 def _ack_transient(
 	client: PostingFeedClient, work_item: PostingWorkItem, correlation_id: str, exc: BaseException
 ) -> str:
-	"""T051 — a transient submit failure acks ``failed_transient`` (per-offer key, RT-171)."""
+	"""T051 — a transient submit or read failure acks ``failed_transient`` (per-offer key, RT-171).
+
+	RT-1312 Phase 2 item 6: every read stage maps a :func:`_transient_exceptions` error here first,
+	so DP2 re-offers the item instead of it being rejected or aborting the page.
+	"""
 	client.ack_outcome(
 		work_item.work_item_ref,
 		OutcomeAckRequest.failed_transient(resolution_version=work_item.resolution_version),
@@ -903,9 +932,9 @@ def _post_reversal(
 	key = key_for(work_item)
 
 	# Replay guard: an already-posted reversal key echoes the existing reversing-doc ref (T041).
-	existing = store.get_document_ref(key)
-	if existing is not None:
-		return _ack_existing(client, work_item, existing, correlation_id, "posting.replay")
+	replayed = _replay_guard(work_item, key, client=client, store=store, correlation_id=correlation_id)
+	if replayed is not None:
+		return replayed
 
 	# RT-71 (RT-14 F1 / D8) — an amount-only refund would credit the WHOLE sale (the feed carries
 	# every sale line and no refund amount). Reject it before building anything. AFTER the replay
@@ -918,8 +947,8 @@ def _post_reversal(
 		)
 
 	# Build the reversing payload from the pure core (no frappe in the build). Same fail-closed
-	# mapping as the forward path: unmapped unit → unmapped_unit; money/warehouse/store → validation;
-	# anything else → other. A final `except Exception` guarantees the terminal-outcome invariant.
+	# mapping as the forward path: a transient DB error → failed_transient (RT-1312 Phase 2 item 6);
+	# unmapped unit → unmapped_unit; money/warehouse/store → validation; anything else → other. A final `except Exception` guarantees the terminal-outcome invariant.
 	built = _build_reversal_or_reject(
 		work_item,
 		client=client,
@@ -944,7 +973,10 @@ def _post_reversal(
 			FailureKind.VALIDATION,
 			"reversal work-item carries no reversalOf (return_against unresolvable)",
 		)
-	original_name = _resolve_original_invoice(work_item)
+	try:
+		original_name = _resolve_original_invoice(work_item)
+	except _transient_exceptions() as exc:  # RT-1312 Phase 2 item 6: never abort the page
+		return _ack_transient(client, work_item, correlation_id, exc)
 	if original_name is None:
 		# RT-172 — the reversed sale has no submitted Sales Invoice YET (e.g. its own posting is
 		# still pending or retrying). Posting against it would be a silent inconsistency (Principle
@@ -961,6 +993,8 @@ def _post_reversal(
 		original_date, original_time = _read_original_posting(original_name)
 		stamp = raise_to_original(stamp, original_date, original_time)
 		doc_payload = apply_stamp(doc_payload, stamp)
+	except _transient_exceptions() as exc:  # RT-1312 Phase 2 item 6: a retryable read, re-offered
+		return _ack_transient(client, work_item, correlation_id, exc)
 	except Exception as exc:  # a read failure must not escape the terminal-outcome invariant.
 		return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
 	_log_stamp_adjustments(stamp, work_item, correlation_id)
@@ -1030,6 +1064,8 @@ def _link_original_or_reject(
 	if kind in ("void", "return"):
 		try:
 			doc_payload = _link_to_original(kind, doc_payload, _read_original_invoice(original_name))
+		except _transient_exceptions() as exc:  # RT-1312 Phase 2 item 6: a retryable read, re-offered
+			return _ack_transient(client, work_item, correlation_id, exc)
 		except ReturnLineMismatch as exc:
 			return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
 		except Exception as exc:  # a read failure must not escape the terminal-outcome invariant.
@@ -1053,7 +1089,10 @@ def _recover_duplicate_provenance(
 	Posting Log row, and acks it. No matching invoice is a non-retryable ``other`` rejection —
 	never a fabricated success.
 	"""
-	existing = _find_posted_invoice(work_item)
+	try:
+		existing = _find_posted_invoice(work_item)
+	except _transient_exceptions() as read_exc:  # RT-1312 Phase 2 item 6: never abort the page
+		return _ack_transient(client, work_item, correlation_id, read_exc)
 	if existing is None:
 		return _reject(client, work_item, correlation_id, FailureKind.OTHER, _exception_message(exc))
 	document_ref = existing
@@ -1100,7 +1139,10 @@ def _recover_or_reject_unsupported(
 
 	RT-434 reuses it for a sale whose feed warehouseRef fails :func:`_assert_frozen_warehouse`.
 	"""
-	existing = _find_posted_invoice(work_item)
+	try:
+		existing = _find_posted_invoice(work_item)
+	except _transient_exceptions() as read_exc:  # RT-1312 Phase 2 item 6: never abort the page
+		return _ack_transient(client, work_item, correlation_id, read_exc)
 	if existing is None:
 		return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
 	document_ref = existing
@@ -1191,8 +1233,9 @@ def _guard_tracked_items(
 
 	⏳ BENCH-VALIDATION. The decisions are the pure ``batch_policy`` functions; this only reads the
 	Item flags, the Batch master and, for a credit note, the original rows' bundles. A serial Item, a
-	tracking disagreement or an unusable Batch is ``validation``; a read failure is non-retryable
-	``other`` (never escapes the page). An untracked document reads nothing beyond the Item flags.
+	tracking disagreement or an unusable Batch is ``validation``; a transient read error is
+	``failed_transient`` (RT-1312 Phase 2 item 6); any other read failure is non-retryable ``other``
+	(never escapes the page). An untracked document reads nothing beyond the Item flags.
 	"""
 	try:
 		tracking = _read_item_tracking(doc_payload)
@@ -1205,6 +1248,8 @@ def _guard_tracked_items(
 		if intents:
 			assert_batches_belong(doc_payload, _read_batch_masters(intents.values()))
 		return intents
+	except _transient_exceptions() as exc:
+		return _ack_transient(client, work_item, correlation_id, exc)
 	except (UnsupportedTrackedItem, TrackedLineRejected, ReturnLineMismatch) as exc:
 		return _reject(client, work_item, correlation_id, FailureKind.VALIDATION, _exception_message(exc))
 	except Exception as exc:
