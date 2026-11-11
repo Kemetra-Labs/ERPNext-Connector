@@ -1,5 +1,6 @@
 # Backend-Core OpenAPI contracts the ERPNext-Connector consumes (RT-704): the posting feed
-# (connector/posting), the bin-view feed (connector/bin_view) and the heartbeat (connector/health).
+# (connector/posting), the bin-view feed (connector/bin_view), the heartbeat (connector/health) and
+# the ERP-origin stock import feed (connector/stock_import, RT-1287).
 # Checked by tools/contracts-check (`pins`): a Backend-Core change that breaks a pinned file fails.
 # Repinned by hand, from this repository only: set `commit:` to the new commit and each blob to
 # `git rev-parse <commit>:services/backend-core/packages/contracts/openapi/<path>`.
@@ -9,3 +10,6 @@ source: services/backend-core/packages/contracts/openapi
 file: erpnext-connector/connector-health.yaml b0cc7095899e3d6c3b9ec7aa60c595a53861470a
 file: erpnext-connector/posting-feed.yaml 589832818845812c1deb30370d5c6b0ab07ca0bf
 file: erpnext-connector/stock-view.yaml d955a3ea95e1366f234c672837ca77f5a267bac1
+# RT-1287: stock-import.yaml is pinned at its RT-1286 merge 53d894e46027c7b8f8d57ea54f4f7b5ef01a1dc5 (not
+# at `commit:` above, which predates the file); the other files keep their pins.
+file: erpnext-connector/stock-import.yaml bed0a1834a0c6b0e1260c7b224c89cf463524558
