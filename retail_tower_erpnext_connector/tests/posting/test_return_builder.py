@@ -16,7 +16,7 @@ import pytest
 from retail_tower_erpnext_connector.connector.posting import contracts as c
 from retail_tower_erpnext_connector.connector.posting import return_builder as rtb
 from retail_tower_erpnext_connector.connector.posting import tender as t
-from retail_tower_erpnext_connector.connector.posting.builder import UnmappedUnit
+from retail_tower_erpnext_connector.connector.posting.builder import LineDiscountNotPostable, UnmappedUnit
 
 _A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 _B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -208,12 +208,16 @@ class TestRefundPayout:
 
 
 class TestPricing:
-	def test_line_amount_must_equal_unit_price_times_returned_quantity(self):
-		# ERPNext recomputes amount = rate x qty; a return priced otherwise would post a different
-		# amount than Backend-Core recorded, so it fails closed instead.
+	def test_a_return_priced_below_the_list_price_posts_as_a_visible_discount(self):
+		# RT-1340 F3: lineAmount below unitPrice x quantity is a discounted line, posted like the sale does.
 		lines = [{"lineRef": _A, "quantity": "1", "lineAmount": "99.99", "taxAmount": None}]
-		with pytest.raises(rtb.ReturnPricingMismatch, match=r"99.99"):
-			_build(_return(return_lines=lines, refund_tenders=[{"method": "cash", "amount": "99.99"}]))
+		doc = _build(_return(return_lines=lines, refund_tenders=[{"method": "cash", "amount": "99.99"}]))
+		assert _row(doc) == ("-1", "99.99", "100.00", "0.01", "-99.99")
+
+	def test_a_return_priced_above_the_list_price_is_refused(self):
+		lines = [{"lineRef": _A, "quantity": "1", "lineAmount": "100.01", "taxAmount": None}]
+		with pytest.raises(LineDiscountNotPostable, match="discount_negative"):
+			_build(_return(return_lines=lines, refund_tenders=[{"method": "cash", "amount": "100.01"}]))
 
 
 class TestKindGuard:
@@ -247,15 +251,76 @@ class TestExplicitCompany:
 		assert _build(_return(), company="RT Co")["company"] == "RT Co"
 
 
-class TestDiscountedLineReturnIsOutOfScope:
-	"""RT-857 / OD-28-13: a return of a discounted line stays refused (its credit-note representation
-	is a separate follow-up); the forward discount does not change the return path."""
+def _row(doc, i=0):
+	"""(qty, rate, price_list_rate, discount_amount or '-', amount) of one credit-note row."""
+	item = doc["items"][i]
+	return (
+		item["qty"],
+		item["rate"],
+		item["price_list_rate"],
+		item.get("discount_amount", "-"),
+		item["amount"],
+	)
 
-	def test_a_return_of_a_discounted_sale_line_is_still_refused(self):
-		lines = [{"lineRef": _A, "quantity": "1", "lineAmount": "90.00", "taxAmount": None}]
-		work_item = _return(return_lines=lines, refund_tenders=[{"method": "cash", "amount": "90.00"}])
-		# 3 x 100.00 with 30.00 off: the returned unit is priced at the net 90.00, not 100.00.
-		discounted = dataclasses.replace(work_item.sale.lines[0], line_amount="270.00")
-		sale = dataclasses.replace(work_item.sale, lines=(discounted, *work_item.sale.lines[1:]))
-		with pytest.raises(rtb.ReturnPricingMismatch, match=r"90.00"):
-			_build(dataclasses.replace(work_item, sale=sale))
+
+def _discounted_return(unit_price, sold_qty, sold_net, ret_qty, ret_net):
+	"""A return of ``ret_qty`` units (net ``ret_net``) of sale line A, sold as ``sold_qty`` at ``unit_price``."""
+	lines = [{"lineRef": _A, "quantity": ret_qty, "lineAmount": ret_net, "taxAmount": None}]
+	work_item = _return(return_lines=lines, refund_tenders=[{"method": "cash", "amount": ret_net}])
+	line_a = dataclasses.replace(
+		work_item.sale.lines[0], unit_price=unit_price, quantity=sold_qty, line_amount=sold_net
+	)
+	sale = dataclasses.replace(work_item.sale, lines=(line_a, *work_item.sale.lines[1:]))
+	return dataclasses.replace(work_item, sale=sale)
+
+
+class TestDiscountedLineReturn:
+	"""RT-1340 F3 / OD-11: a returned reward unit or RT-857 discounted line posts the sale's visible-discount shape."""
+
+	def test_e3_return_the_discounted_unit_at_its_net(self):
+		# Golden E3: the 40.00 unit sold at 24.00 net is refunded 24.00.
+		doc = _build(_discounted_return("40.00", "1", "24.00", "1", "24.00"))
+		assert _row(doc) == ("-1", "24.00", "40.00", "16.00", "-24.00")
+		assert doc["payments"] == [{"mode_of_payment": "Cash", "amount": "-24.00"}]
+		assert doc["items"][0]["rt_line_ref"] == _A
+
+	def test_a1c_return_the_reward_unit_at_its_net(self):
+		# A1c: the 200.00 reward unit sold with 80.00 off is returned at its net 120.00.
+		doc = _build(_discounted_return("200.00", "1", "120.00", "1", "120.00"))
+		assert _row(doc) == ("-1", "120.00", "200.00", "80.00", "-120.00")
+		assert doc["ignore_pricing_rule"] == 1
+
+	def test_a_partial_return_of_a_discounted_multi_unit_line(self):
+		# 3 x 100.00 sold for 270.00 (90.00 a unit); two units back are 180.00.
+		doc = _build(_discounted_return("100.00", "3", "270.00", "2", "180.00"))
+		assert len(doc["items"]) == 1
+		assert _row(doc) == ("-2", "90.00", "100.00", "10.00", "-180.00")
+
+	def test_a_net_with_no_exact_unit_rate_is_split_to_quantity_one_rows(self):
+		# 3 x 100.00 returned for 289.99 (the bench A2 shape): 96.66 + 96.66 + 96.67, never off a minor unit.
+		doc = _build(_discounted_return("100.00", "3", "289.99", "3", "289.99"))
+		assert [_row(doc, i) for i in range(3)] == [
+			("-1", "96.66", "100.00", "3.34", "-96.66"),
+			("-1", "96.66", "100.00", "3.34", "-96.66"),
+			("-1", "96.67", "100.00", "3.33", "-96.67"),
+		]
+		assert {item["rt_line_ref"] for item in doc["items"]} == {_A}
+		assert sum(Decimal(i["amount"]) for i in doc["items"]) == Decimal("-289.99")
+		assert doc["payments"] == [{"mode_of_payment": "Cash", "amount": "-289.99"}]
+
+	def test_a_one_minor_unit_net_over_two_units_splits_to_zero_and_one_minor_unit(self):
+		doc = _build(_discounted_return("1.00", "2", "1.00", "2", "0.01"))
+		assert [i["rate"] for i in doc["items"]] == ["0.00", "0.01"]
+
+	def test_a_fractional_quantity_with_no_exact_rate_is_refused(self):
+		with pytest.raises(LineDiscountNotPostable, match="discount_not_divisible"):
+			_build(_discounted_return("100.00", "1", "100.00", "0.3", "10.00"))
+
+	def test_a_quantity_above_the_split_bound_with_no_exact_rate_is_refused(self):
+		with pytest.raises(LineDiscountNotPostable, match="discount_not_divisible"):
+			_build(_discounted_return("1.00", "101", "101.00", "101", "100.50"))
+
+	def test_an_undiscounted_return_is_never_split(self):
+		doc = _build(_discounted_return("100.00", "3", "300.00", "3", "300.00"))
+		assert len(doc["items"]) == 1
+		assert "discount_amount" not in doc["items"][0]

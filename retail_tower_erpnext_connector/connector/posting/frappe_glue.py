@@ -59,7 +59,6 @@ from .representation_check import (
 from .resolution_check import InvoiceLine, InvoiceSnapshot, check_existing, check_replayed_representation
 from .return_builder import (
 	MissingRefundTenders,
-	ReturnPricingMismatch,
 	ReturnResolvers,
 	ReturnTaxNotPosted,
 	build_return_invoice,
@@ -553,7 +552,6 @@ _REVERSAL_BUILD_VALIDATION_ERRORS = (
 	LineDiscountNotPostable,  # RT-857: a void / refund composes on the sale builder
 	SaleTaxNotPosted,  # RT-1312 F5: ... and so inherits its tax guard
 	MissingRefundTenders,
-	ReturnPricingMismatch,
 	ReturnTaxNotPosted,
 )
 

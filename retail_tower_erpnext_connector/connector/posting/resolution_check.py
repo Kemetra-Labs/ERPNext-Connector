@@ -118,9 +118,9 @@ def _item_mismatch(work_item: PostingWorkItem, invoice: InvoiceSnapshot) -> str 
 	frozen = {line.line_ref: line.erpnext_item_ref.name for line in work_item.sale.lines if line.line_ref}
 	required = _required_lines(work_item)
 	stamped = [line for line in invoice.items if line.line_ref is not None]
-	return _stamped_mismatch(frozen, required, stamped) or _unstamped_mismatch(
-		invoice, _unstamped_expected(work_item, frozen, required, stamped)
-	)
+	return _stamped_mismatch(
+		frozen, required, stamped, _expected_return_rows(work_item)
+	) or _unstamped_mismatch(invoice, _unstamped_expected(work_item, frozen, required, stamped))
 
 
 def _unstamped_mismatch(invoice: InvoiceSnapshot, expected: Counter) -> str | None:
@@ -151,17 +151,44 @@ def _is_return(work_item: PostingWorkItem) -> bool:
 	return reversal is not None and reversal.reversal_kind == "return"
 
 
-def _stamped_mismatch(frozen: dict[str, str], required: list[str], stamped: list[InvoiceLine]) -> str | None:
-	"""Every stamped row is a distinct REQUIRED line carrying its frozen item."""
-	duplicate = _first_duplicate(stamped)
+def _expected_return_rows(work_item: PostingWorkItem) -> Counter | None:
+	"""Rows per returned ref for a return (a split line has several), else ``None`` (one row per ref).
+
+	A work item the builder cannot build has no split to excuse: it is held to one row per ref.
+	"""
+	if not _is_return(work_item):
+		return None
+	from .return_builder import (
+		expected_row_counts,
+	)  # local import: return_builder imports builder, not this module
+
+	try:
+		return expected_row_counts(work_item)
+	except Exception:
+		return None
+
+
+def _stamped_mismatch(
+	frozen: dict[str, str],
+	required: list[str],
+	stamped: list[InvoiceLine],
+	expected_rows: Counter | None = None,
+) -> str | None:
+	"""Every stamped row is a REQUIRED line carrying its frozen item, on exactly the rows expected.
+
+	A line is on one row, except a returned discounted line posted as several quantity-1 rows
+	(RT-1340 F3, ``return_builder.expected_row_counts``): it must then carry exactly that many.
+	"""
+	duplicate = _first_unexpected_repeat(stamped, expected_rows)
 	if duplicate is not None:
-		return f"existing document carries line {duplicate} more than once"
+		return f"existing document carries line {duplicate} more times than this work item posts it"
 	return next(filter(None, (_stamped_line_mismatch(line, frozen, required) for line in stamped)), None)
 
 
-def _first_duplicate(stamped: list[InvoiceLine]) -> str | None:
+def _first_unexpected_repeat(stamped: list[InvoiceLine], expected_rows: Counter | None) -> str | None:
 	counts = Counter(line.line_ref for line in stamped)
-	return next((ref for ref, count in counts.items() if count > 1), None)
+	allowed = expected_rows or Counter()
+	return next((ref for ref, count in counts.items() if count > max(1, allowed[ref])), None)
 
 
 def _stamped_line_mismatch(line: InvoiceLine, frozen: dict[str, str], required: list[str]) -> str | None:

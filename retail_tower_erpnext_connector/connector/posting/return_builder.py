@@ -20,11 +20,20 @@ synthetic sale snapshot and the refund tenders its tenders — so money validati
 tender == line total check (amendment 4a) and the payments rows come from the single forward money
 path. The result is then negated. Pure: no frappe, no ERPNext call.
 
+A returned line whose ``lineAmount`` is below ``unitPrice x quantity`` (an Offer Engine reward unit,
+RT-286, or an RT-857 manual discount) posts the same visible-discount shape the sale does
+(``price_list_rate`` = unitPrice, a per-unit ``discount_amount``, the net ``rate``; RT-1340 F3, owner
+OD-11). ERPNext recomputes ``amount = rate x qty``, so the net per-unit rate must be exact at the
+currency's minor unit. When ``lineAmount / quantity`` is not, a whole-number quantity is split into
+quantity-1 rows whose rates differ by one minor unit (all tagged with the same ``rt_line_ref``), so
+the credit note still totals exactly ``lineAmount``. Anything else not exactly representable is
+refused by the sale builder (:class:`builder.LineDiscountNotPostable`).
+
 Fail closed (all ``validation``): a return with no ``refundTenders`` (the feed INVARIANT says every
 return carries them — an outstanding credit note would hide cash that left the drawer), a refund
 total that differs from the returned total, an unmapped refund method, and a returned line whose
-``lineAmount`` is not exactly ``unitPrice x quantity`` (ERPNext recomputes ``amount = rate x qty``,
-so it would post a different amount than Backend-Core recorded).
+net cannot be posted exactly as a visible discount (above gross, negative, off the minor unit, or
+with no exact per-unit rate even after a split).
 
 Tax: like the forward builder, no tax rows are posted (Egyptian VAT is 0 today), so a return line
 with a non-zero ``taxAmount`` is rejected outright (:class:`ReturnTaxNotPosted`) — never posted with
@@ -34,11 +43,12 @@ its tax silently dropped, whatever the refund covers (Codex P2, PR #50).
 from __future__ import annotations
 
 import dataclasses
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
-from .builder import build_sales_invoice
+from .builder import _EXACT_DIGITS, _minor_unit, build_sales_invoice
 from .contracts import PostingWorkItem, ReturnLine, SaleLine, SaleTender
 from .idempotency import provenance_id
 from .posting_time import UTC_CLOCK, PostingStamp, apply_stamp, stamp_for
@@ -52,16 +62,6 @@ class MissingRefundTenders(Exception):
 		super().__init__(
 			"return carries no refundTenders — rejected as validation (every return records how the "
 			"cash was paid out; posting an outstanding credit note would hide it, RT-10 D6 / RT-14 D3)"
-		)
-
-
-class ReturnPricingMismatch(Exception):
-	"""A returned line's ``lineAmount`` is not ``unitPrice x quantity`` exactly — rejected as validation."""
-
-	def __init__(self, line_ref: str, unit_price: str, quantity: str, line_amount: str) -> None:
-		super().__init__(
-			f"return line {line_ref}: lineAmount {line_amount} != unitPrice {unit_price} x quantity "
-			f"{quantity} — ERPNext would post rate x qty instead; rejected as validation"
 		)
 
 
@@ -103,7 +103,7 @@ def build_return_invoice(
 	ref = _return_ref(work_item)
 	returned_sale = dataclasses.replace(
 		work_item.sale,
-		lines=tuple(_returned_line(work_item, rl) for rl in ref.return_lines),
+		lines=tuple(piece for rl in ref.return_lines for piece in _returned_lines(work_item, rl)),
 		tenders=tuple(SaleTender(method=t.method, amount=t.amount) for t in ref.refund_tenders),
 	)
 	doc = build_sales_invoice(
@@ -146,18 +146,64 @@ def _negate_rows(doc: dict) -> None:
 		payment["amount"] = _negate(payment["amount"])
 
 
-def _returned_line(work_item: PostingWorkItem, returned: ReturnLine) -> SaleLine:
-	"""The sale line ``returned`` points at, re-quantified to the returned quantity and amount."""
+def expected_row_counts(work_item: PostingWorkItem) -> Counter[str]:
+	"""How many credit-note rows each returned ``lineRef`` is posted as (1, or the split count; RT-1340 F3).
+
+	The replay identity check (:mod:`resolution_check`) holds an existing credit note to exactly these
+	counts, so a line posted twice, or a split with the wrong number of rows, is still a mismatch.
+	"""
+	ref = _return_ref(work_item)
+	return Counter(piece.line_ref for rl in ref.return_lines for piece in _returned_lines(work_item, rl))
+
+
+# A whole-number quantity above this is not split into quantity-1 rows (a bound on the credit note's size);
+# such a line is refused by the sale builder when its net has no exact per-unit rate.
+_MAX_SPLIT_ROWS = 100
+
+
+def _returned_lines(work_item: PostingWorkItem, returned: ReturnLine) -> list[SaleLine]:
+	"""The sale line(s) ``returned`` points at, re-quantified to the returned quantity and net amount.
+
+	One row normally. A discounted line whose net has no exact per-unit rate is split into quantity-1
+	rows (:func:`_split_amounts`), each keeping the original ``line_ref`` so the glue links every row to
+	the same original invoice row (and ERPNext's cumulative over-return cap applies to the sum).
+	"""
 	if returned.tax_amount is not None and Decimal(returned.tax_amount) != 0:
 		raise ReturnTaxNotPosted(returned.line_ref, returned.tax_amount)
 	sale_line = next(line for line in work_item.sale.lines if line.line_ref == returned.line_ref)
-	if Decimal(sale_line.unit_price) * Decimal(returned.quantity) != Decimal(returned.line_amount):
-		raise ReturnPricingMismatch(
-			returned.line_ref, sale_line.unit_price, returned.quantity, returned.line_amount
-		)
-	return dataclasses.replace(
+	whole = dataclasses.replace(
 		sale_line,
 		quantity=returned.quantity,
 		line_amount=returned.line_amount,
 		tax_amount=returned.tax_amount,
 	)
+	amounts = _split_amounts(whole)
+	if amounts is None:
+		return [whole]
+	return [dataclasses.replace(whole, quantity="1", line_amount=f"{amount:f}") for amount in amounts]
+
+
+def _split_amounts(line: SaleLine) -> list[Decimal] | None:
+	"""Per-unit net amounts (summing exactly to ``line.line_amount``) when the line must be split, else ``None``.
+
+	Split only a discounted line with a whole-number quantity whose net is a whole number of minor units
+	but does not divide by the quantity. Everything else (undiscounted, exactly divisible, fractional
+	quantity, surcharge, off-minor-unit) is left whole for :func:`builder._line_discount` to post or refuse.
+	"""
+	with localcontext() as ctx:
+		ctx.prec = _EXACT_DIGITS
+		quantity, net = Decimal(line.quantity), Decimal(line.line_amount)
+		gross = Decimal(line.unit_price) * quantity
+		if not 0 <= net < gross or quantity != quantity.to_integral_value():
+			return None
+		count = int(quantity)
+		if count < 2 or count > _MAX_SPLIT_ROWS:
+			return None
+		quantum = _minor_unit(line)
+		if net != net.quantize(quantum):
+			return None
+		base = (net / count).quantize(quantum, rounding="ROUND_FLOOR")
+		extra = int((net - base * count) / quantum)  # rows that take one more minor unit
+		if extra == 0:
+			return None  # exactly divisible: one row
+		return [base] * (count - extra) + [base + quantum] * extra
