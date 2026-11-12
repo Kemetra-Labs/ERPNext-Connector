@@ -3,8 +3,9 @@
 
 """Frozen read-models for the fixed 012 posting-feed contract (T010).
 
-These mirror Data-Pulse-2's ``posting-feed.yaml`` 1:1 (1.10.0-draft, including the RT-76 feed-1.2
-``Sale.tenders`` settlement field and the RT-450 tracked-line fields). The contract is
+These mirror Data-Pulse-2's ``posting-feed.yaml`` 1:1 (1.12.0-draft, including the RT-76 feed-1.2
+``Sale.tenders`` settlement field, the RT-450 tracked-line fields and the RT-1114 ``voucher``
+tender method). The contract is
 DP2-owned and read-only (FR-015, Principle I) — these DTOs CITE it, never re-derive it.
 
 Apply-only invariant (rider R2 / Q-CON-004): every offered ``SaleLine`` carries a
@@ -39,8 +40,11 @@ WORK_ITEM_KINDS: frozenset[str] = frozenset({"sale_post", "reversal"})
 # 012 ReversalRef.reversalKind enum.
 REVERSAL_KINDS: frozenset[str] = frozenset({"void", "refund", "return"})
 
-# 012 SaleTender.method enum (RT-10 D2 pilot methods; vouchers are excluded).
-TENDER_METHODS: frozenset[str] = frozenset({"cash", "card_external"})
+# 012 SaleTender.method enum (RT-10 D2 pilot methods, plus RT-1114 `voucher` from posting-feed
+# 1.12.0-draft, RT-1098 decision 4A). A voucher tender parses, but it settles only through a
+# `voucher` row of the tender Mode of Payment map; without one it fails closed (UnmappedTender →
+# validation). Posting it as a Paid SI is RT-1330 (R-4b).
+TENDER_METHODS: frozenset[str] = frozenset({"cash", "card_external", "voucher"})
 
 # 012 SaleLine.trackingMode enum (RT-450, 1.10.0-draft); null is "no profile determined".
 TRACKING_MODES: frozenset[str] = frozenset({"none", "batch", "serial"})

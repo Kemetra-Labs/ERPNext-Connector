@@ -423,6 +423,18 @@ class TestSettlement:
 				mode_of_payment_for=only_cash,
 			)
 
+	def test_voucher_tender_without_a_voucher_map_row_fails_closed(self):
+		# RT-1114: `voucher` is on the wire, but no map row exists until RT-1330 adds one, so a
+		# voucher-tendered sale is never posted unpaid: it fails closed (→ validation).
+		from retail_tower_erpnext_connector.connector.posting import tender as t
+
+		cash_and_card = t.TenderModeMap({"cash": "Cash", "card_external": "Card"}).resolve
+		with pytest.raises(t.UnmappedTender, match="voucher"):
+			_settle(
+				_tendered([{"method": "cash", "amount": "150.00"}, {"method": "voucher", "amount": "50.00"}]),
+				mode_of_payment_for=cash_and_card,
+			)
+
 	def test_tenders_without_a_resolver_fail_closed(self):
 		from retail_tower_erpnext_connector.connector.posting import tender as t
 

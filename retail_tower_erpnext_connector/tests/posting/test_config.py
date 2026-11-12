@@ -207,8 +207,8 @@ class TestParseTenderModeMap:
 
 	def test_method_outside_the_wire_enum_is_rejected(self):
 		# The Select field restricts the value; a row that bypassed it is a config error, loud.
-		with pytest.raises(cfg.ConfigError, match="voucher"):
-			cfg.parse_tender_mode_map([{"tender_method": "voucher", "mode_of_payment": "Voucher"}])
+		with pytest.raises(cfg.ConfigError, match="gift_card"):
+			cfg.parse_tender_mode_map([{"tender_method": "gift_card", "mode_of_payment": "Gift Card"}])
 
 	def test_tender_map_is_not_a_required_map(self):
 		# An empty tender map must NOT skip the poll: tender-unknown sales still post unpaid.

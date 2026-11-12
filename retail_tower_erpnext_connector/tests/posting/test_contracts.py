@@ -226,10 +226,27 @@ class TestSaleTenders:
 			c.SaleTender(method="card_external", amount="5.00", reference="AB12C"),
 		)
 
-	@pytest.mark.parametrize("method", ["voucher", "CASH", "card", ""])
+	@pytest.mark.parametrize("method", ["gift_card", "VOUCHER", "CASH", "card", ""])
 	def test_unknown_method_raises(self, method):
 		with pytest.raises(ValueError, match="method"):
 			c.PostingWorkItem.from_wire(self._with_tenders([{"method": method, "amount": "1.00"}]))
+
+	def test_voucher_tender_parses_ignoring_its_redemption_id(self):
+		# RT-1114 (posting-feed 1.12.0-draft): `voucher` is a wire method; its redemptionId is
+		# Backend-Core evidence the Connector does not read (RT-1330 decides any use of it).
+		wi = c.PostingWorkItem.from_wire(
+			self._with_tenders(
+				[
+					{"method": "cash", "amount": "15.00"},
+					{
+						"method": "voucher",
+						"amount": "5.00",
+						"redemptionId": "0197d3a0-1111-7000-8000-00000000a001",
+					},
+				]
+			)
+		)
+		assert wi.sale.tenders[1] == c.SaleTender(method="voucher", amount="5.00", reference=None)
 
 	@pytest.mark.parametrize("amount", [1.5, "-1.00", "1.12345", "abc", "", None])
 	def test_amount_must_be_a_non_negative_exact_decimal_string(self, amount):
