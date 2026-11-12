@@ -23,6 +23,7 @@ import frappe
 
 from ..observability.sentry_client import report_unhandled
 from ..request_id import new_request_id
+from ..scheduling import ensure_posting_poll_logged
 from ..text import scrub
 from . import worker
 from .frappe_store import FrappePostingLogStore
@@ -46,7 +47,22 @@ def run_posting_poll() -> None:
 	# so the event matches Backend-Core's log line. The error is re-raised unchanged.
 	request_id = new_request_id()
 	with report_unhandled(job_name="posting_poll", request_id=request_id):
+		_keep_poll_logged()
 		_run_posting_tick(request_id)
+
+
+def _keep_poll_logged() -> None:
+	"""RT-1354 — make sure Frappe stamps this job's ``last_execution`` at Start, never at its end.
+
+	Best effort and idempotent (one indexed read; a write only if the flag was off): a failure is a
+	warning and never stops the tick. Why and what it costs: :mod:`..scheduling`.
+	"""
+	try:
+		ensure_posting_poll_logged()
+	except Exception as exc:
+		frappe.logger(_LOGGER).warning(
+			{"event": "posting.poll.scheduling.ensure_failed", "reason": scrub(str(exc))}
+		)
 
 
 def _run_posting_tick(request_id: str) -> None:

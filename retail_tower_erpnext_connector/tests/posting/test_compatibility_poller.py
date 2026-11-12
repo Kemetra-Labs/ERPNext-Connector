@@ -50,7 +50,13 @@ class _Frappe(types.ModuleType):
 @pytest.fixture
 def load_poller(monkeypatch):
 	pkg = importlib.import_module(_PKG)
-	names = ("frappe", _POLLER, f"{_PKG}.frappe_store", f"{_PKG}.frappe_glue")
+	names = (
+		"frappe",
+		_POLLER,
+		"retail_tower_erpnext_connector.connector.scheduling",  # RT-1354: the poller imports it
+		f"{_PKG}.frappe_store",
+		f"{_PKG}.frappe_glue",
+	)
 	saved = [(sys.modules, n, sys.modules.get(n, _MISSING)) for n in names]
 	saved += [(vars(pkg), n, vars(pkg).get(n, _MISSING)) for n in ("poller", "frappe_store", "frappe_glue")]
 

@@ -16,6 +16,7 @@ import pytest
 _POLLER = "retail_tower_erpnext_connector.connector.posting.poller"
 _PKG = "retail_tower_erpnext_connector.connector.posting"
 _FEED_STATE = "retail_tower_erpnext_connector.connector.feed_state"
+_SCHEDULING = "retail_tower_erpnext_connector.connector.scheduling"  # RT-1354: the poller imports it
 _MISSING = object()
 
 
@@ -36,6 +37,8 @@ class _Frappe(types.ModuleType):
 			get_single_value=lambda doctype, field: self.singles.get(field),
 			set_single_value=self._set_single_value,
 			commit=self._commit,
+			# RT-1354: every run first checks the poll job's Create Log flag (already on here).
+			get_value=lambda *args, **kwargs: types.SimpleNamespace(name="poll-job", create_log=1),
 		)
 		self.exceptions = types.SimpleNamespace()
 
@@ -50,7 +53,7 @@ class _Frappe(types.ModuleType):
 @pytest.fixture
 def poller(monkeypatch):
 	pkg = importlib.import_module(_PKG)
-	names = ("frappe", _POLLER, _FEED_STATE, f"{_PKG}.frappe_store", f"{_PKG}.frappe_glue")
+	names = ("frappe", _POLLER, _FEED_STATE, _SCHEDULING, f"{_PKG}.frappe_store", f"{_PKG}.frappe_glue")
 	saved = [(sys.modules, n, sys.modules.get(n, _MISSING)) for n in names]
 	saved += [(vars(pkg), n, vars(pkg).get(n, _MISSING)) for n in ("poller", "frappe_store", "frappe_glue")]
 	fake = _Frappe()

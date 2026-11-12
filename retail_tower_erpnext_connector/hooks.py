@@ -57,7 +57,12 @@ after_migrate = "retail_tower_erpnext_connector.connector.schema.after_migrate"
 # The posting poller — pulls posting work-items from Data-Pulse-2, posts each to ERPNext,
 # and acks the outcome (T093). The job entrypoint lives in the posting module. It runs every
 # minute (Frappe's finest cron granularity) for the RT-45 target of a sale reaching ERPNext in
-# <= ~1 minute; each run drains the whole pending backlog, and Frappe never overlaps two runs.
+# <= ~1 minute; each run drains up to a bounded number of pages, and Frappe never overlaps two runs
+# (it refuses to enqueue a job that is still queued or running). RT-1354: each run first makes sure the
+# job's Create Log flag is on (connector/scheduling.py, called from the poller), so Frappe stamps
+# last_execution at Start; otherwise a poll that ended past the next minute boundary made the next
+# tick skip it. It is done in the poller, not in a migrate hook, so this change stays image-only for
+# the lab's rollback class (RT-927: any hooks.py change outside scheduler_events classes as restore).
 scheduler_events = {
 	"cron": {
 		"* * * * *": [
