@@ -141,7 +141,19 @@ def _transient_exceptions() -> tuple[type[BaseException], ...]:
 	"""
 	# RT-1312 F3: Frappe v16 raises QueryDeadlockError(Exception) on a MariaDB deadlock
 	# (frappe/database/database.py); a deadlock is retryable, never a permanent rejection.
-	names = ("TimedOutError", "RetryBackoffError", "QueryTimeoutError", "QueryDeadlockError")
+	# RT-1351: TimestampMismatchError (frappe/exceptions.py, a ValidationError subclass) is raised by
+	# Document.check_if_latest when the row's `modified` differs from the in-memory copy: a failure of
+	# Frappe's optimistic-lock check, not a business rule (RT-317 A1c: no other posting was involved;
+	# see the RT-1351 PR). It is listed here because every stage tries this set BEFORE the generic
+	# ValidationError branch; the savepoint already rolled the insert back, so a re-offer is safe and
+	# a committed twin is stopped by the unique provenance index (G5).
+	names = (
+		"TimedOutError",
+		"RetryBackoffError",
+		"QueryTimeoutError",
+		"QueryDeadlockError",
+		"TimestampMismatchError",
+	)
 	found = tuple(getattr(frappe, n) for n in names if hasattr(frappe, n))
 	# TimeoutError is always a sane transient signal even if frappe names none of the above.
 	return (*found, TimeoutError)
