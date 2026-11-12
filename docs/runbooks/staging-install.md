@@ -224,11 +224,32 @@ sets the site up **in ERPNext Desk**. Retail Tower does not load stock or change
    that carries tenders posts as one **Paid** Sales Invoice (`is_pos = 1`, one payment row per
    tender, no Payment Entry). RT-10 D3(b)/D5, amendment 011-DR-POSTING-A1.
    - In Connector Settings → *Tender → Mode of Payment Map*, add one row per method Backend-Core
-     sends: `cash` and `card_external`. There is no default. A sale whose method has no row is
-     rejected as `validation`, and nothing posts.
+     sends: `cash`, `card_external` and, once vouchers are on (RT-1330), `voucher`. There is no
+     default. A sale whose method has no row is rejected as `validation`, and nothing posts.
    - Each mapped Mode of Payment needs a **default account for the company** (Mode of Payment →
      *Accounts*). The card clearing account is finance configuration. A missing account makes
      ERPNext reject the invoice as `validation`.
+   - **Voucher tender (RT-1330, RT-1098 decision 4A).** A voucher is a tender, never a discount:
+     the sale keeps its full price and the voucher pays part or all of it as one `payments` row.
+     Set it up in this order:
+     1. Create the Mode of Payment `Voucher` (Type *General*) in ERPNext.
+     2. Add its default account for the company (Mode of Payment → *Accounts*). Which account to
+        use (for example a promotional-expense account or a clearing account) is the owner's or
+        the accountant's decision, so write it as `<VOUCHER ACCOUNT>` until they choose. Vouchers
+        are promotional only in v1; there is no gift-card or sold-voucher accounting.
+     3. Only then add the map row `voucher` → `Voucher`.
+
+     **Do not map `voucher` first.** A mapped Mode of Payment that is missing, disabled or has no
+     account for the company fails the compatibility profile, and that **pauses all posting**, not
+     only voucher sales. Without the row, a voucher sale is rejected as `validation` and nothing
+     posts (never an unpaid invoice), but every other sale keeps posting.
+   - **Voucher rollout order:** deploy this Connector version and complete the three steps above
+     **before** Backend-Core's `POS_SALE_VOUCHER_TENDER_ENABLED` is turned on. With the flag off,
+     Backend-Core refuses voucher tenders, so nothing reaches ERPNext. A voucher sale offered to a
+     Connector without the map row is rejected as `validation`, and that outcome is final.
+   - **Returns of voucher-tendered sales are refunded in cash** (prerequisite 9), never back to the
+     voucher. A **void** is different: it mirrors the original invoice's own payment rows, so a
+     voucher-tendered sale is voided through the same `Voucher` Mode of Payment.
    - The map may stay empty while every sale is tender-unknown. Those sales post unpaid, as
      before.
    - **Rollout order:** deploy this Connector version **before** Backend-Core starts accepting

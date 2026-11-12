@@ -231,9 +231,9 @@ class TestSaleTenders:
 		with pytest.raises(ValueError, match="method"):
 			c.PostingWorkItem.from_wire(self._with_tenders([{"method": method, "amount": "1.00"}]))
 
-	def test_voucher_tender_parses_ignoring_its_redemption_id(self):
+	def test_voucher_tender_parses_and_keeps_its_redemption_id(self):
 		# RT-1114 (posting-feed 1.12.0-draft): `voucher` is a wire method; its redemptionId is
-		# Backend-Core evidence the Connector does not read (RT-1330 decides any use of it).
+		# Backend-Core evidence the Connector keeps for its own log (RT-1330), never for the document.
 		wi = c.PostingWorkItem.from_wire(
 			self._with_tenders(
 				[
@@ -246,7 +246,13 @@ class TestSaleTenders:
 				]
 			)
 		)
-		assert wi.sale.tenders[1] == c.SaleTender(method="voucher", amount="5.00", reference=None)
+		assert wi.sale.tenders[1] == c.SaleTender(
+			method="voucher",
+			amount="5.00",
+			reference=None,
+			redemption_id="0197d3a0-1111-7000-8000-00000000a001",
+		)
+		assert wi.sale.tenders[0].redemption_id is None
 
 	@pytest.mark.parametrize("amount", [1.5, "-1.00", "1.12345", "abc", "", None])
 	def test_amount_must_be_a_non_negative_exact_decimal_string(self, amount):
@@ -280,6 +286,78 @@ class TestSaleTenders:
 
 _REF_1 = "0b4d6a2e-5c1f-4e8a-9d3b-7f2a1c6e8b01"
 _REF_2 = "0b4d6a2e-5c1f-4e8a-9d3b-7f2a1c6e8b02"
+
+
+class TestVoucherRedemptionId:
+	"""RT-1330 (feed 1.12.0-draft, RT-1114): ``redemptionId`` is a canonical uuid, required on a
+	``voucher`` tender and refused on any other method. A violation raises ``ValueError``
+	(``malformed_work_item`` → ``validation``), never a guessed repair.
+	"""
+
+	def _parse(self, tenders):
+		wire = _wire_work_item()
+		wire["sale"]["tenders"] = tenders
+		return c.PostingWorkItem.from_wire(wire).sale.tenders
+
+	def test_voucher_tender_keeps_a_canonical_uuid(self):
+		(tender,) = self._parse([{"method": "voucher", "amount": "5.00", "redemptionId": _REF_1}])
+		assert tender.redemption_id == _REF_1
+
+	def test_uppercase_uuid_is_kept_verbatim(self):
+		(tender,) = self._parse([{"method": "voucher", "amount": "5.00", "redemptionId": _REF_1.upper()}])
+		assert tender.redemption_id == _REF_1.upper()
+
+	@pytest.mark.parametrize("missing", [None, "absent"])
+	def test_voucher_tender_without_a_redemption_id_is_refused(self, missing):
+		tender = {"method": "voucher", "amount": "5.00"}
+		if missing is None:
+			tender["redemptionId"] = None
+		with pytest.raises(ValueError, match="redemptionId"):
+			self._parse([tender])
+
+	@pytest.mark.parametrize(
+		"redemption_id",
+		[
+			"",
+			"not-a-uuid",
+			"0b4d6a2e5c1f4e8a9d3b7f2a1c6e8b01",  # no hyphens
+			"{0b4d6a2e-5c1f-4e8a-9d3b-7f2a1c6e8b01}",  # braces
+			"urn:uuid:0b4d6a2e-5c1f-4e8a-9d3b-7f2a1c6e8b01",
+			_REF_1 + "\n",  # trailing newline
+			12345,
+			True,
+		],
+	)
+	def test_voucher_tender_with_a_malformed_redemption_id_is_refused(self, redemption_id):
+		with pytest.raises(ValueError, match="redemptionId"):
+			self._parse([{"method": "voucher", "amount": "5.00", "redemptionId": redemption_id}])
+
+	@pytest.mark.parametrize("method", ["cash", "card_external"])
+	def test_redemption_id_on_another_method_is_refused(self, method):
+		with pytest.raises(ValueError, match="redemptionId"):
+			self._parse([{"method": method, "amount": "5.00", "redemptionId": _REF_1}])
+
+	def test_explicit_null_redemption_id_on_another_method_is_absent(self):
+		(tender,) = self._parse([{"method": "cash", "amount": "5.00", "redemptionId": None}])
+		assert tender.redemption_id is None
+
+	def test_one_redemption_cannot_pay_two_tenders(self):
+		with pytest.raises(ValueError, match="redemptionId must be unique"):
+			self._parse(
+				[
+					{"method": "voucher", "amount": "5.00", "redemptionId": _REF_1},
+					{"method": "voucher", "amount": "2.00", "redemptionId": _REF_1.upper()},  # same uuid
+				]
+			)
+
+	def test_two_vouchers_with_different_redemptions_are_kept_apart(self):
+		tenders = self._parse(
+			[
+				{"method": "voucher", "amount": "5.00", "redemptionId": _REF_1},
+				{"method": "voucher", "amount": "2.00", "redemptionId": _REF_2},
+			]
+		)
+		assert [t.redemption_id for t in tenders] == [_REF_1, _REF_2]
 
 
 class TestSaleTenderIdentity:

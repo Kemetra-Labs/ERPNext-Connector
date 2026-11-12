@@ -168,7 +168,7 @@ sale never creates a second ERPNext document.
 | Store | Warehouse | Connector Settings `warehouse_map` (RT Warehouse Map Row) |
 | Store | Customer | Connector Settings `store_customer_map` (RT Store Customer Map Row) |
 | Selling unit | UOM | Connector Settings `uom_map` (RT Uom Map Row) |
-| Tender method (`cash`, `card_external`) | Mode of Payment | Connector Settings `tender_mode_map` (RT Tender Mode Map Row); optional, an unmapped tender on a tender-bearing sale is rejected |
+| Tender method (`cash`, `card_external`, `voucher`) | Mode of Payment | Connector Settings `tender_mode_map` (RT Tender Mode Map Row); optional, an unmapped tender on a tender-bearing sale is rejected (a mapped Mode of Payment needs a company account, or all posting pauses; `voucher` is a tender, not a discount, RT-1330) |
 | Product | Item | Not configured here: Backend-Core supplies `erpnextItemRef` on each line |
 | Sale provenance | Custom Fields `rt_source_system`, `rt_external_id`, `rt_sale_ref` on Sales Invoice and `rt_line_ref` on Sales Invoice Item | Fixtures in `hooks.py` |
 

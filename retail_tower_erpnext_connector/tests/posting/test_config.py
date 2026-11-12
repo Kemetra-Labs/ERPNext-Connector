@@ -188,6 +188,14 @@ class TestParseTenderModeMap:
 		]
 		assert cfg.parse_tender_mode_map(rows) == {"cash": "Cash", "card_external": "Card Clearing"}
 
+	def test_voucher_row_is_accepted(self):
+		# RT-1330: `voucher` is a wire method (feed 1.12.0-draft) and maps like cash and card.
+		rows = [
+			{"tender_method": "cash", "mode_of_payment": "Cash"},
+			{"tender_method": "voucher", "mode_of_payment": "Voucher"},
+		]
+		assert cfg.parse_tender_mode_map(rows) == {"cash": "Cash", "voucher": "Voucher"}
+
 	def test_empty_rows_yield_empty_map(self):
 		# Legitimate while sales are tender-unknown; a tender-bearing sale then fails closed per item.
 		assert cfg.parse_tender_mode_map(None) == {}

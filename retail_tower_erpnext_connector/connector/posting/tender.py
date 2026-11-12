@@ -102,6 +102,11 @@ def tender_refs_in_row_order(tenders: Sequence[SaleTender]) -> list[str | None]:
 	return [t.tender_ref for t in ordered_tenders(tenders)]
 
 
+def redemption_ids_in_row_order(tenders: Sequence[SaleTender]) -> list[str | None]:
+	"""The voucher ``redemptionId`` of each payment row, by row position (RT-1330 evidence; ``None`` = not a voucher)."""
+	return [t.redemption_id for t in ordered_tenders(tenders)]
+
+
 def _decimal_sum(amounts: Sequence[str]) -> Decimal:
 	return sum((Decimal(a) for a in amounts), Decimal(0))
 

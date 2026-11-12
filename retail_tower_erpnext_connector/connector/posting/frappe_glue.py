@@ -81,6 +81,7 @@ from .tender import (
 	UnmappedTender,
 	assert_settled,
 	payments_total,
+	redemption_ids_in_row_order,
 	tender_refs_in_row_order,
 )
 from .transport import PostingFeedClient
@@ -422,13 +423,20 @@ def _tender_evidence(work_item: PostingWorkItem) -> dict:
 
 	``tender_refs[i]`` is the tender behind payment row ``idx = i + 1`` (``None`` for a legacy tender).
 	Empty for a reversal or a sale without any ``tenderRef``: tenderRef is never written to ERPNext.
+	RT-1330: a sale with a voucher tender also logs ``redemption_ids`` (same row order, ``None`` for a
+	tender that is not a voucher); it too stays out of the ERPNext document.
 	Only for an invoice this run built from these tenders: a replayed or existing invoice's payment
 	rows are not compared, so its rows are never attributed to the incoming refs.
 	"""
 	tenders = work_item.sale.tenders
-	if work_item.kind != "sale_post" or not any(t.tender_ref for t in tenders):
+	if work_item.kind != "sale_post":
 		return {}
-	return {"tender_refs": tender_refs_in_row_order(tenders)}
+	evidence: dict = {}
+	if any(t.tender_ref for t in tenders):
+		evidence["tender_refs"] = tender_refs_in_row_order(tenders)
+	if any(t.redemption_id for t in tenders):
+		evidence["redemption_ids"] = redemption_ids_in_row_order(tenders)
+	return evidence
 
 
 def _ack_verify_transient(

@@ -488,6 +488,24 @@ class TestVoidSettlement:
 			{"mode_of_payment": None, "amount": "-50.00"},
 		]
 
+	def test_void_of_a_cash_plus_voucher_sale_mirrors_two_negated_rows(self):
+		# RT-1330: a voucher tender is refunded like any other, by its negated amount in sequence
+		# order; the Mode of Payment is taken from the ORIGINAL invoice's rows in the glue.
+		wi = _with_tenders(
+			_void_work_item(),
+			c.SaleTender(
+				"voucher", "50.00", redemption_id="0197d3a0-1111-7000-8000-00000000a001", sequence=2
+			),
+			c.SaleTender("cash", "150.00", sequence=1),
+		)
+		doc = _build(wi)
+		assert doc["is_pos"] == 1 and doc["is_return"] == 1
+		assert doc["payments"] == [
+			{"mode_of_payment": None, "amount": "-150.00"},
+			{"mode_of_payment": None, "amount": "-50.00"},
+		]
+		assert "0197d3a0" not in str(doc)
+
 	def test_void_of_a_same_method_split_tender_keeps_one_row_per_tender(self):
 		# RT-361 (G1): two cash tender lines are refunded as two rows in sequence order, never merged.
 		wi = _with_tenders(

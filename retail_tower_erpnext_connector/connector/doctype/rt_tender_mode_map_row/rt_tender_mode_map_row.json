@@ -16,7 +16,7 @@
    "label": "Tender Method",
    "reqd": 1,
    "in_list_view": 1,
-   "description": "The posting-feed SaleTender.method (RT-10 D2 pilot methods; voucher from RT-1114, settled only once RT-1330 is deployed)."
+   "description": "The posting-feed SaleTender.method (RT-10 D2 pilot methods, plus voucher from RT-1114). A voucher tender posts as a payments row through its own map row (RT-1330); map it only after its Mode of Payment and company account exist."
   },
   {
    "fieldname": "mode_of_payment",

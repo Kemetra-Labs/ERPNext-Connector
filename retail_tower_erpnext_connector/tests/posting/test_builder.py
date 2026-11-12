@@ -319,7 +319,9 @@ def _mode(method: str) -> str:
 	# The operator-configured tender → Mode of Payment map (RT-10 D5), fail closed on a miss.
 	from retail_tower_erpnext_connector.connector.posting import tender as t
 
-	return t.TenderModeMap({"cash": "Cash", "card_external": "Card Clearing"}).resolve(method)
+	return t.TenderModeMap({"cash": "Cash", "card_external": "Card Clearing", "voucher": "Voucher"}).resolve(
+		method
+	)
 
 
 def _tendered(tenders, *, tax_amount=None, pos_total="200.00") -> c.PostingWorkItem:
@@ -361,6 +363,7 @@ def _tendered(tenders, *, tax_amount=None, pos_total="200.00") -> c.PostingWorkI
 
 _REF_A = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 _REF_B = "16fd2706-8baf-433b-82eb-8c7fada847da"
+_REDEMPTION = "0197d3a0-1111-7000-8000-00000000a001"
 
 
 def _settle(work_item, **kw):
@@ -424,15 +427,60 @@ class TestSettlement:
 			)
 
 	def test_voucher_tender_without_a_voucher_map_row_fails_closed(self):
-		# RT-1114: `voucher` is on the wire, but no map row exists until RT-1330 adds one, so a
-		# voucher-tendered sale is never posted unpaid: it fails closed (→ validation).
+		# RT-1330: a `voucher` tender settles through its own map row; a site that has none (the
+		# Connector deployed, the Mode of Payment not yet mapped) never posts the sale unpaid: it
+		# fails closed (→ validation).
 		from retail_tower_erpnext_connector.connector.posting import tender as t
 
 		cash_and_card = t.TenderModeMap({"cash": "Cash", "card_external": "Card"}).resolve
 		with pytest.raises(t.UnmappedTender, match="voucher"):
 			_settle(
-				_tendered([{"method": "cash", "amount": "150.00"}, {"method": "voucher", "amount": "50.00"}]),
+				_tendered(
+					[
+						{"method": "cash", "amount": "150.00"},
+						{"method": "voucher", "amount": "50.00", "redemptionId": _REDEMPTION},
+					]
+				),
 				mode_of_payment_for=cash_and_card,
+			)
+
+	def test_voucher_only_sale_is_a_paid_pos_invoice(self):
+		# RT-1330 (RT-1098 decision 4A): the voucher is a tender, never a discount. The sale stays at
+		# full price and the invoice is Paid by one `Voucher` row.
+		doc = _settle(_tendered([{"method": "voucher", "amount": "200.00", "redemptionId": _REDEMPTION}]))
+		assert doc["is_pos"] == 1
+		assert doc["payments"] == [{"mode_of_payment": "Voucher", "amount": "200.00"}]
+		assert [i["amount"] for i in doc["items"]] == ["200.00"]
+		assert "discount_amount" not in doc and "additional_discount_percentage" not in doc
+
+	def test_cash_plus_voucher_sale_posts_one_row_per_tender_in_sequence_order(self):
+		doc = _settle(
+			_tendered(
+				[
+					{"method": "voucher", "amount": "50.00", "redemptionId": _REDEMPTION, "sequence": 2},
+					{"method": "cash", "amount": "150.00", "sequence": 1},
+				]
+			)
+		)
+		assert doc["is_pos"] == 1
+		assert doc["payments"] == [
+			{"mode_of_payment": "Cash", "amount": "150.00"},
+			{"mode_of_payment": "Voucher", "amount": "50.00"},
+		]
+		# The redemption is Connector evidence only: it stays off the ERPNext document.
+		assert _REDEMPTION not in str(doc)
+
+	def test_voucher_total_must_still_cover_the_line_total(self):
+		from retail_tower_erpnext_connector.connector.posting import tender as t
+
+		with pytest.raises(t.TenderMismatch):
+			_settle(
+				_tendered(
+					[
+						{"method": "cash", "amount": "100.00"},
+						{"method": "voucher", "amount": "50.00", "redemptionId": _REDEMPTION},
+					]
+				)
 			)
 
 	def test_tenders_without_a_resolver_fail_closed(self):

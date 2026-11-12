@@ -5,7 +5,7 @@
 
 These mirror Data-Pulse-2's ``posting-feed.yaml`` 1:1 (1.12.0-draft, including the RT-76 feed-1.2
 ``Sale.tenders`` settlement field, the RT-450 tracked-line fields and the RT-1114 ``voucher``
-tender method). The contract is
+tender method with its ``redemptionId``). The contract is
 DP2-owned and read-only (FR-015, Principle I) — these DTOs CITE it, never re-derive it.
 
 Apply-only invariant (rider R2 / Q-CON-004): every offered ``SaleLine`` carries a
@@ -41,9 +41,9 @@ WORK_ITEM_KINDS: frozenset[str] = frozenset({"sale_post", "reversal"})
 REVERSAL_KINDS: frozenset[str] = frozenset({"void", "refund", "return"})
 
 # 012 SaleTender.method enum (RT-10 D2 pilot methods, plus RT-1114 `voucher` from posting-feed
-# 1.12.0-draft, RT-1098 decision 4A). A voucher tender parses, but it settles only through a
-# `voucher` row of the tender Mode of Payment map; without one it fails closed (UnmappedTender →
-# validation). Posting it as a Paid SI is RT-1330 (R-4b).
+# 1.12.0-draft, RT-1098 decision 4A). A voucher tender settles through a `voucher` row of the tender
+# Mode of Payment map like any other method (RT-1330, R-4b), as a Paid SI `payments` row; without a
+# map row it fails closed (UnmappedTender → validation), never an unpaid SI.
 TENDER_METHODS: frozenset[str] = frozenset({"cash", "card_external", "voucher"})
 
 # 012 SaleLine.trackingMode enum (RT-450, 1.10.0-draft); null is "no profile determined".
@@ -305,6 +305,10 @@ class SaleTender:
 	``sequence`` orders the payment rows and ``tenderRef`` goes to the Connector's own log only. A
 	tender without ``tenderRef`` is a legacy tender (one per method). Other unknown keys are still
 	ignored, as the feed's rollout order expects.
+
+	RT-1330 (feed 1.12.0-draft, RT-1114): ``redemptionId`` (canonical uuid, the Backend-Core voucher
+	redemption that paid the tender) is required on a ``voucher`` tender and refused on any other
+	method; it is evidence only, never written to the ERPNext document and never used to price or map.
 	"""
 
 	method: str
@@ -312,6 +316,7 @@ class SaleTender:
 	reference: str | None = None
 	tender_ref: str | None = None
 	sequence: int | None = None
+	redemption_id: str | None = None
 
 	@classmethod
 	def from_wire(cls, wire: Mapping[str, object]) -> SaleTender:
@@ -337,6 +342,7 @@ class SaleTender:
 			reference=reference,
 			tender_ref=_parse_tender_ref(wire.get("tenderRef")),
 			sequence=_parse_tender_sequence(wire.get("sequence")),
+			redemption_id=_parse_redemption_id(method, wire.get("redemptionId")),
 		)
 
 
@@ -346,6 +352,26 @@ def _parse_tender_ref(raw: object) -> str | None:
 		return None
 	if not isinstance(raw, str) or not _TENDER_REF_RE.fullmatch(raw):
 		raise ValueError(f"SaleTender.tenderRef must be a canonical uuid string, got {raw!r}")
+	return raw
+
+
+def _parse_redemption_id(method: object, raw: object) -> str | None:
+	"""``SaleTender.redemptionId`` (RT-1114): a canonical uuid on a ``voucher`` tender, absent elsewhere.
+
+	A ``voucher`` tender without it, or any other method carrying it, is a contract violation: it
+	raises ``ValueError`` (``malformed_work_item`` → ``validation``), never a guessed repair. An
+	explicit ``null`` counts as absent.
+	"""
+	if method != "voucher":
+		if raw is not None:
+			raise ValueError(
+				f"SaleTender.redemptionId is only allowed on a voucher tender, got it on {method!r}"
+			)
+		return None
+	if not isinstance(raw, str) or not _TENDER_REF_RE.fullmatch(raw):
+		raise ValueError(
+			f"SaleTender.redemptionId must be a canonical uuid string on a voucher tender, got {raw!r}"
+		)
 	return raw
 
 
@@ -375,6 +401,7 @@ def _parse_tenders(raw: object) -> tuple[SaleTender, ...]:
 	tenders = tuple(SaleTender.from_wire(t) for t in raw)
 	_assert_unique([t.tender_ref and t.tender_ref.lower() for t in tenders], "tenderRef")  # uuid case-blind
 	_assert_unique([t.sequence for t in tenders], "sequence")
+	_assert_unique([t.redemption_id and t.redemption_id.lower() for t in tenders], "redemptionId")
 	return tenders
 
 

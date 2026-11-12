@@ -214,6 +214,23 @@ class TestVoidSettlementMirror:
 			{"mode_of_payment": "Cash", "amount": "-50.0"},
 		]
 
+	def test_cash_plus_voucher_void_mirrors_the_original_rows_through_the_voucher_mode(self):
+		# RT-1330: the Voucher Mode of Payment is copied from the ORIGINAL invoice's own row; the
+		# mirror takes no tender map at all, so a later change to the `voucher` map row cannot redirect it.
+		doc = _link(
+			_paid_void((None, "-150.00"), (None, "-50.00")),
+			original_is_pos=1,
+			original_payments=[
+				{"mode_of_payment": "Voucher", "amount": 50.0, "idx": 2},
+				{"mode_of_payment": "Cash", "amount": 150.0, "idx": 1},
+			],
+		)
+		assert doc["is_pos"] == 1
+		assert doc["payments"] == [
+			{"mode_of_payment": "Cash", "amount": "-150.0"},
+			{"mode_of_payment": "Voucher", "amount": "-50.0"},
+		]
+
 	def test_a_settlement_mismatch_is_a_return_line_mismatch(self):
 		# The glue maps ReturnLineMismatch to validation; the settlement check must ride that path.
 		assert issubclass(sp.VoidSettlementMismatch, sp.ReturnLineMismatch)

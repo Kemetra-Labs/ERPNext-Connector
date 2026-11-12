@@ -12,6 +12,8 @@ Cases:
     ``validation`` and build/submit nothing (RT-10 D5, amendment 4a);
   - a cash sale is inserted as ``is_pos`` with the mapped Mode of Payment, submitted and acked
     ``posted``;
+  - RT-1330: a voucher tender settles through its own ``voucher`` map row (alone or with cash), and
+    without that row the sale is rejected as ``validation`` with nothing built (never an unpaid SI);
   - if ERPNext's computed totals do not settle the invoice exactly (change, outstanding or write-off
     left over), the insert is rolled back, never submitted, and rejected as ``validation``.
 """
@@ -210,6 +212,8 @@ def _post(glue, work_item, *, tender_map):
 
 
 _CASH = [{"method": "cash", "amount": "10.49"}]
+_REDEMPTION = "0197d3a0-1111-7000-8000-00000000a001"
+_VOUCHER = [{"method": "voucher", "amount": "10.49", "redemptionId": _REDEMPTION}]
 
 
 class TestSettlementInGlue:
@@ -316,6 +320,66 @@ class TestSettlementInGlue:
 		assert outcome == "posted"
 		posted = [r for _level, r in fake._logger.records if r.get("event") == "posting.posted"]
 		assert len(posted) == 1 and "tender_refs" not in posted[0]
+
+	def test_voucher_sale_posts_as_a_paid_invoice_and_logs_its_redemption(self, load_glue):
+		# RT-1330 (decision 4A): the voucher is a payments row through the `voucher` map row, the
+		# settlement check passes, and the redemption goes to the Connector's own log only.
+		fake = _Frappe()
+		outcome, client, store = _post(
+			load_glue(fake), _sale(_VOUCHER), tender_map={"cash": "Cash", "voucher": "Voucher"}
+		)
+		assert outcome == "posted"
+		(payload,) = fake.payloads
+		assert payload["is_pos"] == 1
+		assert payload["payments"] == [{"mode_of_payment": "Voucher", "amount": "10.49"}]
+		assert _REDEMPTION not in str(payload)
+		assert fake.events == ["savepoint", "insert", "submit"]
+		assert client.acks[0]["outcome"] == "posted" and len(store.writes) == 1
+		posted = [r for _level, r in fake._logger.records if r.get("event") == "posting.posted"]
+		assert [r["redemption_ids"] for r in posted] == [[_REDEMPTION]]
+		assert "tender_refs" not in posted[0]
+
+	def test_cash_plus_voucher_sale_logs_redemption_ids_in_row_order(self, load_glue):
+		fake = _Frappe()
+		work_item = _sale(
+			[
+				{"method": "voucher", "amount": "0.49", "redemptionId": _REDEMPTION, "sequence": 2},
+				{"method": "cash", "amount": "10.00", "sequence": 1},
+			]
+		)
+		outcome, _client, _store = _post(
+			load_glue(fake), work_item, tender_map={"cash": "Cash", "voucher": "Voucher"}
+		)
+		assert outcome == "posted"
+		assert fake.payloads[0]["payments"] == [
+			{"mode_of_payment": "Cash", "amount": "10.00"},
+			{"mode_of_payment": "Voucher", "amount": "0.49"},
+		]
+		posted = [r for _level, r in fake._logger.records if r.get("event") == "posting.posted"]
+		assert [r["redemption_ids"] for r in posted] == [[None, _REDEMPTION]]
+
+	def test_unmapped_voucher_is_rejected_as_validation_and_builds_nothing(self, load_glue):
+		# RT-1330 fail-closed: the site maps cash but not `voucher` (the Connector is deployed, the
+		# Mode of Payment is not configured yet). Nothing is built, nothing is posted unpaid.
+		fake = _Frappe()
+		outcome, client, store = _post(load_glue(fake), _sale(_VOUCHER), tender_map={"cash": "Cash"})
+		assert outcome == "permanently_rejected"
+		assert client.acks[0]["reason"]["category"] == "validation"
+		assert fake.payloads == [] and fake.events == [] and store.writes == []
+
+	def test_reversal_logs_no_redemption_ids(self, load_glue):
+		# The evidence is only for an invoice this run built from these tenders (a sale_post).
+		glue = load_glue(_Frappe())
+		tender = c.SaleTender(method="voucher", amount="10.49", redemption_id=_REDEMPTION)
+		void = types.SimpleNamespace(kind="reversal", sale=types.SimpleNamespace(tenders=(tender,)))
+		assert glue._tender_evidence(void) == {}
+
+	def test_cash_sale_logs_no_redemption_ids(self, load_glue):
+		fake = _Frappe()
+		outcome, _client, _store = _post(load_glue(fake), _sale(_CASH), tender_map={"cash": "Cash"})
+		assert outcome == "posted"
+		posted = [r for _level, r in fake._logger.records if r.get("event") == "posting.posted"]
+		assert len(posted) == 1 and "redemption_ids" not in posted[0]
 
 	def test_tender_unknown_sale_skips_the_settlement_check(self, load_glue):
 		# An unpaid invoice legitimately keeps its outstanding amount (RT-10 D8).
