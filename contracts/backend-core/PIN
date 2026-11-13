@@ -1,6 +1,7 @@
 # Backend-Core OpenAPI contracts the ERPNext-Connector consumes (RT-704): the posting feed
 # (connector/posting), the bin-view feed (connector/bin_view), the heartbeat (connector/health) and
-# the ERP-origin stock import feed (connector/stock_import, RT-1287).
+# the ERP-origin stock import feed (connector/stock_import, RT-1287) and the ERP provisioning feed
+# (provisioner, RT-1359).
 # Checked by tools/contracts-check (`pins`): a Backend-Core change that breaks a pinned file fails.
 # Repinned by hand, from this repository only: set `commit:` to the new commit and each blob to
 # `git rev-parse <commit>:services/backend-core/packages/contracts/openapi/<path>`.
@@ -8,9 +9,13 @@ repo: Kemetra-Labs/Retail-Tower-Erp
 # RT-1114 (RT-1098 R-4a): repinned to the #519 squash commit on main (posting-feed 1.12.0-draft,
 # `voucher` in SaleTender.method), as #483 did for the POS after #479. stock-import.yaml catches up
 # to main.
-commit: 90e3660ec4435674b709f66959a218f919aa1207
+# RT-1359 (RT-1352 PC-A): repinned to the #564 squash commit on main for provisioning-feed.yaml,
+# the contract the tenant provisioner consumes; posting-feed.yaml catches up to main (RT-1367, #550,
+# additive return clawback and give-back; no Connector code change in this repin).
+commit: 4b08fead7b67e21ac5860c493f8336a7392eb11a
 source: services/backend-core/packages/contracts/openapi
 file: erpnext-connector/connector-health.yaml b0cc7095899e3d6c3b9ec7aa60c595a53861470a
-file: erpnext-connector/posting-feed.yaml 85e06c25d1c1ab7bc8a3fe7c847df15486c8f9cc
+file: erpnext-connector/posting-feed.yaml a01dff2c0d878716b4db5c52324ef8bdbfb17342
 file: erpnext-connector/stock-view.yaml 5257b47331e0bda7eb3d11011b7841bdbb0d9108
 file: erpnext-connector/stock-import.yaml d1a9c8dcd1e082240160204c94549259895cc63a
+file: erpnext-connector/provisioning-feed.yaml 61d274b9f66cd599d76a7ea2de487f8bba4bcc5c
