@@ -379,3 +379,39 @@ class TestSplitReturnReplay:
 	def test_a_split_row_of_another_item_is_still_a_mismatch(self):
 		rows = [("ITEM-A", "WH-ORIG", _A), ("ITEM-Z", "WH-ORIG", _A)]
 		assert check_existing(_split_return(), _invoice(*rows))
+
+
+def _give_back_return():
+	"""S3 step 2: the reward unit returned at its net with an 80.00 give-back (OD-11 Hybrid, RT-1340)."""
+	wi = _return(_A)
+	sale_line = dataclasses.replace(wi.sale.lines[0], unit_price="200.00", quantity="1", line_amount="120.00")
+	sale = dataclasses.replace(wi.sale, lines=(sale_line, *wi.sale.lines[1:]))
+	returned = dataclasses.replace(
+		wi.reversal_of.return_lines[0], quantity="1", line_amount="120.00", promotion_give_back_amount="80.00"
+	)
+	return dataclasses.replace(
+		wi, sale=sale, reversal_of=dataclasses.replace(wi.reversal_of, return_lines=(returned,))
+	)
+
+
+_GIVE_BACK_REF = f"{_A}#give-back"
+
+
+class TestGiveBackReplay:
+	"""The give-back row is stamped ``<lineRef>#give-back``: expected exactly once, never on another return."""
+
+	def test_a_give_back_return_with_its_give_back_row_matches(self):
+		rows = [("ITEM-A", "WH-ORIG", _A), ("RT-PROMO-GIVEBACK", "WH-ORIG", _GIVE_BACK_REF)]
+		assert check_existing(_give_back_return(), _invoice(*rows)) is None
+
+	def test_a_second_give_back_row_is_a_mismatch(self):
+		rows = [("ITEM-A", "WH-ORIG", _A)] + [("RT-PROMO-GIVEBACK", "WH-ORIG", _GIVE_BACK_REF)] * 2
+		assert "more times" in check_existing(_give_back_return(), _invoice(*rows))
+
+	def test_a_give_back_row_on_a_return_without_a_give_back_is_a_mismatch(self):
+		rows = [("ITEM-A", "WH-ORIG", _A), ("RT-PROMO-GIVEBACK", "WH-ORIG", _GIVE_BACK_REF)]
+		assert "not a line this work item posts" in check_existing(_return(_A), _invoice(*rows))
+
+	def test_a_missing_give_back_row_is_a_mismatch(self):
+		rows = [("ITEM-A", "WH-ORIG", _A)]
+		assert "no give-back row" in check_existing(_give_back_return(), _invoice(*rows))

@@ -88,10 +88,79 @@ def ensure_g5_indexes() -> None:
 
 def after_install() -> None:
 	ensure_g5_indexes()
+	ensure_give_back_item()
 
 
 def after_migrate() -> None:
 	ensure_g5_indexes()
+	ensure_give_back_item()
+
+
+# A fresh ERPNext site has these after its setup wizard; before it, the Item is created on a later migrate.
+# A leaf Item Group: "Services" (the give-back is not a product) when the site has it, else the first leaf.
+_GIVE_BACK_ITEM_GROUP = "Services"
+_GIVE_BACK_UOM = "Nos"
+_GIVE_BACK_SAVEPOINT = "rt_give_back_item"
+
+
+def ensure_give_back_item() -> None:
+	"""Create the fixed non-stock promotion give-back Item when it is missing (RT-1340, owner decision).
+
+	⏳ BENCH-VALIDATION. Idempotent: an existing Item is never changed, even a wrong one (the
+	Compatibility Profile warns about it and give-back returns stay ``failed_transient``). The Item is
+	inserted with ``set_name`` so a site whose Stock Settings ``item_naming_by`` is "Naming Series" still
+	names it ``RT-PROMO-GIVEBACK`` (ERPNext's ``Item.autoname`` would otherwise give it a series name
+	and overwrite ``item_code``). A failed insert is rolled back to its savepoint. Never fails
+	the migrate: unlike the G5 indexes, posting is safe without it, so a failure is logged at error and
+	the next migrate tries again.
+	"""
+	from .posting.give_back_item import GIVE_BACK_ITEM_CODE, GIVE_BACK_ITEM_NAME
+
+	try:
+		if frappe.db.exists("Item", GIVE_BACK_ITEM_CODE):
+			return
+		item_group = _give_back_item_group()
+		if not (item_group and frappe.db.exists("UOM", _GIVE_BACK_UOM)):
+			_log_give_back("give_back_item.deferred", "Item Group or UOM not set up yet (setup wizard)")
+			return
+		frappe.db.savepoint(_GIVE_BACK_SAVEPOINT)
+		frappe.get_doc(
+			{
+				"doctype": "Item",
+				"item_code": GIVE_BACK_ITEM_CODE,
+				"item_name": GIVE_BACK_ITEM_NAME,
+				"item_group": item_group,
+				"stock_uom": _GIVE_BACK_UOM,
+				"is_stock_item": 0,
+				"is_sales_item": 1,
+				"is_purchase_item": 0,
+				"include_item_in_manufacturing": 0,
+				"description": "Posted by the Retail Tower connector: a promotion discount given back on a "
+				"return after an earlier clawback (OD-11). Do not rename, disable or make it a stock Item.",
+			}
+		).insert(ignore_permissions=True, set_name=GIVE_BACK_ITEM_CODE)
+		frappe.db.commit()
+	except Exception as exc:  # the migrate must not fail for it; logged at error so operators see it
+		_rollback_give_back()
+		_log_give_back("give_back_item.ensure_failed", f"{type(exc).__name__}: {exc}")
+
+
+def _give_back_item_group() -> str | None:
+	"""A leaf Item Group for the give-back Item, or None before the setup wizard created any."""
+	leaf = frappe.db.get_value("Item Group", {"name": _GIVE_BACK_ITEM_GROUP, "is_group": 0}, "name")
+	return leaf or frappe.db.get_value("Item Group", {"is_group": 0}, "name", order_by="name asc")
+
+
+def _rollback_give_back() -> None:
+	"""Undo a half-written Item so the next migrate tries again (a missing savepoint is ignored)."""
+	try:
+		frappe.db.rollback(save_point=_GIVE_BACK_SAVEPOINT)
+	except Exception as exc:
+		_log_give_back("give_back_item.rollback_failed", f"{type(exc).__name__}: {exc}")
+
+
+def _log_give_back(event: str, detail: str) -> None:
+	frappe.logger("retail_tower_posting").error({"event": event, "detail": detail})
 
 
 def _ensure(doctype: str, index_name: str, columns: tuple[str, ...], create) -> None:

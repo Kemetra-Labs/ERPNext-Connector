@@ -324,3 +324,176 @@ class TestDiscountedLineReturn:
 		doc = _build(_discounted_return("100.00", "3", "300.00", "3", "300.00"))
 		assert len(doc["items"]) == 1
 		assert "discount_amount" not in doc["items"][0]
+
+
+_GIVE_BACK = rtb.GiveBackItem(item_code="RT-PROMO-GIVEBACK", uom="Nos")
+
+
+def _promotion_return(
+	unit_price, sold_qty, sold_net, ret_qty, ret_net, *, clawback=None, give_back=None, refund=None
+):
+	"""A return of sale line A carrying the feed 1.13.0-draft OD-11 amounts (RT-1367)."""
+	line = {"lineRef": _A, "quantity": ret_qty, "lineAmount": ret_net, "taxAmount": None}
+	if clawback is not None:
+		line["promotionClawbackAmount"] = clawback
+	if give_back is not None:
+		line["promotionGiveBackAmount"] = give_back
+	if refund is None:
+		refund = f"{Decimal(ret_net) - Decimal(clawback or 0) + Decimal(give_back or 0):f}"
+	work_item = _return(return_lines=[line], refund_tenders=[{"method": "cash", "amount": refund}])
+	line_a = dataclasses.replace(
+		work_item.sale.lines[0], unit_price=unit_price, quantity=sold_qty, line_amount=sold_net
+	)
+	sale = dataclasses.replace(work_item.sale, lines=(line_a, *work_item.sale.lines[1:]))
+	return dataclasses.replace(work_item, sale=sale)
+
+
+def _currency(work_item, code):
+	"""The same work item in another currency (the sale and every line)."""
+	lines = tuple(dataclasses.replace(line, currency_code=code) for line in work_item.sale.lines)
+	return dataclasses.replace(
+		work_item, sale=dataclasses.replace(work_item.sale, currency_code=code, lines=lines)
+	)
+
+
+def _build_with_give_back(work_item, give_back_item=_GIVE_BACK):
+	resolvers = rtb.ReturnResolvers(
+		uom_for=_uom,
+		warehouse_for=lambda store: {"doctype": "Warehouse", "name": "Main - RT"},
+		customer_for=lambda store: "Walk-in Customer - RT",
+		mode_of_payment_for=t.TenderModeMap({"cash": "Cash"}).resolve,
+		give_back_item=(lambda: give_back_item) if give_back_item is not None else None,
+	)
+	return rtb.build_return_invoice(work_item, resolvers)
+
+
+class TestPromotionClawback:
+	"""OD-11 option A (feed 1.13.0-draft): the clawback raises the per-unit discount of the returned line."""
+
+	def test_a1_return_the_full_price_unit_with_the_offer_clawed_back(self):
+		# Bench A1: the 300.00 unit is returned and the 80.00 offer discount is clawed back -> 220.00.
+		doc = _build(_promotion_return("300.00", "1", "300.00", "1", "300.00", clawback="80.00"))
+		assert _row(doc) == ("-1", "220.00", "300.00", "80.00", "-220.00")
+		assert doc["items"][0]["rt_line_ref"] == _A
+		assert doc["payments"] == [{"mode_of_payment": "Cash", "amount": "-220.00"}]
+
+	def test_a2_a_clawback_with_no_exact_unit_rate_splits_to_quantity_one_rows(self):
+		# Bench A2: 3 x 100.00 returned with 10.01 clawed back -> 96.66 + 96.66 + 96.67 = 289.99.
+		doc = _build(_promotion_return("100.00", "3", "300.00", "3", "300.00", clawback="10.01"))
+		assert [_row(doc, i) for i in range(3)] == [
+			("-1", "96.66", "100.00", "3.34", "-96.66"),
+			("-1", "96.66", "100.00", "3.34", "-96.66"),
+			("-1", "96.67", "100.00", "3.33", "-96.67"),
+		]
+		assert rtb.expected_row_counts(
+			_promotion_return("100.00", "3", "300.00", "3", "300.00", clawback="10.01")
+		) == {_A: 3}
+
+	def test_a_clawback_on_an_already_discounted_line_adds_to_its_discount(self):
+		# A line sold at 90.00 a unit (RT-857 10.00 off) loses a further 5.00 per unit on return.
+		doc = _build(_promotion_return("100.00", "2", "180.00", "2", "180.00", clawback="10.00"))
+		assert _row(doc) == ("-2", "85.00", "100.00", "15.00", "-170.00")
+
+	def test_a_clawback_at_three_decimals(self):
+		# OMR: 3 x 1.000 with 0.001 clawed back -> 2.999 over three rows, never off a baisa.
+		doc = _build(
+			_currency(_promotion_return("1.000", "3", "3.000", "3", "3.000", clawback="0.001"), "OMR")
+		)
+		assert [i["amount"] for i in doc["items"]] == ["-0.999", "-1.000", "-1.000"]
+
+	def test_a_clawback_at_zero_decimals(self):
+		doc = _build(_currency(_promotion_return("500", "2", "1000", "2", "1000", clawback="100"), "JPY"))
+		assert _row(doc) == ("-2", "450", "500", "50", "-900")
+
+	def test_a_zero_clawback_posts_like_no_clawback(self):
+		doc = _build(_promotion_return("100.00", "1", "100.00", "1", "100.00", clawback="0.00"))
+		assert _row(doc) == ("-1", "100.00", "100.00", "-", "-100.00")
+
+	def test_a_clawback_above_the_line_amount_is_refused(self):
+		with pytest.raises(rtb.PromotionAmountNotPostable, match="promotionClawbackAmount"):
+			_build(
+				_promotion_return("100.00", "1", "100.00", "1", "100.00", clawback="100.01", refund="0.00")
+			)
+
+	def test_a_clawback_finer_than_the_minor_unit_is_refused(self):
+		with pytest.raises(rtb.PromotionAmountNotPostable, match="minor unit"):
+			_build(
+				_promotion_return("100.00", "1", "100.00", "1", "100.00", clawback="0.005", refund="99.995")
+			)
+
+	def test_a_fractional_quantity_clawback_with_no_exact_rate_is_refused(self):
+		# A weighed line cannot be split to quantity 1: fail closed (recorded on RT-1340).
+		with pytest.raises(LineDiscountNotPostable, match="discount_not_divisible"):
+			_build(_promotion_return("100.00", "1", "100.00", "0.3", "30.00", clawback="0.01"))
+
+	def test_a_refund_that_ignores_the_clawback_fails_the_tender_check(self):
+		with pytest.raises(t.TenderMismatch):
+			_build(
+				_promotion_return("300.00", "1", "300.00", "1", "300.00", clawback="80.00", refund="300.00")
+			)
+
+
+class TestPromotionGiveBack:
+	"""OD-11 Hybrid (feed 1.13.0-draft): a give-back posts as a non-stock row next to the line at its net."""
+
+	def test_s3_step_2_the_reward_unit_at_its_net_plus_the_give_back_row(self):
+		# Golden S3 step 2: refund 200.00 = net 120.00 + give-back 80.00 (bench hybrid case).
+		doc = _build_with_give_back(
+			_promotion_return("200.00", "1", "120.00", "1", "120.00", give_back="80.00")
+		)
+		assert _row(doc, 0) == ("-1", "120.00", "200.00", "80.00", "-120.00")
+		assert doc["items"][1] == {
+			"item_code": "RT-PROMO-GIVEBACK",
+			"qty": "-1",
+			"uom": "Nos",
+			"rate": "80.00",
+			"price_list_rate": "80.00",
+			"amount": "-80.00",
+			"warehouse": "Main - RT",
+			"currency": "EGP",
+			"rt_line_ref": f"{_A}{rtb.GIVE_BACK_REF_SUFFIX}",
+			"description": f"Promotion give-back for sale line {_A}",
+		}
+		assert doc["payments"] == [{"mode_of_payment": "Cash", "amount": "-200.00"}]
+
+	def test_the_give_back_row_is_counted_once_for_replay(self):
+		work_item = _promotion_return("200.00", "1", "120.00", "1", "120.00", give_back="80.00")
+		assert rtb.expected_row_counts(work_item) == {_A: 1, f"{_A}{rtb.GIVE_BACK_REF_SUFFIX}": 1}
+
+	def test_a_give_back_above_the_discount_of_the_units_returned_is_refused(self):
+		with pytest.raises(rtb.PromotionAmountNotPostable, match="promotionGiveBackAmount"):
+			_build_with_give_back(
+				_promotion_return("200.00", "1", "120.00", "1", "120.00", give_back="80.01")
+			)
+
+	def test_a_give_back_finer_than_the_minor_unit_is_refused(self):
+		with pytest.raises(rtb.PromotionAmountNotPostable, match="minor unit"):
+			_build_with_give_back(
+				_promotion_return("200.00", "1", "120.00", "1", "120.00", give_back="0.001")
+			)
+
+	def test_a_give_back_without_a_configured_item_fails_closed(self):
+		with pytest.raises(rtb.GiveBackItemNotConfigured):
+			_build_with_give_back(
+				_promotion_return("200.00", "1", "120.00", "1", "120.00", give_back="80.00"),
+				give_back_item=None,
+			)
+
+	def test_a_return_without_a_give_back_never_asks_for_the_item(self):
+		doc = _build_with_give_back(
+			_promotion_return("300.00", "1", "300.00", "1", "300.00", clawback="80.00"), give_back_item=None
+		)
+		assert len(doc["items"]) == 1
+
+	def test_a_give_back_whose_stamp_would_overflow_rt_line_ref_is_refused(self):
+		work_item = _promotion_return("200.00", "1", "120.00", "1", "120.00", give_back="80.00")
+		long_ref = "x" * 55  # 55 + len("#give-back") = 65 > 64
+		sale_line = dataclasses.replace(work_item.sale.lines[0], line_ref=long_ref)
+		returned = dataclasses.replace(work_item.reversal_of.return_lines[0], line_ref=long_ref)
+		work_item = dataclasses.replace(
+			work_item,
+			sale=dataclasses.replace(work_item.sale, lines=(sale_line, *work_item.sale.lines[1:])),
+			reversal_of=dataclasses.replace(work_item.reversal_of, return_lines=(returned,)),
+		)
+		with pytest.raises(rtb.PromotionAmountNotPostable, match="over 64 characters"):
+			_build_with_give_back(work_item)

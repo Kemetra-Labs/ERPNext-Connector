@@ -341,6 +341,20 @@ class TestReturnLinkage:
 		with pytest.raises(sp.ReturnLineMismatch, match="ITEM-B"):
 			_link_return(_return_doc((_A, "ITEM-B", "-1")))
 
+	def test_a_give_back_row_is_left_unlinked_and_every_other_row_is_still_linked(self):
+		# OD-11 Hybrid (RT-1340): the non-stock give-back row has no original row to link to.
+		doc = _return_doc((_A, "ITEM-A", "-1"), (f"{_A}#give-back", "RT-PROMO-GIVEBACK", "-1"))
+		linked = _link_return(doc)
+		assert linked["items"][0]["sales_invoice_item"] == "row-a"
+		give_back = linked["items"][1]
+		assert "sales_invoice_item" not in give_back
+		assert (give_back["warehouse"], give_back["uom"]) == ("Map WH", "Current UOM")
+
+	def test_a_give_back_row_without_its_line_on_the_return_is_refused(self):
+		doc = _return_doc((_B, "ITEM-B", "-1"), (f"{_A}#give-back", "RT-PROMO-GIVEBACK", "-1"))
+		with pytest.raises(sp.ReturnLineMismatch, match="give-back"):
+			_link_return(doc)
+
 	def test_cannot_return_more_than_the_original_row_sold(self):
 		with pytest.raises(sp.ReturnLineMismatch, match="sold"):
 			_link_return(_return_doc((_A, "ITEM-A", "-3.5")))

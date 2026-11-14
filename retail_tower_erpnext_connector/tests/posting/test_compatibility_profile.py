@@ -364,3 +364,20 @@ class TestSchedulerTick:
 		# An unset tick adds no key (compatibility_profile.fingerprint), so a set one moves it.
 		unset = cp.evaluate(self._v16(scheduler_tick_s=None)).fingerprint
 		assert cp.evaluate(self._v16(scheduler_tick_s=60)).fingerprint != unset
+
+
+class TestGiveBackItem:
+	"""RT-1340: an unusable give-back Item is a warning (posting continues) and moves the fingerprint."""
+
+	def test_an_unusable_give_back_item_is_a_warning_not_critical(self):
+		result = cp.evaluate(_snapshot(give_back_item_problem="'RT-PROMO-GIVEBACK' is disabled"))
+		assert result.ok and result.status == "WARNING"
+		assert any("promotion give-back Item 'RT-PROMO-GIVEBACK' is disabled" in w for w in result.warnings)
+
+	def test_a_usable_item_leaves_the_fingerprint_unchanged_and_a_broken_one_moves_it(self):
+		healthy = cp.evaluate(_snapshot()).fingerprint
+		assert cp.evaluate(_snapshot(give_back_item_problem=None)).fingerprint == healthy
+		assert (
+			cp.evaluate(_snapshot(give_back_item_problem="'RT-PROMO-GIVEBACK' does not exist")).fingerprint
+			!= healthy
+		)

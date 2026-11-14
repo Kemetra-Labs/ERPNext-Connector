@@ -29,8 +29,9 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from decimal import Decimal
 
-from .contracts import PostingWorkItem
+from .contracts import GIVE_BACK_REF_SUFFIX, PostingWorkItem, is_give_back_ref
 from .representation_check import PREFIX, ExpectedInvoice, PersistedInvoice, check_representation
 
 # Reversal kinds whose rows are re-pointed at the original invoice's rows (and warehouses).
@@ -108,9 +109,18 @@ def _links_to_original(work_item: PostingWorkItem) -> bool:
 
 
 def _required_lines(work_item: PostingWorkItem) -> list[str]:
-	"""The frozen line refs the document must carry: a return's returned lines, else every sale line."""
+	"""The frozen line refs the document must carry: a return's returned lines, else every sale line.
+
+	A return with a promotion give-back (OD-11 Hybrid) also carries ``<lineRef>#give-back`` for that line.
+	"""
 	if _is_return(work_item):
-		return [line.line_ref for line in work_item.reversal_of.return_lines]
+		lines = work_item.reversal_of.return_lines
+		give_backs = [
+			line.line_ref + GIVE_BACK_REF_SUFFIX
+			for line in lines
+			if line.promotion_give_back_amount is not None and Decimal(line.promotion_give_back_amount) != 0
+		]
+		return [line.line_ref for line in lines] + give_backs
 	return [line.line_ref for line in work_item.sale.lines if line.line_ref]
 
 
@@ -182,7 +192,18 @@ def _stamped_mismatch(
 	duplicate = _first_unexpected_repeat(stamped, expected_rows)
 	if duplicate is not None:
 		return f"existing document carries line {duplicate} more times than this work item posts it"
+	missing = _first_missing_give_back(stamped, expected_rows)
+	if missing is not None:
+		return f"existing document carries no give-back row {missing}, which this work item posts"
 	return next(filter(None, (_stamped_line_mismatch(line, frozen, required) for line in stamped)), None)
+
+
+def _first_missing_give_back(stamped: list[InvoiceLine], expected_rows: Counter | None) -> str | None:
+	"""A give-back row (OD-11 Hybrid) the work item posts but the document lacks: its Item is not frozen,
+	so only its ref and count identify it, and a missing one would otherwise pass."""
+	counts = Counter(line.line_ref for line in stamped)
+	wanted = (ref for ref in (expected_rows or Counter()) if is_give_back_ref(ref))
+	return next((ref for ref in wanted if counts[ref] != expected_rows[ref]), None)
 
 
 def _first_unexpected_repeat(stamped: list[InvoiceLine], expected_rows: Counter | None) -> str | None:
@@ -194,6 +215,8 @@ def _first_unexpected_repeat(stamped: list[InvoiceLine], expected_rows: Counter 
 def _stamped_line_mismatch(line: InvoiceLine, frozen: dict[str, str], required: list[str]) -> str | None:
 	if line.line_ref not in required:
 		return f"existing line {line.line_ref} is not a line this work item posts"
+	if is_give_back_ref(line.line_ref):
+		return None  # the configured give-back Item is not frozen on the work item; the ref and count are
 	if line.item_code != frozen.get(line.line_ref):
 		return (
 			f"existing line {line.line_ref} is item {line.item_code!r}, frozen {frozen.get(line.line_ref)!r}"

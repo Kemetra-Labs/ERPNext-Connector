@@ -56,6 +56,13 @@ def _site():
 			("Mode of Payment", "Cash"): {"enabled": 1},
 			("Sales Taxes and Charges Template", "VAT 14%"): {"disabled": 0},
 			("Sales Taxes and Charges Template", "Empty Tax"): {"disabled": 0},
+			# RT-1340: the fixed promotion give-back Item, as ensure_give_back_item creates it.
+			("Item", "RT-PROMO-GIVEBACK"): {
+				"disabled": 0,
+				"is_stock_item": 0,
+				"is_sales_item": 1,
+				"stock_uom": "Nos",
+			},
 		},
 		"lists": {
 			"Custom Field": [{"name": n} for n in _CUSTOM_FIELDS],
@@ -364,6 +371,29 @@ class TestRunPreflight:
 		assert doctype == "Connector Settings" and update_modified is False
 		assert values["compatibility_status"] == "OK" and len(values["compatibility_fingerprint"]) == 64
 		assert "compatibility_checked_at" in values and values["compatibility_report"].startswith("OK")
+
+	@pytest.mark.parametrize(
+		("row", "why"),
+		[
+			(None, "does not exist"),
+			({"disabled": 0, "is_stock_item": 1, "is_sales_item": 1, "stock_uom": "Nos"}, "is a stock Item"),
+			(
+				{"disabled": 0, "is_stock_item": 0, "is_sales_item": 0, "stock_uom": "Nos"},
+				"is not a sales Item",
+			),
+		],
+	)
+	def test_an_unusable_give_back_item_warns_but_posting_continues(self, load_glue, row, why):
+		# RT-1340 owner decision: a warning, never a critical finding that would pause all posting.
+		site = _site()
+		site["records"].pop(("Item", "RT-PROMO-GIVEBACK"))
+		if row is not None:
+			site["records"][("Item", "RT-PROMO-GIVEBACK")] = row
+		fake = _Frappe(site)
+		assert load_glue(fake).run_preflight(_Settings(), _MAPS) is True
+		((_, values, _),) = fake.writes
+		assert values["compatibility_status"] == "WARNING"
+		assert f"promotion give-back Item 'RT-PROMO-GIVEBACK' {why}" in values["compatibility_report"]
 
 	def test_the_first_evaluation_logs_a_baseline(self, load_glue):
 		fake = _Frappe(_site())

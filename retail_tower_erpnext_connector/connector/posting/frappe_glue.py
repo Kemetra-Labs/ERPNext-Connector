@@ -45,6 +45,7 @@ from .batch_policy import (
 )
 from .builder import LineDiscountNotPostable, SaleTaxNotPosted, UnmappedUnit, build_sales_invoice
 from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
+from .give_back_item import GIVE_BACK_ITEM_CODE, GIVE_BACK_ITEM_FIELDS, resolve_give_back_item
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
 from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
@@ -58,7 +59,10 @@ from .representation_check import (
 )
 from .resolution_check import InvoiceLine, InvoiceSnapshot, check_existing, check_replayed_representation
 from .return_builder import (
+	GiveBackItem,
+	GiveBackItemNotConfigured,
 	MissingRefundTenders,
+	PromotionAmountNotPostable,
 	ReturnResolvers,
 	ReturnTaxNotPosted,
 	build_return_invoice,
@@ -309,6 +313,7 @@ def _replay_expected(work_item: PostingWorkItem, company: str | None) -> Expecte
 			warehouses=_WarehouseNotCompared(),
 			customers=stand_in,
 			tenders=stand_in,
+			give_back_item=_give_back_item_not_compared,
 		)
 		payload = {**payload, "company": company}
 	else:
@@ -561,6 +566,7 @@ _REVERSAL_BUILD_VALIDATION_ERRORS = (
 	SaleTaxNotPosted,  # RT-1312 F5: ... and so inherits its tax guard
 	MissingRefundTenders,
 	ReturnTaxNotPosted,
+	PromotionAmountNotPostable,  # OD-11 (RT-1340): a clawback or give-back above its bound or off the minor unit
 )
 
 
@@ -734,6 +740,10 @@ def _build_or_reject(
 	try:
 		return build()
 	except _transient_exceptions() as exc:
+		return _ack_transient(client, work_item, correlation_id, exc)
+	except GiveBackItemNotConfigured as exc:
+		# RT-1340 owner decision: a missing or wrong give-back Item is re-offered, not rejected (the
+		# Compatibility Profile warns; Backend-Core's retry budget bounds the wait).
 		return _ack_transient(client, work_item, correlation_id, exc)
 	except UnmappedUnit as exc:
 		return _reject(client, work_item, correlation_id, FailureKind.UNMAPPED_UNIT, _exception_message(exc))
@@ -1257,7 +1267,7 @@ def _guard_tracked_items(
 	"""
 	try:
 		tracking = _read_item_tracking(doc_payload)
-		lines = line_tracking(work_item)
+		lines = line_tracking(work_item, doc_payload)
 		assert_tracking_postable(doc_payload, lines, tracking)
 		if doc_payload.get("is_return"):
 			original_batches = _read_original_batches(doc_payload, tracking)
@@ -1392,11 +1402,14 @@ def _build_reversal(
 	warehouses: PreResolvedWarehouse,
 	customers: StoreCustomerMap,
 	tenders: TenderModeMap,
+	give_back_item=None,
 ) -> dict:
 	"""The pure reversing payload: a partial return (RT-16) or a void/refund credit note.
 
 	A void takes no tender map (its Modes of Payment come from the original invoice, RT-78); a
 	return pays its refund out through the CURRENT map (a new cash payout, RT-10 D6).
+	``give_back_item`` defaults to the live, checked give-back Item (RT-1340); the replay rebuild
+	passes :func:`_give_back_item_not_compared` instead.
 	"""
 	if work_item.reversal_of is not None and work_item.reversal_of.reversal_kind == "return":
 		resolvers = ReturnResolvers(
@@ -1404,6 +1417,7 @@ def _build_reversal(
 			warehouse_for=_warehouse_for(work_item, warehouses),
 			customer_for=customers.for_store,
 			mode_of_payment_for=tenders.resolve,
+			give_back_item=give_back_item or _give_back_item,
 		)
 		return build_return_invoice(work_item, resolvers, posting_stamp=stamp)
 	return build_reversing_invoice(
@@ -1413,6 +1427,22 @@ def _build_reversal(
 		customer_for=customers.for_store,
 		posting_stamp=stamp,
 	)
+
+
+def _give_back_item() -> GiveBackItem:
+	"""The fixed promotion give-back Item and its stock UOM (OD-11 Hybrid, RT-1340). ⏳ BENCH-VALIDATION.
+
+	Read only when a returned line carries a give-back; a missing, disabled or stock Item raises
+	:class:`GiveBackItemNotConfigured`, which the build maps to ``failed_transient``.
+	"""
+	row = frappe.db.get_value("Item", GIVE_BACK_ITEM_CODE, GIVE_BACK_ITEM_FIELDS, as_dict=True)
+	return resolve_give_back_item(row)
+
+
+def _give_back_item_not_compared() -> GiveBackItem:
+	"""The give-back Item for the RT-378 replay rebuild: only its fixed code is compared (``uom`` is
+	exempt), so an already-posted return stays verifiable after the Item is disabled or changed."""
+	return GiveBackItem(item_code=GIVE_BACK_ITEM_CODE, uom="")
 
 
 def _link_to_original(kind: str, doc_payload: dict, original: dict) -> dict:

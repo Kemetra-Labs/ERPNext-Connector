@@ -339,3 +339,34 @@ class TestLineTracking:
 			"refundTenders": [{"method": "cash", "amount": "20.00"}],
 		}
 		assert bp.line_tracking(_work_item("reversal", reversal)) == (_lt("none"), _lt("batch", "B1"))
+
+	def test_with_the_credit_note_a_return_follows_its_rows(self):
+		# RT-1340: a split line repeats its intent per row; a give-back row is untracked.
+		reversal = {
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-1",
+			"reversalKind": "return",
+			"recordedAt": "2026-06-02T10:00:00Z",
+			"businessDate": "2026-06-02",
+			"returnLines": [{"lineRef": _A, "quantity": "2", "lineAmount": "10.00"}],
+			"refundTenders": [{"method": "cash", "amount": "10.00"}],
+		}
+		doc = {"items": [{"rt_line_ref": _A}, {"rt_line_ref": _A}, {"rt_line_ref": f"{_A}#give-back"}]}
+		assert bp.line_tracking(_work_item("reversal", reversal), doc) == (
+			_lt("batch", "B1"),
+			_lt("batch", "B1"),
+			bp.LineTracking(None, None),
+		)
+
+	def test_a_credit_note_row_of_no_sale_line_is_refused(self):
+		reversal = {
+			"sourceSystem": "pos-pulse",
+			"externalId": "POS-1",
+			"reversalKind": "return",
+			"recordedAt": "2026-06-02T10:00:00Z",
+			"businessDate": "2026-06-02",
+			"returnLines": [{"lineRef": _A, "quantity": "1", "lineAmount": "10.00"}],
+			"refundTenders": [{"method": "cash", "amount": "10.00"}],
+		}
+		with pytest.raises(bp.ReturnLineMismatch):
+			bp.line_tracking(_work_item("reversal", reversal), {"items": [{"rt_line_ref": "stray"}]})

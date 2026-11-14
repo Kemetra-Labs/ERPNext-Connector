@@ -41,6 +41,8 @@ import copy
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 
+from .contracts import GIVE_BACK_REF_SUFFIX, is_give_back_ref
+
 
 class UnsupportedTrackedItem(Exception):
 	"""A serial-tracked Item on a stock-moving document (RT-47 D4 fail-closed; batch Items: RT-452)."""
@@ -199,11 +201,19 @@ def link_return_to_original(
 	invoice's own rows (the glue filters by parent), each with ``rt_line_ref``. An original posted
 	before RT-16 carries no line refs and fails closed (:class:`ReturnLineMismatch`): the owner chose
 	identity over positional pairing (D6).
+
+	A promotion give-back row (OD-11 Hybrid, RT-1340; stamped ``<lineRef>#give-back``) is a non-stock
+	Item that is not on the original invoice: it is left unlinked, keeps the warehouse and UOM the
+	builder gave it, and its own returned line must be on this credit note.
 	"""
 	if not doc.get("is_return"):
 		raise ValueError("link_return_to_original expects a return (is_return=1) document")
 	out = copy.deepcopy(dict(doc))
+	returned_refs = {line.get("rt_line_ref") for line in out.get("items") or []}
 	for pos, line in enumerate(out.get("items") or [], start=1):
+		if is_give_back_ref(line.get("rt_line_ref")):
+			_check_give_back_row(pos, line, returned_refs)
+			continue
 		row = _row_for_line_ref(pos, line, original_items)
 		_check_return_row(pos, line, row)
 		line["sales_invoice_item"] = row["name"]
@@ -228,6 +238,15 @@ def mirror_company(doc: Mapping[str, object], original_company: str | None) -> d
 			"the original invoice carries no company — the credit note's company is unknown"
 		)
 	return {**doc, "company": original_company}
+
+
+def _check_give_back_row(pos: int, line: Mapping[str, object], returned_refs: set) -> None:
+	"""A give-back row belongs to a returned line of this credit note; fail closed otherwise."""
+	ref = str(line["rt_line_ref"])[: -len(GIVE_BACK_REF_SUFFIX)]
+	if ref not in returned_refs:
+		raise ReturnLineMismatch(
+			f"return line {pos}: give-back row for line {ref!r}, which this credit note does not return"
+		)
 
 
 def _row_for_line_ref(pos: int, line: Mapping[str, object], rows: Sequence[Mapping[str, object]]):

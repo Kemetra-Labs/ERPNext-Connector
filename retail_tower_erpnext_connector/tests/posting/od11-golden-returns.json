@@ -1,0 +1,508 @@
+{
+ "source": "Hand-copied from services/backend-core/packages/contracts/fixtures/offers/golden-vectors.json (Backend-Core RT-1367, PR #550, golden vectors). Connector-owned copy: never read the Backend-Core file at test time (MR boundary). returnLines.lineAmount is the cumulative-difference price of the returned units.",
+ "cases": [
+  {
+   "id": "R1",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "100.00",
+     "quantity": "1",
+     "lineAmount": "100.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "60.00",
+     "quantity": "1",
+     "lineAmount": "60.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000003",
+     "unitPrice": "40.00",
+     "quantity": "1",
+     "lineAmount": "24.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000003",
+     "quantity": "1",
+     "lineAmount": "24.00"
+    }
+   ],
+   "refund": "24.00"
+  },
+  {
+   "id": "R2",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "100.00",
+     "quantity": "1",
+     "lineAmount": "100.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "60.00",
+     "quantity": "1",
+     "lineAmount": "60.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000003",
+     "unitPrice": "40.00",
+     "quantity": "1",
+     "lineAmount": "24.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000001",
+     "quantity": "1",
+     "lineAmount": "100.00"
+    }
+   ],
+   "refund": "100.00"
+  },
+  {
+   "id": "R3",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "300.00",
+     "quantity": "1",
+     "lineAmount": "300.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "200.00",
+     "quantity": "1",
+     "lineAmount": "120.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000001",
+     "quantity": "1",
+     "lineAmount": "300.00",
+     "promotionClawbackAmount": "80.00"
+    }
+   ],
+   "refund": "220.00"
+  },
+  {
+   "id": "R4",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "100.00",
+     "quantity": "1",
+     "lineAmount": "100.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "80.00",
+     "quantity": "1",
+     "lineAmount": "80.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000003",
+     "unitPrice": "60.00",
+     "quantity": "1",
+     "lineAmount": "36.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000004",
+     "unitPrice": "40.00",
+     "quantity": "1",
+     "lineAmount": "24.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000001",
+     "quantity": "1",
+     "lineAmount": "100.00",
+     "promotionClawbackAmount": "24.00"
+    }
+   ],
+   "refund": "76.00"
+  },
+  {
+   "id": "R5",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "100.00",
+     "quantity": "1",
+     "lineAmount": "100.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "60.00",
+     "quantity": "1",
+     "lineAmount": "60.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000003",
+     "unitPrice": "40.00",
+     "quantity": "1",
+     "lineAmount": "24.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000001",
+     "quantity": "1",
+     "lineAmount": "100.00"
+    },
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000002",
+     "quantity": "1",
+     "lineAmount": "60.00"
+    },
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000003",
+     "quantity": "1",
+     "lineAmount": "24.00"
+    }
+   ],
+   "refund": "184.00"
+  },
+  {
+   "id": "R7",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "50.00",
+     "quantity": "1",
+     "lineAmount": "50.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "40.00",
+     "quantity": "1",
+     "lineAmount": "0.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000003",
+     "unitPrice": "30.00",
+     "quantity": "1",
+     "lineAmount": "0.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000001",
+     "quantity": "1",
+     "lineAmount": "50.00"
+    },
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000002",
+     "quantity": "1",
+     "lineAmount": "0.00"
+    },
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000003",
+     "quantity": "1",
+     "lineAmount": "0.00"
+    }
+   ],
+   "refund": "50.00"
+  },
+  {
+   "id": "R8",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "100.00",
+     "quantity": "3",
+     "lineAmount": "300.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "100.00",
+     "quantity": "1",
+     "lineAmount": "60.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000002",
+     "quantity": "1",
+     "lineAmount": "60.00"
+    }
+   ],
+   "refund": "60.00"
+  },
+  {
+   "id": "R9",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "100.00",
+     "quantity": "3",
+     "lineAmount": "300.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "100.00",
+     "quantity": "1",
+     "lineAmount": "60.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000001",
+     "quantity": "1",
+     "lineAmount": "100.00"
+    }
+   ],
+   "refund": "100.00"
+  },
+  {
+   "id": "S1-y-greater-than-x#1",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "50.00",
+     "quantity": "1",
+     "lineAmount": "50.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "40.00",
+     "quantity": "1",
+     "lineAmount": "0.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000003",
+     "unitPrice": "30.00",
+     "quantity": "1",
+     "lineAmount": "0.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000002",
+     "quantity": "1",
+     "lineAmount": "0.00"
+    },
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000003",
+     "quantity": "1",
+     "lineAmount": "0.00"
+    }
+   ],
+   "refund": "0.00"
+  },
+  {
+   "id": "S1-y-greater-than-x#2",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "50.00",
+     "quantity": "1",
+     "lineAmount": "50.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "40.00",
+     "quantity": "1",
+     "lineAmount": "0.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000003",
+     "unitPrice": "30.00",
+     "quantity": "1",
+     "lineAmount": "0.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000001",
+     "quantity": "1",
+     "lineAmount": "50.00"
+    }
+   ],
+   "refund": "50.00"
+  },
+  {
+   "id": "S2-three-returns#1",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "100.00",
+     "quantity": "1",
+     "lineAmount": "100.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "80.00",
+     "quantity": "1",
+     "lineAmount": "80.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000003",
+     "unitPrice": "60.00",
+     "quantity": "1",
+     "lineAmount": "36.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000004",
+     "unitPrice": "40.00",
+     "quantity": "1",
+     "lineAmount": "24.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000004",
+     "quantity": "1",
+     "lineAmount": "24.00"
+    }
+   ],
+   "refund": "24.00"
+  },
+  {
+   "id": "S2-three-returns#2",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "100.00",
+     "quantity": "1",
+     "lineAmount": "100.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "80.00",
+     "quantity": "1",
+     "lineAmount": "80.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000003",
+     "unitPrice": "60.00",
+     "quantity": "1",
+     "lineAmount": "36.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000004",
+     "unitPrice": "40.00",
+     "quantity": "1",
+     "lineAmount": "24.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000003",
+     "quantity": "1",
+     "lineAmount": "36.00"
+    }
+   ],
+   "refund": "36.00"
+  },
+  {
+   "id": "S2-three-returns#3",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "100.00",
+     "quantity": "1",
+     "lineAmount": "100.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "80.00",
+     "quantity": "1",
+     "lineAmount": "80.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000003",
+     "unitPrice": "60.00",
+     "quantity": "1",
+     "lineAmount": "36.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000004",
+     "unitPrice": "40.00",
+     "quantity": "1",
+     "lineAmount": "24.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000001",
+     "quantity": "1",
+     "lineAmount": "100.00"
+    }
+   ],
+   "refund": "100.00"
+  },
+  {
+   "id": "S3-clawback-then-reward#1",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "300.00",
+     "quantity": "1",
+     "lineAmount": "300.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "200.00",
+     "quantity": "1",
+     "lineAmount": "120.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000001",
+     "quantity": "1",
+     "lineAmount": "300.00",
+     "promotionClawbackAmount": "80.00"
+    }
+   ],
+   "refund": "220.00"
+  },
+  {
+   "id": "S3-clawback-then-reward#2",
+   "currencyCode": "EGP",
+   "saleLines": [
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000001",
+     "unitPrice": "300.00",
+     "quantity": "1",
+     "lineAmount": "300.00"
+    },
+    {
+     "saleLineRef": "0d000000-0000-7000-8000-000000000002",
+     "unitPrice": "200.00",
+     "quantity": "1",
+     "lineAmount": "120.00"
+    }
+   ],
+   "returnLines": [
+    {
+     "lineRef": "0d000000-0000-7000-8000-000000000002",
+     "quantity": "1",
+     "lineAmount": "120.00",
+     "promotionGiveBackAmount": "80.00"
+    }
+   ],
+   "refund": "200.00"
+  }
+ ]
+}

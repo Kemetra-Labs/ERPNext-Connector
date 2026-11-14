@@ -652,6 +652,34 @@ class TestReturnReversal:
 		with pytest.raises(ValueError, match="lineAmount"):
 			c.PostingWorkItem.from_wire(_return_wire(returnLines=lines))
 
+	def test_parses_the_od11_promotion_amounts(self):
+		# Feed 1.13.0-draft (RT-1367): optional, non-negative, omitted when 0.
+		lines = [
+			{
+				"lineRef": _LINE_A,
+				"quantity": "1",
+				"lineAmount": "100.00",
+				"taxAmount": None,
+				"promotionClawbackAmount": "20.00",
+				"promotionGiveBackAmount": "5.00",
+			}
+		]
+		line = c.PostingWorkItem.from_wire(_return_wire(returnLines=lines)).reversal_of.return_lines[0]
+		assert (line.promotion_clawback_amount, line.promotion_give_back_amount) == ("20.00", "5.00")
+
+	def test_the_promotion_amounts_default_to_none(self):
+		line = c.PostingWorkItem.from_wire(_return_wire()).reversal_of.return_lines[0]
+		assert (line.promotion_clawback_amount, line.promotion_give_back_amount) == (None, None)
+
+	@pytest.mark.parametrize("field", ["promotionClawbackAmount", "promotionGiveBackAmount"])
+	@pytest.mark.parametrize("amount", ["-1.00", "1.12345", 1.0, None, ""])
+	def test_a_promotion_amount_must_be_a_non_negative_exact_decimal(self, field, amount):
+		lines = [
+			{"lineRef": _LINE_A, "quantity": "1", "lineAmount": "100.00", "taxAmount": None, field: amount}
+		]
+		with pytest.raises(ValueError, match=field):
+			c.PostingWorkItem.from_wire(_return_wire(returnLines=lines))
+
 	def test_duplicate_line_ref_in_one_return_is_malformed(self):
 		one = {"lineRef": _LINE_A, "quantity": "1", "lineAmount": "100.00", "taxAmount": None}
 		with pytest.raises(ValueError, match="duplicate"):

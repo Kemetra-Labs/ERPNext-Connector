@@ -114,6 +114,8 @@ class _Frappe(types.ModuleType):
 		self.original_company = "Original Co"
 		self.posted_company = "Original Co"  # RT-378 replay: the already-posted return's company
 		self.duplicate = False  # RT-458: the return already exists under its provenance (crash window)
+		# RT-1340: the fixed promotion give-back Item as read back (None = missing).
+		self.give_back_row = {"disabled": 0, "is_stock_item": 0, "is_sales_item": 1, "stock_uom": "Unit"}
 		self._rows = [
 			{
 				"name": "row-a",
@@ -146,6 +148,12 @@ class _Frappe(types.ModuleType):
 		self.utils = types.SimpleNamespace(get_system_timezone=lambda: "UTC")
 
 	def _get_value(self, doctype, filters, fields, **_):
+		if doctype == "Item":  # RT-1340: the give-back Item lookup
+			assert (filters, fields) == (
+				"RT-PROMO-GIVEBACK",
+				["disabled", "is_stock_item", "is_sales_item", "stock_uom"],
+			)
+			return self.give_back_row
 		if isinstance(filters, dict):  # provenance lookups
 			if filters.get("rt_external_id") == "POS-9001" and filters.get("docstatus") == 1:
 				return _ORIGINAL  # the original sale's invoice
@@ -640,3 +648,76 @@ class TestReversalHelperBranches:
 		}
 		assert fake.payloads == []
 		assert store.writes == []
+
+
+def _give_back_return():
+	"""S3-shaped return of one unit of line A at its net 60.00 with a 40.00 give-back (OD-11 Hybrid)."""
+	work_item = _return(refund=(("cash", "100.00"),))
+	returned = dataclasses.replace(
+		work_item.reversal_of.return_lines[0], line_amount="60.00", promotion_give_back_amount="40.00"
+	)
+	return dataclasses.replace(
+		work_item, reversal_of=dataclasses.replace(work_item.reversal_of, return_lines=(returned,))
+	)
+
+
+class TestPromotionGiveBackInGlue:
+	"""RT-1340: the give-back row posts on the fixed Item, unlinked; an unusable Item is re-offered."""
+
+	def test_a_give_back_posts_an_unlinked_row_on_the_fixed_item(self, load_glue):
+		fake = _Frappe()
+		outcome, client, _ = _post(load_glue(fake), _give_back_return())
+		assert outcome == "posted" and client.acks[0]["outcome"] == "posted"
+		(payload,) = fake.payloads
+		reward, give_back = payload["items"]
+		assert (reward["amount"], reward["sales_invoice_item"]) == ("-60.00", "row-a")
+		assert give_back["item_code"] == "RT-PROMO-GIVEBACK"
+		assert (give_back["qty"], give_back["rate"], give_back["amount"]) == ("-1", "40.00", "-40.00")
+		assert "sales_invoice_item" not in give_back
+		assert (give_back["uom"], give_back["warehouse"]) == ("Unit", "Map WH")  # its own stock UOM
+		assert give_back["rt_line_ref"] == f"{_A}#give-back"
+		assert payload["payments"] == [{"mode_of_payment": "Cash", "amount": "-100.00"}]
+
+	@pytest.mark.parametrize(
+		"row",
+		[
+			None,
+			{"disabled": 1, "is_stock_item": 0, "stock_uom": "Nos"},
+			{"disabled": 0, "is_stock_item": 1, "stock_uom": "Nos"},
+		],
+	)
+	def test_an_unusable_give_back_item_is_re_offered_and_nothing_is_inserted(self, load_glue, row):
+		fake = _Frappe()
+		fake.give_back_row = row
+		outcome, client, _ = _post(load_glue(fake), _give_back_return())
+		assert outcome == "failed_transient" and client.acks[0]["outcome"] == "failed_transient"
+		assert fake.payloads == []
+
+	def test_a_return_without_a_give_back_never_reads_the_item(self, load_glue):
+		fake = _Frappe()
+		fake.give_back_row = None  # would re-offer if it were read
+		outcome, _, _ = _post(load_glue(fake), _return())
+		assert outcome == "posted"
+
+
+def _split_return():
+	"""All 3 units of line A returned for 289.99: three quantity-1 rows (RT-1340 F3, bench A2)."""
+	work_item = _return(refund=(("cash", "289.99"),))
+	returned = dataclasses.replace(work_item.reversal_of.return_lines[0], quantity="3", line_amount="289.99")
+	return dataclasses.replace(
+		work_item, reversal_of=dataclasses.replace(work_item.reversal_of, return_lines=(returned,))
+	)
+
+
+class TestSplitReturnInGlue:
+	def test_a_split_return_posts_every_row_linked_to_the_original_row(self, load_glue):
+		# The RT-452 tracking check counted one row per returned line and refused the split (RT-1340).
+		fake = _Frappe()
+		outcome, client, _ = _post(load_glue(fake), _split_return())
+		assert outcome == "posted", client.acks
+		(payload,) = fake.payloads
+		assert [(i["amount"], i["sales_invoice_item"]) for i in payload["items"]] == [
+			("-96.66", "row-a"),
+			("-96.66", "row-a"),
+			("-96.67", "row-a"),
+		]

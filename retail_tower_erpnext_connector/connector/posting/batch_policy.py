@@ -38,7 +38,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
-from .contracts import PostingWorkItem
+from .contracts import PostingWorkItem, is_give_back_ref
 from .stock_policy import ReturnLineMismatch, UnsupportedTrackedItem
 
 
@@ -58,19 +58,40 @@ class LineTracking:
 	batch_ref: str | None
 
 
-def line_tracking(work_item: PostingWorkItem) -> tuple[LineTracking, ...]:
+_UNTRACKED = LineTracking(None, None)
+
+
+def line_tracking(
+	work_item: PostingWorkItem, doc: Mapping[str, object] | None = None
+) -> tuple[LineTracking, ...]:
 	"""The tracking intent per invoice row, in the row order the builders emit.
 
 	A sale, a void or a refund has one row per sale line; a ``return`` has one row per returned line,
 	which points at its sale line by ``lineRef`` (checked when the work item was parsed).
+
+	With the built credit note ``doc``, a return's intents follow its ROWS by ``rt_line_ref`` instead
+	(RT-1340): a discounted line split into quantity-1 rows repeats its line's intent on each row, and
+	a promotion give-back row (non-stock, ``<lineRef>#give-back``) is untracked.
 	"""
 	sale = work_item.sale
 	ref = work_item.reversal_of
 	lines = sale.lines
 	if ref is not None and ref.reversal_kind == "return":
 		by_ref = {line.line_ref: line for line in sale.lines}
+		if doc is not None:
+			return tuple(_row_tracking(item, by_ref) for item in doc.get("items") or [])  # type: ignore[union-attr]
 		lines = tuple(by_ref[returned.line_ref] for returned in ref.return_lines)
 	return tuple(LineTracking(line.tracking_mode, line.erpnext_batch_ref) for line in lines)
+
+
+def _row_tracking(item: Mapping[str, object], by_ref: Mapping[object, object]) -> LineTracking:
+	ref = item.get("rt_line_ref")
+	if is_give_back_ref(ref):
+		return _UNTRACKED
+	line = by_ref.get(ref)
+	if line is None:
+		raise ReturnLineMismatch(f"credit note row for rt_line_ref {ref!r} names no line of the sale")
+	return LineTracking(line.tracking_mode, line.erpnext_batch_ref)
 
 
 def is_batch_item(flags: Mapping[str, object] | None) -> bool:

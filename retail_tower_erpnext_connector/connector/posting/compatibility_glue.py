@@ -117,7 +117,17 @@ def read_snapshot(settings, maps: Mapping[str, Mapping]) -> SiteSnapshot:
 		blockers=_disabled_pos_templates(pos),
 		default_tax_templates=_default_templates(company) if company else (),
 		scheduler_tick_s=_scheduler_tick(),
+		give_back_item_problem=_give_back_item_problem(),
 	)
+
+
+def _give_back_item_problem() -> str | None:
+	"""⏳ BENCH-VALIDATION. ``'<code>' <why>`` when the fixed give-back Item cannot be used (RT-1340)."""
+	from .give_back_item import GIVE_BACK_ITEM_CODE, GIVE_BACK_ITEM_FIELDS, give_back_item_problem
+
+	row = frappe.db.get_value("Item", GIVE_BACK_ITEM_CODE, GIVE_BACK_ITEM_FIELDS, as_dict=True)
+	problem = give_back_item_problem(row)
+	return None if problem is None else f"{GIVE_BACK_ITEM_CODE!r} {problem}"
 
 
 def _scheduler_tick() -> int | None:

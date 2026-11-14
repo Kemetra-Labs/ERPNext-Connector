@@ -168,6 +168,16 @@ def _non_negative_amount(wire: Mapping[str, object], field: str, name: str) -> s
 	return value
 
 
+# OD-11 Hybrid (RT-1340): the rt_line_ref a promotion give-back row is stamped with is its reward line's
+# lineRef plus this suffix (46 of the custom field's 64 characters). It names no sale line.
+GIVE_BACK_REF_SUFFIX = "#give-back"
+
+
+def is_give_back_ref(line_ref: object) -> bool:
+	"""Whether an ``rt_line_ref`` stamps a promotion give-back row rather than a sale line."""
+	return isinstance(line_ref, str) and line_ref.endswith(GIVE_BACK_REF_SUFFIX)
+
+
 @dataclass(frozen=True)
 class ReturnLine:
 	"""012 ``ReturnLine`` (RT-14 D1): one returned sale line, priced by Backend-Core.
@@ -175,12 +185,19 @@ class ReturnLine:
 	Non-negative MAGNITUDES (the connector negates them on the credit note); ``line_ref`` points at
 	``sale.lines[].lineRef``. Backend-Core prices it by the cumulative-difference rule, so a line's
 	returns sum to its amount exactly.
+
+	Feed 1.13.0-draft (OD-11, RT-1367): ``promotion_clawback_amount`` is this line's part of an offer
+	discount clawed back on the return (option A), ``promotion_give_back_amount`` the discount of an
+	earlier clawback this reward line gives back (Hybrid). Both are optional non-negative magnitudes,
+	omitted when 0 (``None``); Backend-Core allocates them and the connector never works them out.
 	"""
 
 	line_ref: str
 	quantity: str
 	line_amount: str
 	tax_amount: str | None = None
+	promotion_clawback_amount: str | None = None
+	promotion_give_back_amount: str | None = None
 
 	@classmethod
 	def from_wire(cls, wire: object) -> ReturnLine:
@@ -199,7 +216,19 @@ class ReturnLine:
 		tax_amount = (
 			None if w.get("taxAmount") is None else _non_negative_amount(w, "taxAmount", "ReturnLine")
 		)
-		return cls(line_ref=line_ref, quantity=quantity, line_amount=line_amount, tax_amount=tax_amount)
+		return cls(
+			line_ref=line_ref,
+			quantity=quantity,
+			line_amount=line_amount,
+			tax_amount=tax_amount,
+			promotion_clawback_amount=_optional_amount(w, "promotionClawbackAmount"),
+			promotion_give_back_amount=_optional_amount(w, "promotionGiveBackAmount"),
+		)
+
+
+def _optional_amount(wire: Mapping[str, object], field: str) -> str | None:
+	"""An optional ``ReturnLine`` amount: absent is ``None``; present must be a non-negative decimal string."""
+	return _non_negative_amount(wire, field, "ReturnLine") if field in wire else None
 
 
 @dataclass(frozen=True)
