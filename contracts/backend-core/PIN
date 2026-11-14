@@ -17,5 +17,9 @@ source: services/backend-core/packages/contracts/openapi
 file: erpnext-connector/connector-health.yaml b0cc7095899e3d6c3b9ec7aa60c595a53861470a
 file: erpnext-connector/posting-feed.yaml a01dff2c0d878716b4db5c52324ef8bdbfb17342
 file: erpnext-connector/stock-view.yaml 5257b47331e0bda7eb3d11011b7841bdbb0d9108
-file: erpnext-connector/stock-import.yaml d1a9c8dcd1e082240160204c94549259895cc63a
+# RT-1398 (RT-1396 follow-up), RT-1401: stock-import.yaml alone is repinned to the RT-1401 merge
+# commit 7d1901e1c561e7e02e74c3199e71f2a0cd3ee2a5 (#595, 1.1.0-draft with the reverse-row `actualQty`
+# rule; the RT-1396 merge commit 80bdea57c2c544a950233e90ae4e8217618bbf86 introduced 1.1.0-draft);
+# the other files keep their blobs, so `commit:` above still names the last full repin.
+file: erpnext-connector/stock-import.yaml 60b7023799dd26f683e0d7db30ed51e1ba3ef5a4
 file: erpnext-connector/provisioning-feed.yaml 61d274b9f66cd599d76a7ea2de487f8bba4bcc5c

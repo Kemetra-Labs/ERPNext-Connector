@@ -208,6 +208,9 @@ class _Source:
 	def voucher_facts(self, vouchers):
 		return {}
 
+	def reconciliation_items(self, details):
+		return {}
+
 
 class _FailFor(_Source):
 	"""Reads fail for one warehouse only."""
@@ -511,3 +514,25 @@ def test_bundle_entries_keep_bundle_order(frappe_stub):
 	]
 	out = glue.FrappeLedgerSource().bundle_entries(["SBB-1"])
 	assert [(e.batch_no, e.qty) for e in out["SBB-1"]] == [("B1", -2.0), ("B2", -1.0)]
+
+
+def test_reconciliation_items_read_quantity_fields_only_and_keep_a_blank_qty(frappe_stub):
+	glue = importlib.import_module(_GLUE)
+	asked = {}
+
+	def _get_all(doctype, filters, fields):
+		asked.update(doctype=doctype, filters=filters, fields=fields)
+		return [
+			{"name": "sri-1", "qty": 7, "current_qty": 12},
+			{"name": "sri-2", "qty": None, "current_qty": None},
+		]
+
+	frappe_stub.get_all = _get_all
+	out = glue.FrappeLedgerSource().reconciliation_items(["sri-1", "sri-2"])
+	assert asked == {
+		"doctype": "Stock Reconciliation Item",
+		"filters": {"name": ["in", ["sri-1", "sri-2"]]},
+		"fields": ["name", "qty", "current_qty"],  # no valuation field is read
+	}
+	assert out["sri-1"] == glue.RawReconciliationItem(qty=7.0, current_qty=12.0)
+	assert out["sri-2"] == glue.RawReconciliationItem(qty=None, current_qty=0.0)  # a blank qty is not 0

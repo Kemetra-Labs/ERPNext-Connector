@@ -15,6 +15,8 @@ Reads (QUANTITY and facts only, no valuation field):
   (``creation``, ``name``) in SQL so the database collation orders and compares the names, and
   ``creation`` ≤ the settle cutoff;
 * ``Serial and Batch Entry`` of each row's ``serial_and_batch_bundle``, by ``idx``;
+* ``Stock Reconciliation Item`` ``qty`` and ``current_qty`` (quantity fields only) for the untracked
+  reconciliation rows whose ledger ``actual_qty`` ERPNext v16 stores as 0 (RT-1398);
 * the voucher's ``purpose``, ``is_return``, ``return_against``, Retail provenance
   (``rt_source_system`` / ``rt_external_id``; a reversal carries its ``work_item_ref`` in
   ``rt_external_id``, #28 re-key) and the governed correction reference (:data:`CORRECTION_REF_FIELD`)
@@ -36,7 +38,7 @@ from zoneinfo import ZoneInfo
 
 import frappe
 
-from .reader import LedgerStart, RawBundleEntry, RawLedgerEntry, VoucherFacts
+from .reader import LedgerStart, RawBundleEntry, RawLedgerEntry, RawReconciliationItem, VoucherFacts
 
 # Site config switch (``bench --site <site> set-config``). Absent or falsy → the poller does
 # nothing. Turn it on for a site only once that environment's Backend-Core serves the
@@ -125,6 +127,21 @@ class FrappeLedgerSource:
 			for row in rows:
 				out.setdefault(row["parent"], []).append(
 					RawBundleEntry(batch_no=row.get("batch_no") or None, qty=float(row.get("qty") or 0))
+				)
+		return out
+
+	def reconciliation_items(self, details: list[str]) -> dict[str, RawReconciliationItem]:
+		out: dict[str, RawReconciliationItem] = {}
+		for chunk in _chunks(details):
+			for row in frappe.get_all(
+				"Stock Reconciliation Item",
+				filters={"name": ["in", chunk]},
+				fields=["name", "qty", "current_qty"],
+			):
+				qty = row.get("qty")
+				out[row["name"]] = RawReconciliationItem(
+					qty=None if qty is None else float(qty),
+					current_qty=float(row.get("current_qty") or 0),
 				)
 		return out
 

@@ -1,7 +1,7 @@
 # Copyright (c) 2026, Retail Tower OS and contributors
 # For license information, please see license.txt
 
-"""Frozen read-models for Backend-Core's ``stock-import.yaml`` 1.0.0-draft (RT-1286).
+"""Frozen read-models for Backend-Core's ``stock-import.yaml`` 1.1.0-draft (RT-1286, RT-1396).
 
 The contract is Backend-Core-owned and read-only (Principle I/IV): these DTOs CITE it, never
 re-derive it. Wire shapes consumed and produced here:

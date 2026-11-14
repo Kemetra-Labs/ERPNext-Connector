@@ -21,6 +21,15 @@ contract's read rule (``stock-import.yaml`` ``StockImportRequest``):
   ERPNext's stored order (the source orders them in SQL, so the database collation decides);
 * at most ``maxRows`` rows strictly after ``after``; a page may end inside a ledger row.
 
+``actualQty`` is the row's signed stock movement (``stock-import.yaml`` 1.1.0-draft, RT-1396, RT-1398):
+the ledger ``actual_qty``, except for an untracked Stock Reconciliation row (no Serial and Batch
+Bundle, no ``batch_no``), which reads the Stock Reconciliation Item its ``voucher_detail_no`` names:
+a row stored with ``actual_qty`` 0 reports ``qty - current_qty`` (ERPNext v16 records that change only
+in ``qty_after_transaction``), and a cancelled row stored with a non-zero ``actual_qty`` (the reverse
+row of a cancellation, which v16 fills with the balance before the reconciliation) reports the
+negation, ``-(qty - current_qty)``, so it pairs with its original (RT-1401). Only quantity fields
+are read, never a valuation field.
+
 FACTS ONLY (G8-7): every voucher type is reported, Retail Tower's own Sales Invoices included;
 nothing is classified, filtered or deduplicated by business rule. No valuation field is read.
 
@@ -43,6 +52,14 @@ from ..bin_view.worker import quantize_qty
 from .contracts import LedgerKey, StockImportRefusal, StockImportReport, StockImportRequest, StockImportRow
 
 UNKNOWN_WAREHOUSE = "unknown_warehouse"
+STOCK_RECONCILIATION = "Stock Reconciliation"
+
+
+class StockImportReadError(Exception):
+	"""A fact the contract's read rule needs is missing in ERPNext: fail closed, never report a guess.
+
+	The poller counts it like any read failure (retry next tick, then abandon the request and log it).
+	"""
 
 
 @dataclass(frozen=True)
@@ -70,6 +87,17 @@ class RawBundleEntry:
 
 	batch_no: str | None
 	qty: float
+
+
+@dataclass(frozen=True)
+class RawReconciliationItem:
+	"""The quantity fields of one Stock Reconciliation Item (no valuation field).
+
+	``qty`` is None when the row leaves the counted quantity blank; the reader never guesses it.
+	"""
+
+	qty: float | None
+	current_qty: float
 
 
 @dataclass(frozen=True)
@@ -120,6 +148,10 @@ class LedgerSource(Protocol):
 
 	def voucher_facts(self, vouchers: list[tuple[str, str]]) -> dict[tuple[str, str], VoucherFacts]: ...
 
+	def reconciliation_items(self, details: list[str]) -> dict[str, RawReconciliationItem]:
+		"""The Stock Reconciliation Items by name (cancelled vouchers' rows included)."""
+		...
+
 
 def render_creation(value: datetime, zone: tzinfo) -> str:
 	"""A stored (naive, site-time) ``creation`` as RFC 3339 with the site offset (earlier on fold)."""
@@ -166,13 +198,60 @@ def _entry_qty(entry: RawBundleEntry, ledger_qty: float) -> str:
 	return f"{qty:f}" if qty != 0 else quantize_qty(0)
 
 
+def needs_reconciliation_item(entry: RawLedgerEntry) -> bool:
+	"""True for an untracked Stock Reconciliation ledger row whose quantity comes from its item.
+
+	Such a row has no Serial and Batch Bundle and no ``batch_no`` (a tracked row, a serial-only
+	bundle included, is read from its bundle or its own ``actual_qty``), whatever the voucher
+	purpose, and is either stored with ``actual_qty`` 0, or cancelled with a non-zero ``actual_qty``
+	(the reverse row of a cancellation). Any other such row is not expected on v16 and passes
+	through with its own ``actual_qty``.
+	"""
+	return (
+		entry.voucher_type == STOCK_RECONCILIATION
+		and not entry.serial_and_batch_bundle
+		and not entry.batch_no
+		# the stored value, as `_entry_qty` reads the ledger sign
+		and (entry.actual_qty == 0 or entry.is_cancelled)
+	)
+
+
+def _reconciliation_qty(entry: RawLedgerEntry, item: RawReconciliationItem | None) -> str:
+	"""``qty - current_qty`` of the reconciliation row (negated for a reverse row), each value at 6 dp
+	half-even; fail closed if unknown.
+
+	A row stored with ``actual_qty`` 0 is the reconciliation itself (an original, cancelled or not):
+	its movement is ``qty - current_qty``. A cancelled row with a non-zero ``actual_qty`` is the reverse
+	row ERPNext writes on cancellation, whose stored value is the balance before the reconciliation, not
+	the movement: it reports the negation, so the pair nets to 0 (bench, RT-1401: 10 -> 12 cancelled
+	stores +10 on the reverse row and reports -2).
+
+	On the v16 bench both columns are NOT NULL (default 0) and a valuation-only row is stored with
+	``qty`` = ``current_qty`` (delta 0), so ``qty`` None is a defence against a source that returns it,
+	never a guess of 0.
+	"""
+	if item is None or item.qty is None:
+		raise StockImportReadError(
+			f"{entry.name}: no counted quantity for Stock Reconciliation Item {entry.voucher_detail_no!r}"
+		)
+	delta = Decimal(quantize_qty(item.qty)) - Decimal(quantize_qty(item.current_qty))
+	if entry.actual_qty != 0:
+		delta = -delta
+	return f"{delta:f}" if delta != 0 else quantize_qty(0)
+
+
 def expand_entry(
 	entry: RawLedgerEntry,
 	bundle: list[RawBundleEntry],
 	facts: VoucherFacts,
 	zone: tzinfo,
+	reconciliation: RawReconciliationItem | None = None,
 ) -> list[StockImportRow]:
-	"""One ledger row → its report rows (one per bundle entry when the bundle carries a Batch)."""
+	"""One ledger row → its report rows (one per bundle entry when the bundle carries a Batch).
+
+	``reconciliation`` is the Stock Reconciliation Item named by ``voucher_detail_no``; it is used
+	only for a row :func:`needs_reconciliation_item` selects.
+	"""
 	base = {
 		"ledger_entry_ref": entry.name,
 		"voucher_type": entry.voucher_type,
@@ -200,10 +279,15 @@ def expand_entry(
 			)
 			for index, b in enumerate(bundle)
 		]
+	actual_qty = (
+		_reconciliation_qty(entry, reconciliation)
+		if needs_reconciliation_item(entry)
+		else quantize_qty(entry.actual_qty)
+	)
 	return [
 		StockImportRow(
 			entry_index=0,
-			actual_qty=quantize_qty(entry.actual_qty),
+			actual_qty=actual_qty,
 			erpnext_batch_ref=entry.batch_no or None,
 			**base,
 		)
@@ -235,12 +319,17 @@ def _iter_rows(
 			sorted({e.serial_and_batch_bundle for e in entries if e.serial_and_batch_bundle})
 		)
 		facts = source.voucher_facts(sorted({(e.voucher_type, e.voucher_no) for e in entries}))
+		details = sorted(
+			{e.voucher_detail_no for e in entries if needs_reconciliation_item(e) and e.voucher_detail_no}
+		)
+		items = source.reconciliation_items(details) if details else {}
 		for entry in entries:
 			rows = expand_entry(
 				entry,
 				bundles.get(entry.serial_and_batch_bundle or "", []),
 				facts.get((entry.voucher_type, entry.voucher_no), VoucherFacts()),
 				zone,
+				items.get(entry.voucher_detail_no or ""),
 			)
 			for row in rows:
 				if row.ledger_entry_ref == skip_ref and row.entry_index <= skip_through:
