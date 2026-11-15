@@ -19,6 +19,9 @@ Connector Settings + the signed decisions; the exact wiring is finalised at benc
 
 from __future__ import annotations
 
+import time
+from datetime import UTC
+
 import frappe
 
 from ..observability.sentry_client import report_unhandled
@@ -27,6 +30,7 @@ from ..scheduling import ensure_posting_poll_logged
 from ..text import scrub
 from . import worker
 from .frappe_store import FrappePostingLogStore
+from .tick_budget import TickBudget
 
 _LOGGER = "retail_tower_posting"
 # A bounded number of pages per tick — the scheduler re-enters on the next cron; idempotency
@@ -91,7 +95,14 @@ def _run_posting_tick(request_id: str) -> None:
 	ack_client = client  # the same 012 client acks invalid items (re-P2b)
 	since: str | None = _load_cursor()
 	pages = 0
+	# RT-1383 — end the run before the next scheduler tick: Frappe refuses to enqueue the poll while the
+	# previous run is still going, so a run that overruns the tick leaves a minute without posting.
+	# Wall-clock for the deadline (it must match RQ's enqueue time); the monotonic clock for durations,
+	# so a clock step cannot make a page look negative or very long.
+	run_started_mono = _monotonic()
+	budget = TickBudget(enqueued_at=_job_enqueued_at(), started_at=_now())
 	while pages < _MAX_PAGES_PER_TICK:
+		page_started_mono = _monotonic()
 		result = worker.process_page(client, ack_client, since=since, post_valid=post_valid)
 		# A degraded page is an ALERT, not a retry: every item on it already reached a terminal
 		# outcome (posted or acked-rejected), so we ALWAYS advance the cursor — re-pulling would be
@@ -106,6 +117,47 @@ def _run_posting_tick(request_id: str) -> None:
 		since = result.cursor
 		if result.next_page_token is None:
 			break  # caught up — no more pending pages
+		# More is pending. Start another page only if one as long as the last would end before the next
+		# tick; otherwise stop here. The cursor is already saved, so the next tick resumes after this
+		# page: nothing is re-pulled, retried or skipped (the same exit as the page cap).
+		page_seconds = _monotonic() - page_started_mono
+		if not budget.allows_another_page(now=_now(), last_page_seconds=page_seconds):
+			frappe.logger(_LOGGER).info(
+				{
+					"event": "posting.poll.budget_stop",
+					"pages": pages,
+					"elapsed_s": round(_monotonic() - run_started_mono, 1),
+				}
+			)
+			break
+
+
+def _now() -> float:
+	return time.time()
+
+
+def _monotonic() -> float:
+	return time.monotonic()
+
+
+def _job_enqueued_at() -> float | None:
+	"""When RQ enqueued this run (epoch seconds), or ``None`` outside a background job.
+
+	Measured from the enqueue, not the start: a queue wait behind other scheduled jobs is part of what
+	pushed a run past the next tick (RT-1383). Best effort — the budget then falls back to the start time.
+	"""
+	try:
+		from rq import get_current_job
+
+		job = get_current_job()
+		enqueued = getattr(job, "enqueued_at", None)
+		if enqueued is None:
+			return None
+		if enqueued.tzinfo is None:  # RQ stores naive UTC
+			enqueued = enqueued.replace(tzinfo=UTC)
+		return enqueued.timestamp()
+	except Exception:
+		return None
 
 
 def _ready_posting_path(correlation_id: str):
