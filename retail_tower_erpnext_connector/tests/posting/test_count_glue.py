@@ -119,7 +119,7 @@ class _Store:
 def test_post_work_item_routes_inventory_count_before_the_sale_replay_guard(glue, monkeypatch):
 	seen = {}
 
-	def _fake_leg(work_item, *, client, store, port, site_tz):
+	def _fake_leg(work_item, *, client, store, port, site_tz, uom_map):
 		seen.update(kind=work_item.kind, tz=site_tz, port=type(port).__name__)
 		return "verified_noop"
 

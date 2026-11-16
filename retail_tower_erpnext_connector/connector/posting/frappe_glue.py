@@ -591,7 +591,9 @@ def post_work_item(
 	# RT-1422: an `inventory_count` chunk posts a native Stock Reconciliation through its own leg, which
 	# does its own Draft-aware provenance lookup (the Posting Log replay guard below is for sales).
 	if work_item.kind == "inventory_count":
-		return _post_count(work_item, client=client, store=store, correlation_id=correlation_id)
+		return _post_count(
+			work_item, client=client, store=store, uom_map=uom_map, correlation_id=correlation_id
+		)
 
 	key = key_for(work_item)
 
@@ -662,6 +664,7 @@ def _post_count(
 	*,
 	client: PostingFeedClient,
 	store: IdempotencyStore,
+	uom_map: UomMap,
 	correlation_id: str,
 ) -> str:
 	"""RT-1422 — post one ``inventory_count`` chunk (⏳ BENCH-VALIDATION: the port reads and writes ERPNext)."""
@@ -674,6 +677,7 @@ def _post_count(
 		store=store,
 		port=FrappeCountPort(),
 		site_tz=frappe.utils.get_system_timezone(),
+		uom_map=uom_map,
 	)
 	_log_signal("posting.count", work_item, correlation_id, outcome=outcome)
 	return outcome

@@ -49,6 +49,7 @@ from .idempotency import IdempotencyConflict, IdempotencyStore, key_for
 from .posting_time import format_time
 from .reasons import plain_bounded_message
 from .transport import PostingFeedClient
+from .uom import UnmappedUnit, UomMap
 
 STOCK_RECONCILIATION = "Stock Reconciliation"
 
@@ -188,18 +189,28 @@ def chunk_shape_problem(work_item: PostingWorkItem) -> str | None:
 
 
 def line_refusal(
-	line: CountPostingLine, facts: ItemFacts | None, warehouse_problem: str | None
+	line: CountPostingLine,
+	facts: ItemFacts | None,
+	warehouse_problem: str | None,
+	mapped_unit: str | None,
 ) -> CountRefusal | None:
-	"""A line-level refusal (the line is excluded, the rest of the chunk still posts), or ``None``."""
+	"""A line-level refusal (the line is excluded, the rest of the chunk still posts), or ``None``.
+
+	``mapped_unit`` is the ERPNext UOM the Retail ``line.unit`` resolves to through the Connector's UOM map
+	(``None`` when the unit is unmapped): Backend-Core sends the Retail unit, exactly as on a sale, and only
+	the Connector knows the ERP UOM. The count is refused unless that UOM is the Item's stock UOM.
+	"""
 	seq = line.line_seq
 	if facts is None or not facts.exists:
 		return refusal("unmapped_item", f"Item {line.item_code!r} does not exist on this site", seq)
 	if facts.tracked:
 		return refusal("tracked_item_unsupported", f"Item {line.item_code!r} is Batch or serial tracked", seq)
-	if facts.stock_uom != line.unit:
+	if mapped_unit is None:
+		return refusal("uom_mismatch", f"unit {line.unit!r} is not in the Connector UOM map", seq)
+	if facts.stock_uom != mapped_unit:
 		return refusal(
 			"uom_mismatch",
-			f"unit {line.unit!r} is not the stock UOM {facts.stock_uom!r} of {line.item_code!r}",
+			f"unit {line.unit!r} maps to {mapped_unit!r}, not the stock UOM {facts.stock_uom!r} of {line.item_code!r}",
 			seq,
 		)
 	if warehouse_problem:
@@ -403,7 +414,16 @@ def _line_outcomes(plan: _Plan, *, adjusted: bool) -> tuple[CountLineOutcome, ..
 	return tuple(sorted([*posted, *noops, *_rejected_outcomes(plan)], key=lambda o: o.line_seq))
 
 
-def _plan_lines(count: CountPosting, port: CountErpPort, stamp: SiteStamp, company: str) -> _Plan:
+def _mapped_unit(uom_map: UomMap, unit: str) -> str | None:
+	try:
+		return uom_map.resolve(unit)
+	except UnmappedUnit:
+		return None
+
+
+def _plan_lines(
+	count: CountPosting, port: CountErpPort, stamp: SiteStamp, company: str, uom_map: UomMap
+) -> _Plan:
 	facts = port.item_facts(sorted({line.item_code for line in count.lines}))
 	to_post: list[CountPostingLine] = []
 	noop: list[CountPostingLine] = []
@@ -412,7 +432,12 @@ def _plan_lines(count: CountPosting, port: CountErpPort, stamp: SiteStamp, compa
 		w: port.warehouse_problem(w, company) for w in sorted({x.warehouse for x in count.lines})
 	}
 	for line in count.lines:
-		problem = line_refusal(line, facts.get(line.item_code), warehouse_problems[line.warehouse])
+		problem = line_refusal(
+			line,
+			facts.get(line.item_code),
+			warehouse_problems[line.warehouse],
+			_mapped_unit(uom_map, line.unit),
+		)
 		if problem is None:
 			balance = port.balance_at(line.item_code, line.warehouse, stamp)
 			problem = history_refusal(line, facts[line.item_code], balance)
@@ -436,11 +461,12 @@ def post_count_work_item(
 	store: IdempotencyStore,
 	port: CountErpPort,
 	site_tz: str,
+	uom_map: UomMap,
 ) -> str:
 	"""Post one ``inventory_count`` chunk and ack the outcome. Returns the outcome string."""
 	acker = _Acker(client, work_item, port)
 	try:
-		return _post(work_item, acker, store, port, site_tz)
+		return _post(work_item, acker, store, port, (site_tz, uom_map))
 	except CountTransient:
 		return acker.transient()
 	except CountRefused as exc:
@@ -457,7 +483,11 @@ def post_count_work_item(
 
 
 def _post(
-	work_item: PostingWorkItem, acker: _Acker, store: IdempotencyStore, port: CountErpPort, site_tz: str
+	work_item: PostingWorkItem,
+	acker: _Acker,
+	store: IdempotencyStore,
+	port: CountErpPort,
+	env: tuple[str, UomMap],
 ) -> str:
 	count = work_item.count
 	assert count is not None  # parse guarantees it for inventory_count
@@ -465,13 +495,13 @@ def _post(
 	if problem:
 		return acker.rejected("validation", f"invalid_shape: {problem}")
 	try:
-		stamp = site_stamp(count.posting_datetime, site_tz)
+		stamp = site_stamp(count.posting_datetime, env[0])
 	except ValueError as exc:
 		return acker.rejected("validation", f"invalid_shape: {exc}")
 	if not port.indexes_ready():
 		return acker.transient()  # the unique provenance index is absent: pause, never post unguarded
 	company = port.company()
-	plan = _plan_lines(count, port, stamp, company)
+	plan = _plan_lines(count, port, stamp, company, env[1])
 	return _decide(work_item, acker, store, port, (count, stamp, plan, company))
 
 

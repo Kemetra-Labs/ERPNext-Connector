@@ -19,8 +19,10 @@ import pytest
 from retail_tower_erpnext_connector.connector.posting import contracts as c
 from retail_tower_erpnext_connector.connector.posting import count_flow as cf
 from retail_tower_erpnext_connector.connector.posting.idempotency import IdempotencyConflict
+from retail_tower_erpnext_connector.connector.posting.uom import UomMap
 
 _SESSION = "00000000-0000-7000-8000-00000000c0e1"
+_UOMS = UomMap({"Nos": "Nos", "Strip": "Strip", "Box": "Box", "each": "Nos"})
 _STAMP_UTC = "2026-11-16T09:30:00.000001Z"
 _CAIRO = "Africa/Cairo"
 _PAIR = "PANADOL-24"
@@ -157,9 +159,11 @@ def _doc(**kw) -> cf.ExistingCount:
 	return cf.ExistingCount(**{**base, **kw})
 
 
-def _run(item=None, port=None, store=None):
+def _run(item=None, port=None, store=None, uom_map=None):
 	port, store, client = port or _Port(), store or _Store(), _Client()
-	outcome = cf.post_count_work_item(item or _item(), client=client, store=store, port=port, site_tz=_CAIRO)
+	outcome = cf.post_count_work_item(
+		item or _item(), client=client, store=store, port=port, site_tz=_CAIRO, uom_map=uom_map or _UOMS
+	)
 	return outcome, client, port, store
 
 
@@ -611,3 +615,30 @@ class TestWireModels:
 			"outcome": "posted",
 			"documentRef": {"doctype": "Sales Invoice", "name": "ACC-SINV-1"},
 		}
+
+
+class TestRetailUnitThroughTheUomMap:
+	"""Backend-Core sends the RETAIL unit (as on a sale); the Connector resolves it through its UOM map."""
+
+	def test_a_retail_unit_that_maps_to_the_stock_uom_posts(self):
+		item = _item([_line_wire(1, _PAIR, "7", "each")])  # "each" -> "Nos", the Item stock UOM
+		outcome, _, port, _ = _run(item)
+		assert outcome == "posted"
+		assert port.submitted[0]["items"] == [{"item_code": _PAIR, "warehouse": _WH, "qty": "7"}]
+
+	def test_a_retail_unit_that_maps_to_another_uom_is_refused(self):
+		item = _item([_line_wire(1, _PAIR, "7", "each"), _line_wire(2, _ITEM2, "2", "Strip")])
+		odd = UomMap({"each": "Box", "Strip": "Strip"})  # "each" maps to Box, but the Item stock UOM is Nos
+		outcome, client, port, _ = _run(item, uom_map=odd)
+		assert outcome == "posted"
+		assert [r["item_code"] for r in port.submitted[0]["items"]] == [_ITEM2]
+		refused = [x for x in _ack(client)["lines"] if x["result"] == "rejected"]
+		assert refused[0]["lineSeq"] == 1 and refused[0]["refusal"]["code"] == "uom_mismatch"
+		assert "maps to 'Box'" in refused[0]["refusal"]["message"]
+
+	def test_an_unmapped_retail_unit_is_refused_not_guessed(self):
+		item = _item([_line_wire(1, _PAIR, "7", "case")])
+		outcome, client, port, _ = _run(item)
+		assert outcome == "permanently_rejected" and port.submitted == []
+		assert _ack(client)["lines"][0]["refusal"]["code"] == "uom_mismatch"
+		assert "not in the Connector UOM map" in _ack(client)["lines"][0]["refusal"]["message"]
