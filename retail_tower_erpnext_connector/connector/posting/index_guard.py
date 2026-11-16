@@ -30,6 +30,13 @@ G5_INDEXES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 )
 
 
+# RT-1422: the count leg's own exactly-once index. It is NOT part of G5_INDEXES: a site without it must
+# keep posting sales and reversals, and only pause `inventory_count` items (``failed_transient``).
+COUNT_INDEXES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+	("Stock Reconciliation", "unique_rt_sr_provenance", ("rt_source_system", "rt_external_id")),
+)
+
+
 @dataclass(frozen=True)
 class GuardResult:
 	"""``ok`` only when every required index is present; ``missing`` names the absent ones."""
@@ -37,6 +44,18 @@ class GuardResult:
 	ok: bool
 	missing: tuple[str, ...] = ()
 	error: str | None = None
+
+
+def duplicate_provenance_message(rows: Sequence[Mapping[str, object]]) -> str:
+	"""The fail-closed data-preflight error of the Stock Reconciliation index patch (RT-1422)."""
+	sample = ", ".join(
+		f"({r.get('rt_source_system')}, {r.get('rt_external_id')}) x{r.get('n')}" for r in list(rows)[:5]
+	)
+	return (
+		"stock_reconciliation_unique_provenance: duplicate provenance keys exist on Stock Reconciliation "
+		f"({len(rows)} key(s); first: {sample}); the unique index was NOT created and the count leg stays "
+		"paused. Resolve them (never edit or cancel a document to hide a mismatch) and re-run migrate."
+	)
 
 
 def index_matches(rows: Sequence[Mapping[str, object]], columns: Sequence[str]) -> bool:

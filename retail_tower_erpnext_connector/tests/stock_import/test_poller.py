@@ -506,6 +506,34 @@ def test_voucher_facts_map_provenance_and_missing_columns(frappe_stub):
 	assert asked["Stock Entry"] == ["name", "purpose"]  # no column the DocType lacks is selected
 
 
+def test_a_count_stock_reconciliation_with_provenance_is_reported_as_retail_provenance(frappe_stub):
+	"""RT-1422: the count's own Stock Reconciliation carries rt_source_system / rt_external_id, so its
+	ledger rows are reported ``hasRetailProvenance`` and never read as an unattributed ERP movement."""
+	glue = importlib.import_module(_GLUE)
+	have = {"purpose", "rt_source_system", "rt_external_id"}
+	frappe_stub.db.has_column = lambda doctype, column: column in have
+	rows = [
+		{
+			"name": "MAT-RECO-1",
+			"purpose": "Stock Reconciliation",
+			"rt_source_system": "retail-tower",
+			"rt_external_id": "count:s:1",
+		},
+		{
+			"name": "MAT-RECO-2",
+			"purpose": "Stock Reconciliation",
+			"rt_source_system": None,
+			"rt_external_id": None,
+		},
+	]
+	frappe_stub.get_all = lambda doctype, filters, fields: rows
+	facts = glue.FrappeLedgerSource().voucher_facts(
+		[("Stock Reconciliation", "MAT-RECO-1"), ("Stock Reconciliation", "MAT-RECO-2")]
+	)
+	assert facts[("Stock Reconciliation", "MAT-RECO-1")].has_retail_provenance is True
+	assert facts[("Stock Reconciliation", "MAT-RECO-2")].has_retail_provenance is False
+
+
 def test_bundle_entries_keep_bundle_order(frappe_stub):
 	glue = importlib.import_module(_GLUE)
 	frappe_stub.get_all = lambda *a, **k: [

@@ -3,7 +3,7 @@
 
 """Frozen read-models for the fixed 012 posting-feed contract (T010).
 
-These mirror Data-Pulse-2's ``posting-feed.yaml`` 1:1 (1.12.0-draft, including the RT-76 feed-1.2
+These mirror Data-Pulse-2's ``posting-feed.yaml`` 1:1 (1.15.0-draft, including the RT-76 feed-1.2
 ``Sale.tenders`` settlement field, the RT-450 tracked-line fields and the RT-1114 ``voucher``
 tender method with its ``redemptionId``). The contract is
 DP2-owned and read-only (FR-015, Principle I) — these DTOs CITE it, never re-derive it.
@@ -31,11 +31,11 @@ REJECTION_CATEGORIES: frozenset[str] = frozenset(
 
 # 012 OutcomeAckRequest.outcome enum.
 OUTCOMES: frozenset[str] = frozenset(
-	{"posted", "failed_transient", "permanently_rejected", "reconciliation_required"}
+	{"posted", "failed_transient", "permanently_rejected", "reconciliation_required", "verified_noop"}
 )
 
 # 012 PostingWorkItem.kind enum.
-WORK_ITEM_KINDS: frozenset[str] = frozenset({"sale_post", "reversal"})
+WORK_ITEM_KINDS: frozenset[str] = frozenset({"sale_post", "reversal", "inventory_count"})
 
 # 012 ReversalRef.reversalKind enum.
 REVERSAL_KINDS: frozenset[str] = frozenset({"void", "refund", "return"})
@@ -598,6 +598,167 @@ def _assert_return_lines_point_at_sale_lines(reversal_of: ReversalRef, sale: Sal
 		raise ValueError(f"ReturnLine.lineRef {stray} does not name a line of the sale snapshot")
 
 
+# RT-1422: the most rows one count chunk (one Stock Reconciliation) holds (CountPosting.lines maxItems).
+_COUNT_MAX_ROWS = 100
+
+
+# The keys the flat count schemas allow (additionalProperties: false). A supplied valuation rate, a Batch,
+# a serial or a Retail variance is not one of them: it is refused, never silently dropped (G6-2, G6-3).
+_COUNT_LINE_KEYS = ("lineSeq", "erpnextItemRef", "warehouseRef", "countedQuantity", "unit")
+_COUNT_BODY_KEYS = (
+	"countSessionRef",
+	"chunk",
+	"chunkCount",
+	"storeId",
+	"mappingBucketRef",
+	"postingDatetime",
+	"lines",
+)
+
+
+def _reject_unknown_keys(wire: Mapping[str, object], allowed: tuple[str, ...], name: str) -> None:
+	extra = sorted(set(wire) - set(allowed))
+	if extra:
+		code = (
+			"valuation_rate_forbidden"
+			if any("rate" in k.lower() or "valuation" in k.lower() for k in extra)
+			else "invalid_shape"
+		)
+		raise ValueError(f"{code}: {name} carries field(s) the count contract forbids: {', '.join(extra)}")
+
+
+@dataclass(frozen=True)
+class CountPostingLine:
+	"""012 ``CountPostingLine`` (RT-1421/RT-1422) — the ABSOLUTE counted quantity of one Item at one Warehouse."""
+
+	line_seq: int
+	item_code: str
+	warehouse: str
+	counted_quantity: str
+	unit: str
+
+	@classmethod
+	def from_wire(cls, wire: Mapping[str, object]) -> CountPostingLine:
+		wire = _require_object(wire, "CountPostingLine")
+		_reject_unknown_keys(wire, _COUNT_LINE_KEYS, "CountPostingLine")
+		line_seq = wire["lineSeq"]
+		if isinstance(line_seq, bool) or not isinstance(line_seq, int) or line_seq < 1:
+			raise ValueError(f"CountPostingLine.lineSeq must be a positive integer, got {line_seq!r}")
+		item = ErpnextItemRef.from_wire(
+			_require_object(wire["erpnextItemRef"], "CountPostingLine.erpnextItemRef")
+		)
+		warehouse = _parse_warehouse_ref(wire["warehouseRef"])
+		quantity = wire["countedQuantity"]
+		# CountPostingLine.countedQuantity pattern, inline: a module-level constant would need a
+		# tools/contracts-check config entry, and this leg adds none (RT-1422 changes no checker data).
+		if not isinstance(quantity, str) or not re.fullmatch(
+			r"[0-9]{1,13}(\.[0-9]{1,6})?", quantity, re.ASCII
+		):
+			raise ValueError(
+				f"CountPostingLine.countedQuantity must be a non-negative decimal string, got {quantity!r}"
+			)
+		unit = wire["unit"]
+		if not isinstance(unit, str) or not unit:
+			raise ValueError("CountPostingLine.unit must be a non-empty string")
+		return cls(
+			line_seq=line_seq,
+			item_code=item.name,
+			warehouse=warehouse["name"],  # type: ignore[index]
+			counted_quantity=quantity,
+			unit=unit,
+		)
+
+
+@dataclass(frozen=True)
+class CountPosting:
+	"""012 ``CountPosting`` (RT-1421/RT-1422) — one chunk (at most 100 rows) of an approved physical count."""
+
+	count_session_ref: str
+	chunk: int
+	chunk_count: int
+	store_id: str
+	mapping_bucket_ref: str
+	posting_datetime: str
+	lines: tuple[CountPostingLine, ...]
+
+	@classmethod
+	def from_wire(cls, wire: Mapping[str, object]) -> CountPosting:
+		wire = _require_object(wire, "CountPosting")
+		_reject_unknown_keys(wire, _COUNT_BODY_KEYS, "CountPosting")
+		chunk, chunk_count = wire["chunk"], wire["chunkCount"]
+		for name, value in (("chunk", chunk), ("chunkCount", chunk_count)):
+			if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+				raise ValueError(f"CountPosting.{name} must be a positive integer, got {value!r}")
+		raw_lines = wire["lines"]
+		if not isinstance(raw_lines, list) or not 1 <= len(raw_lines) <= _COUNT_MAX_ROWS:
+			raise ValueError(f"CountPosting.lines must hold 1..{_COUNT_MAX_ROWS} rows")
+		return cls(
+			count_session_ref=str(wire["countSessionRef"]),
+			chunk=chunk,  # type: ignore[arg-type]
+			chunk_count=chunk_count,  # type: ignore[arg-type]
+			store_id=str(wire["storeId"]),
+			mapping_bucket_ref=str(wire["mappingBucketRef"]),
+			posting_datetime=str(wire["postingDatetime"]),
+			lines=_parse_list(raw_lines, "CountPosting.lines", CountPostingLine.from_wire),
+		)
+
+
+@dataclass(frozen=True)
+class CountRefusal:
+	"""012 ``CountRefusal`` — a typed refusal that rides an existing ack category."""
+
+	code: str
+	ack_category: str
+	message: str
+	line_seq: int | None = None
+
+	def to_wire(self) -> dict[str, object]:
+		wire: dict[str, object] = {
+			"code": self.code,
+			"ackCategory": self.ack_category,
+			"message": self.message,
+		}
+		if self.line_seq is not None:
+			wire["lineSeq"] = self.line_seq
+		return wire
+
+
+@dataclass(frozen=True)
+class CountLineOutcome:
+	"""012 ``CountLineOutcome`` — what the Connector verified (or refused) for one counted line."""
+
+	line_seq: int
+	result: str
+	verified_qty_after: str | None = None
+	refusal: CountRefusal | None = None
+
+	def to_wire(self) -> dict[str, object]:
+		return {
+			"lineSeq": self.line_seq,
+			"result": self.result,
+			"verifiedQtyAfter": self.verified_qty_after,
+			"refusal": None if self.refusal is None else self.refusal.to_wire(),
+		}
+
+
+def _parse_count_body(
+	kind: str, raw_sale: object, raw_count: object, raw_reversal: object
+) -> CountPosting | None:
+	"""The kind-specific shape rule (posting-feed 1.15.0-draft): ``sale`` XOR ``count`` by ``kind``.
+
+	An ``inventory_count`` item carries ``count`` and neither ``sale`` nor ``reversalOf``; a sale or
+	reversal item carries ``sale`` and no ``count``. Any other mix is a malformed item (ValueError),
+	isolated and rejected per item like every unparseable line (re-P2b).
+	"""
+	if kind == "inventory_count":
+		if raw_count is None or raw_sale is not None or raw_reversal is not None:
+			raise ValueError("inventory_count work item must carry count and neither sale nor reversalOf")
+		return CountPosting.from_wire(raw_count)  # type: ignore[arg-type]
+	if raw_sale is None or raw_count is not None:
+		raise ValueError(f"{kind} work item must carry sale and no count")
+	return None
+
+
 @dataclass(frozen=True)
 class PostingWorkItem:
 	"""012 ``PostingWorkItem`` — one pending posting the connector must apply (O-1)."""
@@ -608,9 +769,11 @@ class PostingWorkItem:
 	external_id: str
 	payload_hash: str
 	business_date: str
-	sale: Sale
+	# None only for an ``inventory_count`` item (RT-1422): ``count`` carries its body instead.
+	sale: Sale | None
 	item_cursor: str
 	reversal_of: ReversalRef | None = None
+	count: CountPosting | None = None
 	# RT-331: the frozen resolution version (012 1.6.0-draft); echoed on the ack. None before the freeze.
 	resolution_version: int | None = None
 
@@ -620,9 +783,11 @@ class PostingWorkItem:
 		if kind not in WORK_ITEM_KINDS:
 			raise ValueError(f"kind must be one of {sorted(WORK_ITEM_KINDS)}, got {kind!r}")
 		raw_reversal = wire.get("reversalOf")
-		sale = Sale.from_wire(wire["sale"])  # type: ignore[arg-type]
+		raw_sale, raw_count = wire.get("sale"), wire.get("count")
+		count = _parse_count_body(kind, raw_sale, raw_count, raw_reversal)
+		sale = None if raw_sale is None else Sale.from_wire(raw_sale)  # type: ignore[arg-type]
 		reversal_of = None if raw_reversal is None else ReversalRef.from_wire(raw_reversal)  # type: ignore[arg-type]
-		if reversal_of is not None:
+		if reversal_of is not None and sale is not None:
 			_assert_return_lines_point_at_sale_lines(reversal_of, sale)
 		return cls(
 			work_item_ref=str(wire["workItemRef"]),
@@ -634,6 +799,7 @@ class PostingWorkItem:
 			sale=sale,
 			item_cursor=str(wire["itemCursor"]),
 			reversal_of=reversal_of,
+			count=count,
 			resolution_version=_parse_resolution_version(wire.get("resolutionVersion", _ABSENT)),
 		)
 
@@ -683,10 +849,20 @@ class OutcomeAckRequest:
 	reason: RejectionReason | None = None
 	# RT-331: echo of the work item's frozen resolution version (012 1.6.0-draft); None = omitted.
 	resolution_version: int | None = None
+	# RT-1422: per-line evidence of an ``inventory_count`` item; ``verified_noop`` requires it.
+	lines: tuple[CountLineOutcome, ...] | None = None
 
 	def __post_init__(self) -> None:
 		if self.outcome not in OUTCOMES:
 			raise ValueError(f"outcome must be one of {sorted(OUTCOMES)}, got {self.outcome!r}")
+		if self.outcome == "verified_noop" and (self.document_ref is not None or not self.lines):
+			raise ValueError("verified_noop carries no documentRef and requires per-line evidence")
+		if self.outcome == "verified_noop" and any(
+			line.result not in ("verified_noop", "rejected") for line in self.lines or ()
+		):
+			raise ValueError("verified_noop lines must be verified_noop or rejected, never adjusted")
+		if self.lines is not None and not 1 <= len(self.lines) <= _COUNT_MAX_ROWS:
+			raise ValueError(f"lines must hold 1..{_COUNT_MAX_ROWS} entries")
 		if self.outcome in ("posted", "reconciliation_required") and self.document_ref is None:
 			raise ValueError(f"{self.outcome} outcome requires a documentRef (012 OutcomeAckRequest)")
 		if self.outcome in ("permanently_rejected", "reconciliation_required") and self.reason is None:
@@ -694,9 +870,22 @@ class OutcomeAckRequest:
 
 	@classmethod
 	def posted(
-		cls, document_ref: ErpnextDocumentRef, *, resolution_version: int | None = None
+		cls,
+		document_ref: ErpnextDocumentRef,
+		*,
+		resolution_version: int | None = None,
+		lines: tuple[CountLineOutcome, ...] | None = None,
 	) -> OutcomeAckRequest:
-		return cls(outcome="posted", document_ref=document_ref, resolution_version=resolution_version)
+		return cls(
+			outcome="posted", document_ref=document_ref, resolution_version=resolution_version, lines=lines
+		)
+
+	@classmethod
+	def verified_noop(
+		cls, lines: tuple[CountLineOutcome, ...], *, resolution_version: int | None = None
+	) -> OutcomeAckRequest:
+		"""RT-1422 (``inventory_count`` only): ERP already holds every target; no document exists."""
+		return cls(outcome="verified_noop", resolution_version=resolution_version, lines=lines)
 
 	@classmethod
 	def reconciliation_required(
@@ -722,9 +911,15 @@ class OutcomeAckRequest:
 
 	@classmethod
 	def permanently_rejected(
-		cls, reason: RejectionReason, *, resolution_version: int | None = None
+		cls,
+		reason: RejectionReason,
+		*,
+		resolution_version: int | None = None,
+		lines: tuple[CountLineOutcome, ...] | None = None,
 	) -> OutcomeAckRequest:
-		return cls(outcome="permanently_rejected", reason=reason, resolution_version=resolution_version)
+		return cls(
+			outcome="permanently_rejected", reason=reason, resolution_version=resolution_version, lines=lines
+		)
 
 	def to_wire(self) -> dict[str, object]:
 		wire: dict[str, object] = {"outcome": self.outcome}
@@ -734,4 +929,6 @@ class OutcomeAckRequest:
 			wire["reason"] = self.reason.to_wire()
 		if self.resolution_version is not None:
 			wire["resolutionVersion"] = self.resolution_version
+		if self.lines is not None:
+			wire["lines"] = [line.to_wire() for line in self.lines]
 		return wire

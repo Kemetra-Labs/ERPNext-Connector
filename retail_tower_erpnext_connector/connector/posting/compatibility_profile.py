@@ -58,6 +58,14 @@ REQUIRED_CUSTOM_FIELDS = (
 	"Sales Invoice Item-rt_line_ref",
 )
 
+# RT-1422: the count leg's provenance fields. NOT in REQUIRED_CUSTOM_FIELDS: a site without them must keep
+# posting sales (the preflight pauses all posting on a missing required field); only `inventory_count`
+# items pause, through the leg's own unique-index guard. hooks.py exports both lists.
+COUNT_CUSTOM_FIELDS = (
+	"Stock Reconciliation-rt_source_system",
+	"Stock Reconciliation-rt_external_id",
+)
+
 # ISO 4217 minor units for the currencies a Retail Tower tenant may post in. An unknown currency is
 # critical (never guessed): add it here when a tenant needs it.
 ISO_MINOR_UNITS = {

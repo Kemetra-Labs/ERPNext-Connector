@@ -27,6 +27,8 @@ POSTING_LOG_INDEX = "unique_rt_posting_idem"
 SALES_INVOICE_INDEX = "unique_rt_si_provenance"
 POSTING_LOG_COLUMNS = ("source_system", "external_id")
 SALES_INVOICE_COLUMNS = ("rt_source_system", "rt_external_id")
+STOCK_RECONCILIATION_INDEX = "unique_rt_sr_provenance"  # RT-1422, the inventory_count leg's own index
+STOCK_RECONCILIATION_COLUMNS = ("rt_source_system", "rt_external_id")
 
 
 class G5IndexError(RuntimeError):
@@ -80,6 +82,36 @@ def _create_sales_invoice_index() -> None:
 	frappe.db.add_unique("Sales Invoice", list(SALES_INVOICE_COLUMNS), constraint_name=SALES_INVOICE_INDEX)
 
 
+def ensure_stock_reconciliation_index() -> None:
+	"""Idempotently ensure the count provenance Custom Fields and ``unique_rt_sr_provenance`` (RT-1422).
+
+	Same path as the Sales Invoice index, plus the data preflight: duplicate provenance keys make the
+	patch's helper raise, so the migrate fails loud and the index is never created over them.
+	"""
+	_ensure(
+		"Stock Reconciliation",
+		STOCK_RECONCILIATION_INDEX,
+		STOCK_RECONCILIATION_COLUMNS,
+		_create_stock_reconciliation_index,
+	)
+
+
+def _create_stock_reconciliation_index() -> None:
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+
+	from retail_tower_erpnext_connector.connector.posting.index_guard import duplicate_provenance_message
+	from retail_tower_erpnext_connector.patches import stock_reconciliation_unique_provenance as patch
+
+	create_custom_fields(patch._INDEXED_FIELDS, ignore_validate=True)
+	frappe.db.commit()
+	duplicates = patch.duplicate_rows()
+	if duplicates:
+		raise G5IndexError(duplicate_provenance_message(duplicates))
+	frappe.db.add_unique(
+		"Stock Reconciliation", list(STOCK_RECONCILIATION_COLUMNS), constraint_name=STOCK_RECONCILIATION_INDEX
+	)
+
+
 def ensure_g5_indexes() -> None:
 	"""Ensure both Gate G5 indexes (install + every migrate)."""
 	ensure_posting_log_index()
@@ -88,11 +120,13 @@ def ensure_g5_indexes() -> None:
 
 def after_install() -> None:
 	ensure_g5_indexes()
+	ensure_stock_reconciliation_index()
 	ensure_give_back_item()
 
 
 def after_migrate() -> None:
 	ensure_g5_indexes()
+	ensure_stock_reconciliation_index()
 	ensure_give_back_item()
 
 

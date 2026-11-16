@@ -588,6 +588,11 @@ def post_work_item(
 	settled on the invoice and an unmapped method fails closed. A void does not use it — it pays
 	back the original invoice's own payment rows.
 	"""
+	# RT-1422: an `inventory_count` chunk posts a native Stock Reconciliation through its own leg, which
+	# does its own Draft-aware provenance lookup (the Posting Log replay guard below is for sales).
+	if work_item.kind == "inventory_count":
+		return _post_count(work_item, client=client, store=store, correlation_id=correlation_id)
+
 	key = key_for(work_item)
 
 	# T041 — idempotent replay: an already-posted key echoes the existing documentRef.
@@ -650,6 +655,28 @@ def post_work_item(
 		store=store,
 		correlation_id=correlation_id,
 	)
+
+
+def _post_count(
+	work_item: PostingWorkItem,
+	*,
+	client: PostingFeedClient,
+	store: IdempotencyStore,
+	correlation_id: str,
+) -> str:
+	"""RT-1422 — post one ``inventory_count`` chunk (⏳ BENCH-VALIDATION: the port reads and writes ERPNext)."""
+	from .count_flow import post_count_work_item
+	from .frappe_count_port import FrappeCountPort
+
+	outcome = post_count_work_item(
+		work_item,
+		client=client,
+		store=store,
+		port=FrappeCountPort(),
+		site_tz=frappe.utils.get_system_timezone(),
+	)
+	_log_signal("posting.count", work_item, correlation_id, outcome=outcome)
+	return outcome
 
 
 def _replay_guard(

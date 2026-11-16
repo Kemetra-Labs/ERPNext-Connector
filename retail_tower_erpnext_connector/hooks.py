@@ -41,6 +41,9 @@ fixtures = [
 					# RT-16 / RT-14 D6 (authorized, decision 10343): the sale-line identity a
 					# partial return is matched on.
 					"Sales Invoice Item-rt_line_ref",
+					# RT-1422: the provenance of an inventory_count Stock Reconciliation (unique key).
+					"Stock Reconciliation-rt_source_system",
+					"Stock Reconciliation-rt_external_id",
 				],
 			]
 		],
