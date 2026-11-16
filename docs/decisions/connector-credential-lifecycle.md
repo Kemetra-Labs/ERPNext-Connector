@@ -49,6 +49,19 @@ Spec 007 adopts that boundary on the connector side. The credential model is now
   re-authenticate state, never exposes the raw/previous token, and is never blind-retried as transient.
   This reactive path now **coexists** with the proactive expiry path (a credential revoked before its
   expiry surfaces as a 401 while the expiry model still reports "active"). *(007 T2.2; #34.)*
+- **A refused credential is a state, not a per-tick error (RT-1429).** A 401 or 403 from Backend-Core opens
+  a shared *auth circuit* (`connector/auth_circuit.py`; state in the site cache, one flag for all
+  pollers because they share one token). While it is open no call leaves the site except one probe per
+  backoff window (60 s, doubling, capped at 15 min); a held-back tick is a clean "skipped" log line and
+  charges nothing. Opening it is reported once (one `connector.auth_circuit.opened` log line and one
+  Sentry event tagged `outcome=auth_failure`); the recovery is logged only (`connector.auth_circuit.closed`),
+  because Sentry here is errors-only (OBS-1 §4). **The circuit is keyed on the configured credential** (its id plus a short one-way fingerprint of the token),
+  so replacing the token, however it is changed, is a new key and takes effect on the next tick with no
+  hook on Connector Settings (a DocType controller change would make the ERP release `restore` class,
+  RT-927); `bench execute retail_tower_erpnext_connector.connector.auth_circuit_store.reset_auth_circuit`
+  forces an immediate probe. A 5xx never opens or closes it. A refused ack does not lose a sale: the Posting Log
+  row is written before the ack, so the re-offered item resolves to the recorded invoice. There is no
+  scheduler-start hook, so the first heartbeat after a deploy is the start-up check. *(RT-1429.)*
 - **Local link-invariant is advisory (warn-only), OQ-2.** When a token is configured but no
   registration ref is recorded (a legacy unlinked credential), the connector emits a
   `posting.credential.unlinked` warning — it does **not** block. An unlinked legacy token still works

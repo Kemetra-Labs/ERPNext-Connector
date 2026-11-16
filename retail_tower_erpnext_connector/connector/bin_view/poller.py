@@ -568,11 +568,13 @@ def _build_bin_view_path(correlation_id: str):
 	Reuses the Connector Settings ``dp2_base_url`` + ``dp2_token`` (the posting poller's
 	transport pattern). Raises if base-URL/token unset → the tick skips cleanly.
 	"""
-	from .. import http_transport  # the shared auth-backed transport
+	from .. import auth_circuit_store  # the shared auth-backed transport, behind the RT-1429 auth circuit
 	from .frappe_glue import FrappeBinReader, UtcClock
 
 	settings = frappe.get_doc("Connector Settings")
-	transport = http_transport.build_http_transport(settings)
+	transport = auth_circuit_store.guarded_transport(
+		settings, job_name="bin_view_poll", request_id=correlation_id
+	)
 	client = BinViewClient(transport, correlation_id=correlation_id)
 	return client, FrappeBinReader(), UtcClock()
 

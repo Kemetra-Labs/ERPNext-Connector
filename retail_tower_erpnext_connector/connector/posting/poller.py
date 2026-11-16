@@ -189,7 +189,7 @@ def _build_posting_path(correlation_id: str):
 	``preflight()`` runs the Compatibility Profile against the SAME parsed maps (no second read).
 	Finalised at bench time (reads Connector Settings + signed decisions).
 	"""
-	from .. import http_transport
+	from .. import auth_circuit_store
 	from . import compatibility_glue
 	from .config import require_configured_maps
 	from .frappe_glue import post_work_item  # local import: glue imports frappe-only symbols
@@ -217,7 +217,11 @@ def _build_posting_path(correlation_id: str):
 	# a tender-bearing sale with an unmapped method then fails closed per item (validation).
 	tender_modes = _load_tender_mode_map(settings)
 
-	transport = http_transport.build_http_transport(settings)  # auth-backed HTTP client to DP2 (spec 003)
+	# Auth-backed HTTP client to DP2 (spec 003), behind the RT-1429 auth circuit: a refused credential holds
+	# the tick back here (a clean skip) instead of failing it, and being reported, every minute.
+	transport = auth_circuit_store.guarded_transport(
+		settings, job_name="posting_poll", request_id=correlation_id
+	)
 	client = PostingFeedClient(transport, correlation_id=correlation_id)
 	store = FrappePostingLogStore()
 	uom_map = UomMap(uom)

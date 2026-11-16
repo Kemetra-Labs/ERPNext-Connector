@@ -190,8 +190,10 @@ def _posting_page() -> dict:
 	}
 
 
-def _posting_tick(monkeypatch, transport=None):
-	"""Run one real ``run_posting_poll`` tick over faked frappe/HTTP seams; return what it sent."""
+def _posting_tick(monkeypatch, transport=None, post=None):
+	"""Run one real ``run_posting_poll`` tick over faked frappe/HTTP seams; return what it sent.
+
+	``post`` replaces the glue's ``post_work_item`` (RT-1429: a posting whose ack is refused)."""
 	poller = importlib.import_module(_POSTING_POLLER)
 	glue = importlib.import_module(_POSTING_GLUE)
 	guard = importlib.import_module(_INDEX_GUARD)
@@ -201,7 +203,7 @@ def _posting_tick(monkeypatch, transport=None):
 	# RT-379: a compatible site (the profile itself is covered by test_compatibility_*).
 	profile = importlib.import_module("retail_tower_erpnext_connector.connector.posting.compatibility_glue")
 	monkeypatch.setattr(profile, "run_preflight", lambda _settings, _maps: True)
-	monkeypatch.setattr(http_transport, "build_http_transport", lambda _settings: transport)
+	monkeypatch.setattr(http_transport, "build_http_transport", lambda _settings, **_circuit: transport)
 	monkeypatch.setattr(poller, "_warn_credential_lifecycle", lambda _settings: None)
 	monkeypatch.setattr(poller, "_load_uom_map", lambda _s: {"each": "Nos"})
 	monkeypatch.setattr(poller, "_load_warehouse_map", lambda _s: {_STORE: {"warehouse": "Stores - RT"}})
@@ -213,7 +215,7 @@ def _posting_tick(monkeypatch, transport=None):
 	def _record_post(work_item, *, client, correlation_id, **_deps):
 		glue_calls.append((work_item.work_item_ref, correlation_id, client))
 
-	monkeypatch.setattr(glue, "post_work_item", _record_post)
+	monkeypatch.setattr(glue, "post_work_item", post or _record_post)
 	poller.run_posting_poll()
 	return transport, glue_calls
 
@@ -285,7 +287,7 @@ def _bin_view_tick(monkeypatch, transport=None):
 	glue = importlib.import_module(_BIN_VIEW_GLUE)
 
 	transport = transport or _RecordingTransport(_bin_view_page())
-	monkeypatch.setattr(http_transport, "build_http_transport", lambda _settings: transport)
+	monkeypatch.setattr(http_transport, "build_http_transport", lambda _settings, **_circuit: transport)
 	monkeypatch.setattr(glue, "FrappeBinReader", _Reader)
 	monkeypatch.setattr(glue, "UtcClock", _Clock)
 	poller.run_bin_view_poll()

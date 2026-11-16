@@ -239,12 +239,14 @@ def _send(client, pending: dict) -> bool:
 
 
 def _build(correlation_id: str):
-	from .. import http_transport
+	from .. import auth_circuit_store
 	from ..bin_view.frappe_glue import UtcClock
 	from .frappe_glue import FrappeLedgerSource
 
 	settings = frappe.get_doc("Connector Settings")
-	transport = http_transport.build_http_transport(settings)
+	transport = auth_circuit_store.guarded_transport(
+		settings, job_name="stock_import_poll", request_id=correlation_id
+	)
 	return StockImportClient(transport, correlation_id=correlation_id), FrappeLedgerSource(), UtcClock()
 
 

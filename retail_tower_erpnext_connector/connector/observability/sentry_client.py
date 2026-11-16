@@ -36,6 +36,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from ..auth_circuit import AuthCircuitOpen, AuthRefused
 from .scrubber import scrub_event
 
 SERVICE = "erpnext-connector"
@@ -152,10 +153,12 @@ def capture_tick_error(
 	request_id: str,
 	job_name: str,
 	environ: Mapping[str, str] | None = None,
+	extra_tags: Mapping[str, str] | None = None,
 ) -> bool:
 	"""Report one unhandled tick error to the Connector's own Sentry project. Never raises.
 
 	``True`` when the event was handed to the SDK; ``False`` when inert or when anything failed.
+	``extra_tags`` must stay on the OBS-1 tag allowlist (anything else is dropped by ``scrub_event``).
 	"""
 	try:
 		config = resolve_config(os.environ if environ is None else environ)
@@ -164,7 +167,9 @@ def capture_tick_error(
 		hub = _hub_for(config)
 		if hub is None:
 			return False
-		hub.capture_exception(exc, tags=_tags(config, request_id=request_id, job_name=job_name, exc=exc))
+		tags = _tags(config, request_id=request_id, job_name=job_name, exc=exc)
+		tags.update(extra_tags or {})
+		hub.capture_exception(exc, tags=tags)
 		hub.flush(timeout=FLUSH_TIMEOUT_SECONDS)
 		return True
 	except Exception:  # a telemetry failure never reaches a posting (OBS-1 §5)
@@ -172,11 +177,43 @@ def capture_tick_error(
 		return False
 
 
+def capture_auth_circuit_open(
+	status: int,
+	*,
+	request_id: str,
+	job_name: str,
+	environ: Mapping[str, str] | None = None,
+) -> bool:
+	"""RT-1429 — report that Backend-Core started refusing the Connector credential. ONE event per incident.
+
+	Called when the auth circuit opens, never per refused tick: while it stays open the pollers make no
+	calls, and a recovery is not an error (OBS-1 §4: errors only), so it is logged, not sent. The event
+	carries the HTTP status and ``outcome=auth_failure``; the message holds the status only, never a token.
+	"""
+	return capture_tick_error(
+		AuthRefused(status, reported=True),
+		request_id=request_id,
+		job_name=job_name,
+		environ=environ,
+		extra_tags={"status": str(status), "outcome": "auth_failure"},
+	)
+
+
 @contextmanager
 def report_unhandled(*, job_name: str, request_id: str) -> Iterator[None]:
-	"""Report an exception escaping the block, then re-raise it unchanged (the scheduler still logs it)."""
+	"""Report an exception escaping the block, then re-raise it unchanged (the scheduler still logs it).
+
+	RT-1429: a tick held back by an open auth circuit ends quietly (nothing failed: no call was made), and
+	a credential refusal the circuit already reported is re-raised without a second capture.
+	"""
 	try:
 		yield
+	except AuthCircuitOpen:
+		return
+	except AuthRefused as exc:
+		if not exc.reported:
+			capture_tick_error(exc, request_id=request_id, job_name=job_name)
+		raise
 	except Exception as exc:
 		capture_tick_error(exc, request_id=request_id, job_name=job_name)
 		raise

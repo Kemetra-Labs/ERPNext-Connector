@@ -284,9 +284,14 @@ class TestFailsQuietly:
 		fake = _Frappe()
 		body = {"error": {"code": "unauthorized", "message": "Unauthorized"}}
 		load(fake, _Requests(status=401, body=body)).run_heartbeat()
-		assert _levels(fake) == [("error", "connector.heartbeat.unauthorized")]
-		assert fake.records[0][1]["status"] == 401
-		assert fake.records[0][1]["code"] == "unauthorized"
+		# RT-1429: the first refusal also opens the auth circuit, which logs that once; the heartbeat's
+		# own line is unchanged.
+		assert _levels(fake) == [
+			("error", "connector.auth_circuit.opened"),
+			("error", "connector.heartbeat.unauthorized"),
+		]
+		assert fake.records[1][1]["status"] == 401
+		assert fake.records[1][1]["code"] == "unauthorized"
 
 	def test_400_is_a_contract_error_and_not_raised(self, load):
 		fake = _Frappe()

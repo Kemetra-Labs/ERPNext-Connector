@@ -22,8 +22,11 @@ On each tick it:
 FAILS QUIETLY AND OBSERVABLY. Every failure — configuration, transport, a refused or rejected
 heartbeat — ends in one structured log line and the job returns normally; nothing is re-raised and
 nothing is retried within the tick (the next minute's beat is the retry). The heartbeat is a
-separate scheduled job that shares no state with the posting or bin-view pollers, so a failing
-heartbeat never blocks, delays or alters posting. Log lines carry the error class, the HTTP status
+separate scheduled job that shares no work state with the posting or bin-view pollers, so a failing
+heartbeat never blocks, delays or alters posting. The one thing it shares with them is the RT-1429 auth
+circuit: all four use the same Backend-Core credential, so a refusal seen by any of them holds back all
+of them (the heartbeat included) until the next probe, and the first heartbeat after a deploy is the
+start-up credential check. Log lines carry the error class, the HTTP status
 and error code, and a scrubbed message only — never the token or a request header.
 
 This is the composition root; it imports ``frappe``, so it is validated on a bench, not locally
@@ -109,10 +112,13 @@ def _build_client(correlation_id: str) -> HeartbeatClient:
 
 	Raises when ``dp2_base_url`` or ``dp2_token`` is unset, so the tick skips cleanly.
 	"""
-	from .. import http_transport  # the shared auth-backed transport
+	from .. import auth_circuit_store  # the shared auth-backed transport, behind the RT-1429 auth circuit
 
 	settings = frappe.get_doc("Connector Settings")
-	return HeartbeatClient(http_transport.build_http_transport(settings), correlation_id=correlation_id)
+	transport = auth_circuit_store.guarded_transport(
+		settings, job_name="heartbeat", request_id=correlation_id
+	)
+	return HeartbeatClient(transport, correlation_id=correlation_id)
 
 
 def _connector_version() -> str:

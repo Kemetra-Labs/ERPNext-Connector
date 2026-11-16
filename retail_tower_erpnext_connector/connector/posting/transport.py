@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..auth_circuit import AUTH_REFUSAL_STATUSES, AuthRefused
 from ..http_transport import HttpTransport
 from .contracts import MissingErpnextItemRef, OutcomeAckRequest, PostingWorkItem
 
@@ -208,6 +209,10 @@ class PostingFeedClient:
 		status = resp.status  # type: ignore[attr-defined]
 		headers = getattr(resp, "headers", {}) or {}
 		body = getattr(resp, "body", {}) or {}
+		if status in AUTH_REFUSAL_STATUSES:
+			# RT-1429: the credential is refused, not this item. The transport already fed the auth
+			# circuit; a typed refusal replaces the generic "unexpected ack status" error.
+			raise AuthRefused(status, reported=True)
 		if status == 409:
 			raise AckConflict(str(body.get("code", "idempotency_key_conflict")))
 		if status == 404:
