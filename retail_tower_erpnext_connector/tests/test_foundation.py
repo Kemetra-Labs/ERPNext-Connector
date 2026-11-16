@@ -42,6 +42,8 @@ ALLOWED_SCHEDULED_JOBS = frozenset(
 		"retail_tower_erpnext_connector.connector.bin_view.poller.run_bin_view_poll",
 		# RT-564 / spec 020: the liveness heartbeat to Backend-Core (connectorReportHeartbeat).
 		"retail_tower_erpnext_connector.connector.health.sender.run_heartbeat",
+		# RT-1436 / RT-1287: the stock-import poller (still gated by its site-config switch).
+		"retail_tower_erpnext_connector.connector.stock_import.poller.run_stock_import_poll",
 	}
 )
 
@@ -150,7 +152,7 @@ class TestFoundationNoMutationNoFork(unittest.TestCase):
 			)
 
 	def test_scheduler_events_only_register_the_reviewed_pollers(self):
-		"""Specs 006, 019 and 020: only the posting and bin-view pollers and the heartbeat are scheduled."""
+		"""Specs 006, 019, 020 and RT-1436: only the posting, bin-view and stock-import pollers and the heartbeat."""
 		hooks = frappe.get_hooks(app_name=APP_NAME)
 		scheduler = hooks.get("scheduler_events") or {}
 		registered = _flatten_scheduler_jobs(scheduler)

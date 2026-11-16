@@ -81,6 +81,12 @@ scheduler_events = {
 			# reads the live ERPNext Bin on-hand per warehouse, and reports the snapshot
 			# back (feeds the 017 stock reconciliation). On-hand QUANTITY only; no valuation.
 			"retail_tower_erpnext_connector.connector.bin_view.poller.run_bin_view_poll",
+			# RT-1436 — the stock-import poller (RT-1287/RT-1288): reads the ERPNext ledger facts
+			# Backend-Core asks for and reports them (feeds the Count Cut barrier). The design sets
+			# no cadence of its own; 5 minutes matches the bin-view poller, and a tick is bounded
+			# to 240 s (_TICK_BUDGET_S), so Frappe's no-overlap rule is never hit. The site-config
+			# switch rt_connector_stock_import_enabled still gates every tick (inert when off).
+			"retail_tower_erpnext_connector.connector.stock_import.poller.run_stock_import_poll",
 		],
 	}
 }

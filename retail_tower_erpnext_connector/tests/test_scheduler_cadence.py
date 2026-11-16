@@ -13,6 +13,7 @@ from retail_tower_erpnext_connector import hooks
 
 POSTING_POLLER = "retail_tower_erpnext_connector.connector.posting.poller.run_posting_poll"
 BIN_VIEW_POLLER = "retail_tower_erpnext_connector.connector.bin_view.poller.run_bin_view_poll"
+STOCK_IMPORT_POLLER = "retail_tower_erpnext_connector.connector.stock_import.poller.run_stock_import_poll"
 HEARTBEAT = "retail_tower_erpnext_connector.connector.health.sender.run_heartbeat"
 
 
@@ -27,6 +28,13 @@ def test_posting_poller_runs_every_minute():
 
 def test_bin_view_poller_stays_every_five_minutes():
 	assert _cron_expressions_for(BIN_VIEW_POLLER) == ["*/5 * * * *"]
+
+
+def test_stock_import_poller_is_scheduled_every_five_minutes():
+	# RT-1436: run_stock_import_poll (RT-1287/RT-1288) was never registered, so erp_stock_import_runs
+	# stayed empty and the Count Cut barrier could not pass unattended. Same cadence as the bin-view
+	# poller; the site-config switch (rt_connector_stock_import_enabled) still gates each tick.
+	assert _cron_expressions_for(STOCK_IMPORT_POLLER) == ["*/5 * * * *"]
 
 
 def test_heartbeat_runs_every_minute():
