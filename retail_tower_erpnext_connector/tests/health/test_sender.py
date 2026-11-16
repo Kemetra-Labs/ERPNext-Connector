@@ -32,7 +32,14 @@ _MISSING = object()
 _TOKEN = "rt-connector-secret-token-value"
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 _Z_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
-_CONTRACT_KEYS = {"connectorVersion", "backlogIndicator", "erpnextReachable", "sourceClockAt"}
+_CONTRACT_KEYS = {
+	"connectorVersion",
+	"backlogIndicator",
+	"erpnextReachable",
+	"sourceClockAt",
+	"acceptedWorkItemKinds",
+	"backDatedRole",
+}
 
 
 class _Logger:
@@ -54,11 +61,14 @@ class _Settings:
 
 
 class _Frappe(types.ModuleType):
-	def __init__(self, settings=None, *, db_ok=True):
+	def __init__(
+		self, settings=None, *, db_ok=True, role=None, holders=(), user="rt-connector@x", role_error=None
+	):
 		super().__init__("frappe")
 		self._logger = _Logger()
 		self.logger = lambda name=None: self._logger
 		self._settings = settings if settings is not None else _Settings()
+		self._holders = holders
 		self.get_doc = lambda doctype: self._settings
 		self.sql_calls = []
 
@@ -74,11 +84,27 @@ class _Frappe(types.ModuleType):
 		)
 		self.db = types.SimpleNamespace(
 			sql=_sql,
-			get_single_value=lambda doctype, field: None,
+			get_single_value=self._single_value,
 			set_single_value=lambda *a, **k: None,
 			commit=lambda: None,
 		)
 		self.exceptions = types.SimpleNamespace()
+		self._role, self._role_error = role, role_error
+		self.session = types.SimpleNamespace(user=user)
+		self.get_all_calls = []
+		self.get_all = self._get_all
+		self.writes = []
+
+	def _single_value(self, doctype, field):
+		if self._role_error is not None:
+			raise self._role_error
+		if (doctype, field) == ("Stock Settings", "role_allowed_to_create_edit_back_dated_transactions"):
+			return self._role
+		return None
+
+	def _get_all(self, doctype, **kwargs):
+		self.get_all_calls.append((doctype, kwargs))
+		return list(self._holders)
 
 	@property
 	def records(self):
@@ -156,6 +182,61 @@ class TestBeat:
 		assert "backlogIndicator" not in body  # no truthful count on the connector side
 		assert _levels(fake) == []
 		assert fake.sql_calls == ["SELECT 1"]
+
+	def test_it_reports_the_accepted_kinds_from_the_posting_contract(self, load):
+		fake, requests = _Frappe(), _Requests()
+		load(fake, requests).run_heartbeat()
+		assert requests.calls[0]["json"]["acceptedWorkItemKinds"] == [
+			"inventory_count",
+			"reversal",
+			"sale_post",
+		]
+
+
+class TestBackDatedRole:
+	"""RT-1427 — the read-only role check; any failure is `unknown`, never `verified`."""
+
+	def _role(self, load, **kwargs):
+		fake, requests = _Frappe(**kwargs), _Requests()
+		load(fake, requests).run_heartbeat()
+		return fake, requests.calls[0]["json"]["backDatedRole"]
+
+	def test_role_present_is_verified(self, load):
+		fake, role = self._role(load, role="Stock Backdater", holders=["rt-connector@x", "boss@x"])
+		assert role["status"] == "verified"
+		assert _Z_TIME.match(role["checkedAt"])
+		assert _levels(fake) == []
+
+	def test_role_missing_is_missing(self, load):
+		_fake, role = self._role(load, role="Stock Backdater", holders=["boss@x"])
+		assert role["status"] == "missing"
+
+	def test_no_role_configured_is_verified_by_erpnexts_rule(self, load):
+		fake, role = self._role(load, role=None)
+		assert role["status"] == "verified"
+		assert fake.get_all_calls == []  # nothing to look up
+
+	def test_a_failing_check_is_unknown_and_the_beat_still_goes_out(self, load):
+		fake, requests = _Frappe(role_error=RuntimeError("settings unreadable")), _Requests()
+		load(fake, requests).run_heartbeat()
+		assert len(requests.calls) == 1
+		assert requests.calls[0]["json"]["backDatedRole"]["status"] == "unknown"
+		assert requests.calls[0]["json"]["erpnextReachable"] is True
+
+	def test_a_failing_holder_lookup_is_unknown(self, load):
+		fake, requests = _Frappe(role="Stock Backdater"), _Requests()
+		fake.get_all = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db gone"))
+		load(fake, requests).run_heartbeat()
+		assert requests.calls[0]["json"]["backDatedRole"]["status"] == "unknown"
+
+	def test_no_session_user_is_unknown(self, load):
+		_fake, role = self._role(load, role="Stock Backdater", holders=["boss@x"], user=None)
+		assert role["status"] == "unknown"
+
+	def test_the_check_reads_only(self, load):
+		fake, _role = self._role(load, role="Stock Backdater", holders=["boss@x"])
+		assert [call[0] for call in fake.get_all_calls] == ["Has Role"]  # a read-only lookup
+		assert fake.writes == []
 
 	def test_a_failing_db_probe_reports_unreachable_and_still_beats(self, load):
 		fake, requests = _Frappe(db_ok=False), _Requests()

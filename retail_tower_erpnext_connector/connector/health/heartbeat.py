@@ -10,7 +10,9 @@ Contract: ``services/backend-core/packages/contracts/openapi/erpnext-connector/c
   - ``connectorVersion``  string, 1..64 chars;
   - ``backlogIndicator``  integer, 0..2147483647 (int4);
   - ``erpnextReachable``  boolean — the connector's own self-report;
-  - ``sourceClockAt``     date-time — provenance only; Backend-Core's own clock decides liveness.
+  - ``sourceClockAt``     date-time — provenance only; Backend-Core's own clock decides liveness;
+  - ``acceptedWorkItemKinds`` the posting work-item kinds this Connector accepts (RT-1427);
+  - ``backDatedRole``     ``{status: verified|missing|unknown, checkedAt}`` (RT-1427).
 
 The connector identity and tenant come from the bearer on Backend-Core's side, never the body, so
 this module sends no identity field and nothing outside that list. A 200 returns ``HeartbeatAck``
@@ -27,7 +29,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from ..http_transport import HttpTransport
+from ..posting.contracts import WORK_ITEM_KINDS
 from ..text import error_code
+from .back_dated_role import BackDatedRole
 
 # spec-003 substrate: the request_id correlation travels on every call (RT-39).
 CORRELATION_HEADER = "X-Request-Id"
@@ -63,6 +67,8 @@ class HeartbeatReport:
 	backlog_indicator: int | None = None
 	erpnext_reachable: bool | None = None
 	source_clock_at: str | None = None
+	accepted_work_item_kinds: tuple[str, ...] | None = None
+	back_dated_role: BackDatedRole | None = None
 
 	def to_wire(self) -> dict:
 		"""The ``HeartbeatReport`` body: only contract keys, only set fields, within bounds.
@@ -87,6 +93,19 @@ class HeartbeatReport:
 			body["erpnextReachable"] = self.erpnext_reachable
 		if self.source_clock_at is not None:
 			body["sourceClockAt"] = self.source_clock_at
+		body.update(self._count_evidence_wire())
+		return body
+
+	def _count_evidence_wire(self) -> dict:
+		"""RT-1427: the accepted kinds and the back-dated role, validated like the rest."""
+		body: dict = {}
+		if self.accepted_work_item_kinds is not None:
+			kinds = sorted(set(self.accepted_work_item_kinds))
+			if not set(kinds) <= WORK_ITEM_KINDS:
+				raise ValueError(f"acceptedWorkItemKinds must be within {sorted(WORK_ITEM_KINDS)}")
+			body["acceptedWorkItemKinds"] = kinds
+		if self.back_dated_role is not None:
+			body["backDatedRole"] = self.back_dated_role.to_wire()
 		return body
 
 

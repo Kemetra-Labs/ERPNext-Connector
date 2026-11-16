@@ -37,8 +37,10 @@ from datetime import UTC, datetime
 
 import frappe
 
+from ..posting.contracts import WORK_ITEM_KINDS
 from ..request_id import new_request_id
 from ..text import scrub
+from .back_dated_role import UNKNOWN, BackDatedRole, assess_back_dated_role
 from .heartbeat import (
 	HeartbeatClient,
 	HeartbeatError,
@@ -89,6 +91,8 @@ def _send_heartbeat(request_id: str) -> None:
 		connector_version=_connector_version(),
 		erpnext_reachable=_erpnext_reachable(),
 		source_clock_at=format_source_clock(datetime.now(UTC)),
+		accepted_work_item_kinds=tuple(sorted(WORK_ITEM_KINDS)),
+		back_dated_role=_back_dated_role(),
 	)
 	ack = client.report(report)
 	frappe.logger(_LOGGER).debug(
@@ -124,6 +128,29 @@ def _erpnext_reachable() -> bool:
 	except Exception:
 		return False
 	return True
+
+
+def _back_dated_role() -> BackDatedRole:
+	"""RT-1427 — may the ERP user this Connector posts as back-date stock documents? READ-ONLY.
+
+	Reads Stock Settings and the ``Has Role`` rows of the allowed role (no write, no document), and
+	judges them by ERPNext's own rule (:func:`assess_back_dated_role`). Any failure reports
+	``unknown``, never ``verified``; the beat still goes out.
+	"""
+	checked_at = format_source_clock(datetime.now(UTC))
+	try:
+		role = frappe.db.get_single_value(
+			"Stock Settings", "role_allowed_to_create_edit_back_dated_transactions"
+		)
+		holders = (
+			frappe.get_all("Has Role", filters={"role": role, "parenttype": "User"}, pluck="parent")
+			if role
+			else []
+		)
+		status = assess_back_dated_role(allowed_role=role, role_holders=holders, user=frappe.session.user)
+	except Exception:
+		status = UNKNOWN
+	return BackDatedRole(status=status, checked_at=checked_at)
 
 
 def _log_refusal(level: str, event: str, request_id: str, exc: HeartbeatError) -> None:

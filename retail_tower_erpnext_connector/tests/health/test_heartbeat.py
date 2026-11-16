@@ -14,8 +14,16 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 
 from retail_tower_erpnext_connector.connector.health import heartbeat as hb
+from retail_tower_erpnext_connector.connector.health.back_dated_role import BackDatedRole
 
-_CONTRACT_KEYS = {"connectorVersion", "backlogIndicator", "erpnextReachable", "sourceClockAt"}
+_CONTRACT_KEYS = {
+	"connectorVersion",
+	"backlogIndicator",
+	"erpnextReachable",
+	"sourceClockAt",
+	"acceptedWorkItemKinds",
+	"backDatedRole",
+}
 
 
 class _Transport:
@@ -30,6 +38,28 @@ class _Transport:
 
 def _resp(status, body=None):
 	return types.SimpleNamespace(status=status, headers={}, body=body if body is not None else {})
+
+
+class TestCountEvidence:
+	"""RT-1427 — the accepted kinds and the back-dated role travel on the same strict body."""
+
+	def test_kinds_are_sorted_deduplicated_and_role_is_nested(self):
+		role = BackDatedRole(status="verified", checked_at="2026-11-16T10:00:00.000Z")
+		body = hb.HeartbeatReport(
+			accepted_work_item_kinds=("reversal", "inventory_count", "reversal"), back_dated_role=role
+		).to_wire()
+		assert body == {
+			"acceptedWorkItemKinds": ["inventory_count", "reversal"],
+			"backDatedRole": {"status": "verified", "checkedAt": "2026-11-16T10:00:00.000Z"},
+		}
+
+	def test_an_unknown_kind_fails_before_it_is_sent(self):
+		with pytest.raises(ValueError):
+			hb.HeartbeatReport(accepted_work_item_kinds=("refund",)).to_wire()
+
+	def test_an_unknown_role_status_fails_before_it_is_sent(self):
+		with pytest.raises(ValueError):
+			hb.HeartbeatReport(back_dated_role=BackDatedRole(status="granted", checked_at="x")).to_wire()
 
 
 class TestReportBody:
