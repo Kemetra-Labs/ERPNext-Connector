@@ -325,13 +325,14 @@ def seed_sales(bulk):
 	STATE["first_sale"] = first
 	for n, cc in enumerate(centres * 3):  # open credit sales, aged 40-100 days
 		date = str(max(getdate(add_days(STATE["today"], -(40 + n * 12))), getdate(STATE["year_start"])))
-		sales_invoice(
+		credit_inv = sales_invoice(
 			cc,
 			date,
 			[(ITEM_PRICES[n % 3][0], 1, ITEM_PRICES[n % 3][1])],
 			credit=True,
 			due=add_days(date, 30),
 		)
+		STATE.setdefault("credit", credit_inv["name"])
 	return count
 
 
@@ -342,27 +343,32 @@ def seed_ap_bank():
 	)
 	for n in range(3):
 		date = str(max(getdate(add_days(STATE["today"], -(35 + n * 20))), getdate(STATE["year_start"])))
-		frappe.get_doc(
-			{
-				"doctype": "Purchase Invoice",
-				"company": COMPANY,
-				"supplier": SUPPLIER,
-				"posting_date": date,
-				"set_posting_time": 1,
-				"bill_no": f"RT-BILL-{n}",
-				"bill_date": date,
-				"due_date": add_days(date, 30),
-				"items": [
-					{
-						"item_code": "RT-SERVICE",
-						"qty": 1,
-						"rate": 500 + n * 100,
-						"expense_account": expense,
-						"cost_center": cc,
-					}
-				],
-			}
-		).insert().submit()
+		pi = (
+			frappe.get_doc(
+				{
+					"doctype": "Purchase Invoice",
+					"company": COMPANY,
+					"supplier": SUPPLIER,
+					"posting_date": date,
+					"set_posting_time": 1,
+					"bill_no": f"RT-BILL-{n}",
+					"bill_date": date,
+					"due_date": add_days(date, 30),
+					"items": [
+						{
+							"item_code": "RT-SERVICE",
+							"qty": 1,
+							"rate": 500 + n * 100,
+							"expense_account": expense,
+							"cost_center": cc,
+						}
+					],
+				}
+			)
+			.insert()
+			.submit()
+		)
+		STATE.setdefault("pi", pi.name)
 	parent = frappe.db.get_value("Account", {"company": COMPANY, "account_type": "Bank", "is_group": 1})
 	if not frappe.db.exists("Account", f"RT Proof Bank - {ABBR}"):
 		frappe.get_doc(
@@ -575,6 +581,7 @@ def timed(user, report, filters):
 		return {
 			"ok": False,
 			"error": f"{type(e).__name__}: {clean(e)}",
+			"tb": traceback.format_exc().splitlines()[-8:],
 			"seconds": round(time.perf_counter() - t0, 3),
 		}
 
@@ -591,6 +598,7 @@ def report_job(report_name, filters, run_user):  # runs inside a bench worker
 		return {
 			"ok": False,
 			"error": f"{type(e).__name__}: {clean(e)}",
+			"tb": traceback.format_exc().splitlines()[-8:],
 			"seconds": round(time.perf_counter() - t0, 3),
 		}
 	finally:
@@ -894,16 +902,13 @@ def case_v6_prepared_and_size():
 	t0 = time.time()
 	while time.time() - t0 < 600:
 		frappe.db.rollback()  # see the worker's commit
-		doc = frappe.db.get_value(
-			"Prepared Report",
-			name,
-			["status", "queued_at", "report_end_time", "creation", "peak_memory_usage"],
-			as_dict=True,
-		)
-		if doc.status in ("Completed", "Error", "Cancelled"):
+		doc = frappe.get_doc("Prepared Report", name).as_dict()
+		if doc.get("status") in ("Completed", "Error", "Cancelled"):
 			break
 		time.sleep(1)
-	out["prepared_report_doc"] = doc
+	out["prepared_report_doc"] = {
+		k: str(v)[:80] for k, v in doc.items() if k not in ("filters", "filter_values")
+	}
 	second = run_as(USERS["svc"], "Stock Balance", dict(f), ignore_prepared_report=False)
 	out["stock_balance_after_prepare"] = {
 		"prepared": bool(second.get("prepared_report")),
@@ -927,6 +932,8 @@ def case_v7_cost_centre():
 	samples = {
 		"sale": next(iter(STATE["first_sale"].values()))["name"],
 		"return": next(iter(STATE["returns"].values()))["name"],
+		"credit_sale": STATE["credit"],
+		"purchase_invoice": STATE["pi"],
 	}
 	for label, voucher in samples.items():
 		rows = frappe.db.sql(
@@ -1025,7 +1032,7 @@ def case_v9_load_signal():
 			filters=filters_for("General Ledger"),
 			run_user=USERS["svc"],
 		)
-		for _ in range(6)
+		for _ in range(40)
 	]
 
 	def load_running():
@@ -1047,6 +1054,41 @@ def case_v9_load_signal():
 			"meaning": "at least three ticks started while the report jobs were still running",
 		},
 		"note": "first signal on one shared site and DB; the lab proof stays separate",
+	}
+
+
+def case_brs_permission_bisect():
+	"""Why the custom role cannot run the Bank Reconciliation Statement while the stock Accounts User and
+	Auditor can: run it with a traceback, then add read on candidate doctypes one at a time. It changes the
+	role on this throwaway site, so it runs last."""
+	from frappe.permissions import setup_custom_perms
+
+	report = "Bank Reconciliation Statement"
+	f = filters_for(report)
+	steps = [{"added": None, **timed(USERS["svc"], report, f)}]
+	for doctype in ("Account", "Payment Entry", "Bank Account", "Bank Transaction"):
+		if steps[-1]["ok"]:
+			break
+		setup_custom_perms(doctype)
+		if not frappe.db.exists("Custom DocPerm", {"parent": doctype, "role": ROLE, "permlevel": 0}):
+			frappe.get_doc(
+				{
+					"doctype": "Custom DocPerm",
+					"parent": doctype,
+					"parenttype": "DocType",
+					"parentfield": "permissions",
+					"role": ROLE,
+					"permlevel": 0,
+					"read": 1,
+				}
+			).insert(ignore_permissions=True)
+		frappe.db.commit()
+		frappe.clear_cache()
+		steps.append({"added": f"read on {doctype}", **timed(USERS["svc"], report, f)})
+	return {
+		"steps": steps,
+		"minimal_added": [x["added"] for x in steps if x["added"]] if steps[-1]["ok"] else None,
+		"note": "cumulative: each step keeps the rights added before it",
 	}
 
 
@@ -1092,6 +1134,7 @@ def main():
 		("v7_cost_centre", case_v7_cost_centre),
 		("v9_load_signal", case_v9_load_signal),
 		("v8_closed_period", case_v8_closed_period),
+		("brs_permission_bisect", case_brs_permission_bisect, True),
 	):
 		step(case, fn, bool(informational))
 	RESULTS["meta"]["finished"] = time.strftime("%Y-%m-%dT%H:%M:%S")
