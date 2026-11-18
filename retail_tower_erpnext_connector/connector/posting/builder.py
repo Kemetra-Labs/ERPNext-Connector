@@ -56,20 +56,10 @@ from decimal import Decimal, InvalidOperation, localcontext
 
 from .compatibility_profile import ISO_MINOR_UNITS
 from .contracts import PostingWorkItem, SaleLine
+from .errors import UnmappedUnit as UnmappedUnit  # re-export: the old import path stays valid
 from .posting_time import UTC_CLOCK, PostingStamp, apply_stamp, stamp_for
 from .tender import build_payments
-
-
-class UnmappedUnit(Exception):
-	"""A DP2 free-text ``unit`` has no entry in the signed unit→UOM map (FR-008).
-
-	The caller maps this to a ``permanently_rejected`` / ``validation`` outcome — never a
-	silent default (Principle VI). Raised by the injected UOM resolver.
-	"""
-
-	def __init__(self, unit: str) -> None:
-		super().__init__(f"unit {unit!r} has no ERPNext UOM mapping (fail-closed → validation)")
-		self.unit = unit
+from .uom import assert_money_conformance
 
 
 class SaleTaxNotPosted(Exception):
@@ -295,10 +285,7 @@ def build_sales_invoice(
 		doc["payments"] = payments
 
 	# FR-009 enforced in the path (not only by a separately-callable check): every monetary
-	# field is an exact-decimal string + ISO-4217, never a float. Local import avoids the
-	# builder↔uom import cycle (uom imports UnmappedUnit from this module).
-	from .uom import assert_money_conformance
-
+	# field is an exact-decimal string + ISO-4217, never a float.
 	assert_money_conformance(doc)
 	# RT-857: derived from the conformant strings checked above, then the final payload is held to
 	# FR-009 again (a discounted row gains a net rate and a discount_amount).

@@ -45,6 +45,8 @@ from .batch_policy import (
 )
 from .builder import LineDiscountNotPostable, SaleTaxNotPosted, UnmappedUnit, build_sales_invoice
 from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
+from .frappe_count_port import FrappeCountPort
+from .frappe_exceptions import _dup_provenance_exceptions, _transient_exceptions
 from .give_back_item import GIVE_BACK_ITEM_CODE, GIVE_BACK_ITEM_FIELDS, resolve_give_back_item
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
 from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
@@ -134,49 +136,6 @@ def _ack_key(work_item: PostingWorkItem, outcome: str) -> str:
 	if work_item.resolution_version is not None:
 		return f"{work_item.work_item_ref}:{outcome}:v{work_item.resolution_version}"
 	return f"{work_item.work_item_ref}:{outcome}"
-
-
-def _transient_exceptions() -> tuple[type[BaseException], ...]:
-	"""The ERPNext/Frappe exceptions that are genuinely retryable (F-005).
-
-	Everything else (ValidationError, PermissionError, KeyError, …) is non-retryable and
-	maps to ``permanently_rejected`` — never silently re-offered forever. Resolved lazily so
-	the set tracks the installed frappe; unknown names degrade to the base where absent.
-	"""
-	# RT-1312 F3: Frappe v16 raises QueryDeadlockError(Exception) on a MariaDB deadlock
-	# (frappe/database/database.py); a deadlock is retryable, never a permanent rejection.
-	# RT-1351: TimestampMismatchError (frappe/exceptions.py, a ValidationError subclass) is raised by
-	# Document.check_if_latest when the row's `modified` differs from the in-memory copy: a failure of
-	# Frappe's optimistic-lock check, not a business rule (RT-317 A1c: no other posting was involved;
-	# see the RT-1351 PR). It is listed here because every stage tries this set BEFORE the generic
-	# ValidationError branch; the savepoint already rolled the insert back, so a re-offer is safe and
-	# a committed twin is stopped by the unique provenance index (G5).
-	names = (
-		"TimedOutError",
-		"RetryBackoffError",
-		"QueryTimeoutError",
-		"QueryDeadlockError",
-		"TimestampMismatchError",
-	)
-	found = tuple(getattr(frappe, n) for n in names if hasattr(frappe, n))
-	# TimeoutError is always a sane transient signal even if frappe names none of the above.
-	return (*found, TimeoutError)
-
-
-def _dup_provenance_exceptions() -> tuple[type[BaseException], ...]:
-	"""Exceptions a duplicate Sales Invoice `(rt_source_system, rt_external_id)` insert raises (G5/F-002).
-
-	The `unique_rt_si_provenance` index on Sales Invoice (patch sales_invoice_unique_provenance)
-	makes a SECOND submit of an already-posted sale fail at the DB. On bench frappe v15 this surfaces
-	as **UniqueValidationError** (a ValidationError subclass — verified on the bench, NOT guessed);
-	DuplicateEntryError is included defensively (the Posting Log path raises that one). getattr-guarded
-	so a frappe missing a name degrades rather than errors. This MUST be caught BEFORE the generic
-	`frappe.ValidationError` handler, or a legitimate crash-recovery would be FALSELY rejected.
-	"""
-	names = ("UniqueValidationError", "DuplicateEntryError")
-	return tuple(exc for exc in (getattr(frappe.exceptions, n, None) for n in names) if exc is not None) or (
-		Exception,
-	)
 
 
 def _warehouse_for(work_item: PostingWorkItem, warehouses: PreResolvedWarehouse):
@@ -669,7 +628,6 @@ def _post_count(
 ) -> str:
 	"""RT-1422 — post one ``inventory_count`` chunk (⏳ BENCH-VALIDATION: the port reads and writes ERPNext)."""
 	from .count_flow import post_count_work_item
-	from .frappe_count_port import FrappeCountPort
 
 	outcome = post_count_work_item(
 		work_item,

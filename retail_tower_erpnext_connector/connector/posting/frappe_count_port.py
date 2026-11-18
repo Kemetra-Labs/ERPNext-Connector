@@ -35,6 +35,7 @@ from .count_flow import (
 	LineReadBack,
 	SiteStamp,
 )
+from .frappe_exceptions import _dup_provenance_exceptions, _transient_exceptions
 from .index_guard import COUNT_INDEXES
 from .posting_time import format_time
 from .warehouse_policy import FrozenWarehouseRejected, assert_postable_warehouse
@@ -44,18 +45,6 @@ _FREEZE_MARKERS = ("frozen", "freeze", "stock transactions before")
 _BACKDATE_MARKERS = ("back dated", "backdated", "back-dated", "stock transaction")
 
 
-def _transient_types() -> tuple[type[BaseException], ...]:
-	from .frappe_glue import _transient_exceptions
-
-	return _transient_exceptions()
-
-
-def _duplicate_types() -> tuple[type[BaseException], ...]:
-	from .frappe_glue import _dup_provenance_exceptions
-
-	return _dup_provenance_exceptions()
-
-
 def _reads(method):
 	"""A read that fails transiently (lock, timeout, deadlock) is ``CountTransient``, never an escape."""
 
@@ -63,7 +52,7 @@ def _reads(method):
 	def wrapper(self, *args, **kwargs):
 		try:
 			return method(self, *args, **kwargs)
-		except _transient_types() as exc:
+		except _transient_exceptions() as exc:
 			raise CountTransient(f"{type(exc).__name__}: {exc}") from exc
 
 	return wrapper
@@ -217,9 +206,9 @@ class FrappeCountPort:
 			frappe.db.rollback()  # a deadlock victim loses the savepoint with its transaction
 
 	def _typed(self, exc: BaseException) -> BaseException:
-		if isinstance(exc, _transient_types()):
+		if isinstance(exc, _transient_exceptions()):
 			return CountTransient(str(exc))
-		if isinstance(exc, _duplicate_types()):
+		if isinstance(exc, _dup_provenance_exceptions()):
 			return CountDuplicateProvenance(str(exc))
 		if isinstance(exc, Exception):
 			return classify_submit_failure(exc)

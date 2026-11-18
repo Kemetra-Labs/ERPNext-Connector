@@ -5,7 +5,7 @@
 
 UOM (FR-008, signed decision ``docs/decisions/mapping-uom.md`` Option A): the connector maps
 each DP2 free-text ``unit`` to an ERPNext UOM via a configured map. An unmapped unit fails
-closed (:class:`builder.UnmappedUnit`) → ``permanently_rejected`` / ``validation`` — never a
+closed (:class:`errors.UnmappedUnit`) → ``permanently_rejected`` / ``validation`` — never a
 silent default (Principle VI). The map is **config**, injected — not hardcoded.
 
 Warehouse (FR-010, rider R5): apply the DP2-pre-resolved warehouse identity generically
@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
-from .builder import UnmappedUnit
+from .errors import UnmappedUnit
 
 # Money fields mirror the 012 DecimalAmount pattern — at most 4 fractional digits (F-006).
 _DECIMAL_RE = re.compile(r"^-?\d{1,15}(\.\d{1,4})?$", re.ASCII)
