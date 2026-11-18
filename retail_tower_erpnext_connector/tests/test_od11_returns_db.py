@@ -3,7 +3,8 @@
 
 """RT-1340 acceptance criterion 1 — OD-11 returns posted by the REAL glue on a real ERPNext v16 site.
 
-The research script (``docs/research/rt-1340-od11/``) proved the document shapes with hand-written dicts.
+The research script (``docs/research/erpnext-connector/rt-1340-od11/`` at the repo root, outside the
+Connector tree) proved the document shapes with hand-written dicts.
 This module posts the Connector's own work items through ``frappe_glue.post_work_item`` on the bench
 site: the builder, the link to the original rows, the RT-452 tracking check, insert + submit, the RT-378
 read-back and the Posting Log, exactly as the poller does. One sale (golden E1 plus a split line and a
