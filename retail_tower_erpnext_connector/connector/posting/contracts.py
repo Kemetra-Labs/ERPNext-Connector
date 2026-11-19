@@ -3,7 +3,7 @@
 
 """Frozen read-models for the fixed 012 posting-feed contract (T010).
 
-These mirror Data-Pulse-2's ``posting-feed.yaml`` 1:1 (1.15.0-draft, including the RT-76 feed-1.2
+These mirror Data-Pulse-2's ``posting-feed.yaml`` 1:1 (1.17.0-draft, including the RT-76 feed-1.2
 ``Sale.tenders`` settlement field, the RT-450 tracked-line fields and the RT-1114 ``voucher``
 tender method with its ``redemptionId``). The contract is
 DP2-owned and read-only (FR-015, Principle I) — these DTOs CITE it, never re-derive it.
@@ -35,7 +35,9 @@ OUTCOMES: frozenset[str] = frozenset(
 )
 
 # 012 PostingWorkItem.kind enum.
-WORK_ITEM_KINDS: frozenset[str] = frozenset({"sale_post", "reversal", "inventory_count"})
+WORK_ITEM_KINDS: frozenset[str] = frozenset(
+	{"sale_post", "reversal", "inventory_count", "transfer_dispatch", "transfer_receive"}
+)
 
 # 012 ReversalRef.reversalKind enum.
 REVERSAL_KINDS: frozenset[str] = frozenset({"void", "refund", "return"})
@@ -489,7 +491,7 @@ class SaleLine:
 		)
 
 
-def _parse_batch_ref(raw: object) -> str | None:
+def _parse_batch_ref(raw: object, where: str = "SaleLine.erpnextBatchRef") -> str | None:
 	"""012 ``ErpnextBatchRef`` (RT-450): absent / null → None; else a strict ``{doctype: "Batch", name}``.
 
 	The Connector applies the name as given and never maps a lot code to a Batch (G7-11).
@@ -497,10 +499,10 @@ def _parse_batch_ref(raw: object) -> str | None:
 	if raw is None:
 		return None
 	if not isinstance(raw, Mapping) or raw.get("doctype") != "Batch":
-		raise ValueError(f"SaleLine.erpnextBatchRef must be a Batch reference, got {raw!r}")
+		raise ValueError(f"{where} must be a Batch reference, got {raw!r}")
 	name = raw.get("name")
 	if not isinstance(name, str) or not name:
-		raise ValueError(f"SaleLine.erpnextBatchRef.name must be a non-empty string, got {name!r}")
+		raise ValueError(f"{where}.name must be a non-empty string, got {name!r}")
 	return name
 
 
@@ -569,15 +571,15 @@ class Sale:
 _ABSENT = object()
 
 
-def _parse_warehouse_ref(raw: object) -> dict | None:
+def _parse_warehouse_ref(raw: object, where: str = "Sale.warehouseRef") -> dict | None:
 	"""012 ``ErpnextWarehouseRef`` (RT-331): a strict ``{doctype: "Warehouse", name}`` or absent (never null)."""
 	if raw is _ABSENT:
 		return None
 	if not isinstance(raw, Mapping) or raw.get("doctype") != "Warehouse":
-		raise ValueError(f"Sale.warehouseRef must be a Warehouse reference, got {raw!r}")
+		raise ValueError(f"{where} must be a Warehouse reference, got {raw!r}")
 	name = raw.get("name")
 	if not isinstance(name, str) or not name:
-		raise ValueError(f"Sale.warehouseRef.name must be a non-empty string, got {name!r}")
+		raise ValueError(f"{where}.name must be a non-empty string, got {name!r}")
 	return {"doctype": "Warehouse", "name": name}
 
 
@@ -616,7 +618,9 @@ _COUNT_BODY_KEYS = (
 )
 
 
-def _reject_unknown_keys(wire: Mapping[str, object], allowed: tuple[str, ...], name: str) -> None:
+def _reject_unknown_keys(
+	wire: Mapping[str, object], allowed: tuple[str, ...], name: str, contract: str = "count"
+) -> None:
 	extra = sorted(set(wire) - set(allowed))
 	if extra:
 		code = (
@@ -624,7 +628,9 @@ def _reject_unknown_keys(wire: Mapping[str, object], allowed: tuple[str, ...], n
 			if any("rate" in k.lower() or "valuation" in k.lower() for k in extra)
 			else "invalid_shape"
 		)
-		raise ValueError(f"{code}: {name} carries field(s) the count contract forbids: {', '.join(extra)}")
+		raise ValueError(
+			f"{code}: {name} carries field(s) the {contract} contract forbids: {', '.join(extra)}"
+		)
 
 
 @dataclass(frozen=True)
@@ -703,6 +709,226 @@ class CountPosting:
 		)
 
 
+# RT-1514: the most rows one transfer leg (one Stock Entry) holds (the lines maxItems of both bodies).
+_TRANSFER_MAX_ROWS = 100
+
+# The keys the flat transfer schemas allow (additionalProperties: false). A valuation rate or a serial
+# number is not one of them: it is refused, never silently dropped (serial transfers are refused).
+_TRANSFER_DISPATCH_LINE_KEYS = (
+	"lineSeq",
+	"transferLineRef",
+	"erpnextItemRef",
+	"erpnextBatchRef",
+	"quantity",
+	"unit",
+)
+_TRANSFER_RECEIVE_LINE_KEYS = (
+	"lineSeq",
+	"dispatchLineSeq",
+	"transferLineRef",
+	"erpnextItemRef",
+	"erpnextBatchRef",
+	"quantity",
+	"unit",
+)
+_TRANSFER_DISPATCH_KEYS = (
+	"transferRef",
+	"sourceStoreId",
+	"destinationStoreId",
+	"sourceWarehouseRef",
+	"transitWarehouseRef",
+	"postingDatetime",
+	"lines",
+)
+_TRANSFER_RECEIVE_KEYS = (
+	"transferRef",
+	"receiptRef",
+	"destinationStoreId",
+	"transitWarehouseRef",
+	"destinationWarehouseRef",
+	"dispatchDocumentRef",
+	"postingDatetime",
+	"lines",
+)
+
+
+def _transfer_quantity(raw: object, where: str) -> str:
+	"""A strictly positive exact decimal (at most 13 integer and 6 fractional digits), inline like the count one."""
+	if not isinstance(raw, str) or not re.fullmatch(
+		r"(?!0+(?:\.0+)?\Z)[0-9]{1,13}(\.[0-9]{1,6})?", raw, re.ASCII
+	):
+		raise ValueError(f"{where}.quantity must be a strictly positive decimal string, got {raw!r}")
+	return raw
+
+
+def _positive_int(raw: object, where: str) -> int:
+	if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+		raise ValueError(f"{where} must be a positive integer, got {raw!r}")
+	return raw
+
+
+def _non_empty_str(raw: object, where: str) -> str:
+	if not isinstance(raw, str) or not raw:
+		raise ValueError(f"{where} must be a non-empty string")
+	return raw
+
+
+def _transfer_rows(raw: object, where: str, parse) -> tuple:  # type: ignore[no-untyped-def]
+	if not isinstance(raw, list) or not 1 <= len(raw) <= _TRANSFER_MAX_ROWS:
+		raise ValueError(f"{where}.lines must hold 1..{_TRANSFER_MAX_ROWS} rows")
+	return _parse_list(raw, f"{where}.lines", parse)
+
+
+@dataclass(frozen=True)
+class ErpnextStockEntryRef:
+	"""012 ``ErpnextStockEntryRef`` (RT-1512/RT-1514) — a submitted ERPNext Stock Entry (the dispatch document)."""
+
+	name: str
+
+	@classmethod
+	def from_wire(cls, wire: Mapping[str, object]) -> ErpnextStockEntryRef:
+		wire = _require_object(wire, "ErpnextStockEntryRef")
+		if wire["doctype"] != "Stock Entry":
+			raise ValueError(f"ErpnextStockEntryRef must be a Stock Entry reference, got {wire['doctype']!r}")
+		return cls(name=_non_empty_str(wire["name"], "ErpnextStockEntryRef.name (Stock Entry)"))
+
+
+@dataclass(frozen=True)
+class TransferDispatchLine:
+	"""012 ``TransferDispatchLine`` — one dispatched quantity; ``line_seq`` is the dispatch Stock Entry row ``idx``."""
+
+	line_seq: int
+	transfer_line_ref: str
+	item_code: str
+	batch: str | None
+	quantity: str
+	unit: str
+
+	@classmethod
+	def from_wire(cls, wire: Mapping[str, object]) -> TransferDispatchLine:
+		wire = _require_object(wire, "TransferDispatchLine")
+		_reject_unknown_keys(wire, _TRANSFER_DISPATCH_LINE_KEYS, "TransferDispatchLine", "transfer")
+		item = ErpnextItemRef.from_wire(
+			_require_object(wire["erpnextItemRef"], "TransferDispatchLine.erpnextItemRef")
+		)
+		return cls(
+			line_seq=_positive_int(wire["lineSeq"], "TransferDispatchLine.lineSeq"),
+			transfer_line_ref=_non_empty_str(wire["transferLineRef"], "TransferDispatchLine.transferLineRef"),
+			item_code=item.name,
+			batch=_parse_batch_ref(wire["erpnextBatchRef"], "TransferDispatchLine.erpnextBatchRef"),
+			quantity=_transfer_quantity(wire["quantity"], "TransferDispatchLine"),
+			unit=_non_empty_str(wire["unit"], "TransferDispatchLine.unit"),
+		)
+
+
+@dataclass(frozen=True)
+class TransferDispatchPosting:
+	"""012 ``TransferDispatchPosting`` — the dispatch leg of one shipment Transfer (one Stock Entry, add to transit)."""
+
+	transfer_ref: str
+	source_store_id: str
+	destination_store_id: str
+	source_warehouse: str
+	transit_warehouse: str
+	posting_datetime: str
+	lines: tuple[TransferDispatchLine, ...]
+
+	@classmethod
+	def from_wire(cls, wire: Mapping[str, object]) -> TransferDispatchPosting:
+		wire = _require_object(wire, "TransferDispatchPosting")
+		_reject_unknown_keys(wire, _TRANSFER_DISPATCH_KEYS, "TransferDispatchPosting", "transfer")
+		source = _parse_warehouse_ref(
+			wire["sourceWarehouseRef"], "TransferDispatchPosting.sourceWarehouseRef"
+		)
+		transit = _parse_warehouse_ref(
+			wire["transitWarehouseRef"], "TransferDispatchPosting.transitWarehouseRef"
+		)
+		return cls(
+			transfer_ref=_non_empty_str(wire["transferRef"], "TransferDispatchPosting.transferRef"),
+			source_store_id=_non_empty_str(wire["sourceStoreId"], "TransferDispatchPosting.sourceStoreId"),
+			destination_store_id=_non_empty_str(
+				wire["destinationStoreId"], "TransferDispatchPosting.destinationStoreId"
+			),
+			source_warehouse=source["name"],  # type: ignore[index]
+			transit_warehouse=transit["name"],  # type: ignore[index]
+			posting_datetime=_non_empty_str(
+				wire["postingDatetime"], "TransferDispatchPosting.postingDatetime"
+			),
+			lines=_transfer_rows(wire["lines"], "TransferDispatchPosting", TransferDispatchLine.from_wire),
+		)
+
+
+@dataclass(frozen=True)
+class TransferReceiveLine:
+	"""012 ``TransferReceiveLine`` — one received quantity, linked to its dispatch row by ``dispatch_line_seq``."""
+
+	line_seq: int
+	dispatch_line_seq: int
+	transfer_line_ref: str
+	item_code: str
+	batch: str | None
+	quantity: str
+	unit: str
+
+	@classmethod
+	def from_wire(cls, wire: Mapping[str, object]) -> TransferReceiveLine:
+		wire = _require_object(wire, "TransferReceiveLine")
+		_reject_unknown_keys(wire, _TRANSFER_RECEIVE_LINE_KEYS, "TransferReceiveLine", "transfer")
+		item = ErpnextItemRef.from_wire(
+			_require_object(wire["erpnextItemRef"], "TransferReceiveLine.erpnextItemRef")
+		)
+		return cls(
+			line_seq=_positive_int(wire["lineSeq"], "TransferReceiveLine.lineSeq"),
+			dispatch_line_seq=_positive_int(wire["dispatchLineSeq"], "TransferReceiveLine.dispatchLineSeq"),
+			transfer_line_ref=_non_empty_str(wire["transferLineRef"], "TransferReceiveLine.transferLineRef"),
+			item_code=item.name,
+			batch=_parse_batch_ref(wire["erpnextBatchRef"], "TransferReceiveLine.erpnextBatchRef"),
+			quantity=_transfer_quantity(wire["quantity"], "TransferReceiveLine"),
+			unit=_non_empty_str(wire["unit"], "TransferReceiveLine.unit"),
+		)
+
+
+@dataclass(frozen=True)
+class TransferReceivePosting:
+	"""012 ``TransferReceivePosting`` — one receipt of a Transfer (one Stock Entry against the dispatch)."""
+
+	transfer_ref: str
+	receipt_ref: str
+	destination_store_id: str
+	transit_warehouse: str
+	destination_warehouse: str
+	dispatch_document: str
+	posting_datetime: str
+	lines: tuple[TransferReceiveLine, ...]
+
+	@classmethod
+	def from_wire(cls, wire: Mapping[str, object]) -> TransferReceivePosting:
+		wire = _require_object(wire, "TransferReceivePosting")
+		_reject_unknown_keys(wire, _TRANSFER_RECEIVE_KEYS, "TransferReceivePosting", "transfer")
+		transit = _parse_warehouse_ref(
+			wire["transitWarehouseRef"], "TransferReceivePosting.transitWarehouseRef"
+		)
+		destination = _parse_warehouse_ref(
+			wire["destinationWarehouseRef"], "TransferReceivePosting.destinationWarehouseRef"
+		)
+		return cls(
+			transfer_ref=_non_empty_str(wire["transferRef"], "TransferReceivePosting.transferRef"),
+			receipt_ref=_non_empty_str(wire["receiptRef"], "TransferReceivePosting.receiptRef"),
+			destination_store_id=_non_empty_str(
+				wire["destinationStoreId"], "TransferReceivePosting.destinationStoreId"
+			),
+			transit_warehouse=transit["name"],  # type: ignore[index]
+			destination_warehouse=destination["name"],  # type: ignore[index]
+			dispatch_document=ErpnextStockEntryRef.from_wire(
+				_require_object(wire["dispatchDocumentRef"], "TransferReceivePosting.dispatchDocumentRef")
+			).name,
+			posting_datetime=_non_empty_str(
+				wire["postingDatetime"], "TransferReceivePosting.postingDatetime"
+			),
+			lines=_transfer_rows(wire["lines"], "TransferReceivePosting", TransferReceiveLine.from_wire),
+		)
+
+
 @dataclass(frozen=True)
 class CountRefusal:
 	"""012 ``CountRefusal`` — a typed refusal that rides an existing ack category."""
@@ -741,22 +967,39 @@ class CountLineOutcome:
 		}
 
 
-def _parse_count_body(
-	kind: str, raw_sale: object, raw_count: object, raw_reversal: object
-) -> CountPosting | None:
-	"""The kind-specific shape rule (posting-feed 1.15.0-draft): ``sale`` XOR ``count`` by ``kind``.
+# The body a kind carries (``sale`` for the two Retail sale kinds). Every body is exclusive to its kind.
+_BODY_OF_KIND = {
+	"inventory_count": "count",
+	"transfer_dispatch": "transfer",
+	"transfer_receive": "receipt",
+}
 
-	An ``inventory_count`` item carries ``count`` and neither ``sale`` nor ``reversalOf``; a sale or
-	reversal item carries ``sale`` and no ``count``. Any other mix is a malformed item (ValueError),
-	isolated and rejected per item like every unparseable line (re-P2b).
+
+def _parse_bodies(
+	kind: str, raw: Mapping[str, object]
+) -> tuple[CountPosting | None, TransferDispatchPosting | None, TransferReceivePosting | None]:
+	"""The kind-specific shape rule (posting-feed 1.17.0-draft): exactly one body, chosen by ``kind``.
+
+	A sale or reversal item carries ``sale`` and no other body. An ``inventory_count`` item carries ``count``,
+	a ``transfer_dispatch`` item ``transfer`` and a ``transfer_receive`` item ``receipt``, and none of
+	``sale``, ``reversalOf`` or another body. Any other mix is a malformed item (ValueError), isolated and
+	rejected per item like every unparseable line (re-P2b).
 	"""
+	own = _BODY_OF_KIND.get(kind)
+	if own is None:
+		if raw["sale"] is None or any(raw[k] is not None for k in ("count", "transfer", "receipt")):
+			raise ValueError(f"{kind} work item must carry sale and no count, transfer or receipt")
+		return None, None, None
+	foreign = [
+		k for k in ("sale", "reversalOf", "count", "transfer", "receipt") if k != own and raw[k] is not None
+	]
+	if raw[own] is None or foreign:
+		raise ValueError(f"{kind} work item must carry {own} and none of: sale, reversalOf, other bodies")
 	if kind == "inventory_count":
-		if raw_count is None or raw_sale is not None or raw_reversal is not None:
-			raise ValueError("inventory_count work item must carry count and neither sale nor reversalOf")
-		return CountPosting.from_wire(raw_count)  # type: ignore[arg-type]
-	if raw_sale is None or raw_count is not None:
-		raise ValueError(f"{kind} work item must carry sale and no count")
-	return None
+		return CountPosting.from_wire(raw["count"]), None, None  # type: ignore[arg-type]
+	if kind == "transfer_dispatch":
+		return None, TransferDispatchPosting.from_wire(raw["transfer"]), None  # type: ignore[arg-type]
+	return None, None, TransferReceivePosting.from_wire(raw["receipt"])  # type: ignore[arg-type]
 
 
 @dataclass(frozen=True)
@@ -769,13 +1012,16 @@ class PostingWorkItem:
 	external_id: str
 	payload_hash: str
 	business_date: str
-	# None only for an ``inventory_count`` item (RT-1422): ``count`` carries its body instead.
+	# None only for an ``inventory_count`` / transfer item (RT-1422, RT-1514): its own body carries it instead.
 	sale: Sale | None
 	item_cursor: str
 	reversal_of: ReversalRef | None = None
 	count: CountPosting | None = None
 	# RT-331: the frozen resolution version (012 1.6.0-draft); echoed on the ack. None before the freeze.
 	resolution_version: int | None = None
+	# RT-1514: the body of a ``transfer_dispatch`` / ``transfer_receive`` item (``sale`` is then None).
+	transfer: TransferDispatchPosting | None = None
+	receipt: TransferReceivePosting | None = None
 
 	@classmethod
 	def from_wire(cls, wire: Mapping[str, object]) -> PostingWorkItem:
@@ -783,8 +1029,17 @@ class PostingWorkItem:
 		if kind not in WORK_ITEM_KINDS:
 			raise ValueError(f"kind must be one of {sorted(WORK_ITEM_KINDS)}, got {kind!r}")
 		raw_reversal = wire.get("reversalOf")
-		raw_sale, raw_count = wire.get("sale"), wire.get("count")
-		count = _parse_count_body(kind, raw_sale, raw_count, raw_reversal)
+		raw_sale = wire.get("sale")
+		count, transfer, receipt = _parse_bodies(
+			kind,
+			{
+				"sale": raw_sale,
+				"reversalOf": raw_reversal,
+				"count": wire.get("count"),
+				"transfer": wire.get("transfer"),
+				"receipt": wire.get("receipt"),
+			},
+		)
 		sale = None if raw_sale is None else Sale.from_wire(raw_sale)  # type: ignore[arg-type]
 		reversal_of = None if raw_reversal is None else ReversalRef.from_wire(raw_reversal)  # type: ignore[arg-type]
 		if reversal_of is not None and sale is not None:
@@ -801,6 +1056,8 @@ class PostingWorkItem:
 			reversal_of=reversal_of,
 			count=count,
 			resolution_version=_parse_resolution_version(wire.get("resolutionVersion", _ABSENT)),
+			transfer=transfer,
+			receipt=receipt,
 		)
 
 	@property

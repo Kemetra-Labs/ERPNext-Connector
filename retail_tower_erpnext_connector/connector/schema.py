@@ -29,6 +29,8 @@ POSTING_LOG_COLUMNS = ("source_system", "external_id")
 SALES_INVOICE_COLUMNS = ("rt_source_system", "rt_external_id")
 STOCK_RECONCILIATION_INDEX = "unique_rt_sr_provenance"  # RT-1422, the inventory_count leg's own index
 STOCK_RECONCILIATION_COLUMNS = ("rt_source_system", "rt_external_id")
+STOCK_ENTRY_INDEX = "unique_rt_se_provenance"  # RT-1514, the transfer legs' own index
+STOCK_ENTRY_COLUMNS = ("rt_source_system", "rt_external_id")
 
 
 class G5IndexError(RuntimeError):
@@ -112,6 +114,29 @@ def _create_stock_reconciliation_index() -> None:
 	)
 
 
+def ensure_stock_entry_index() -> None:
+	"""Idempotently ensure the transfer provenance Custom Fields and ``unique_rt_se_provenance`` (RT-1514).
+
+	Same path and preflight as the Stock Reconciliation index: duplicate provenance keys make the migrate fail
+	loud and the index is never created over them.
+	"""
+	_ensure("Stock Entry", STOCK_ENTRY_INDEX, STOCK_ENTRY_COLUMNS, _create_stock_entry_index)
+
+
+def _create_stock_entry_index() -> None:
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+
+	from retail_tower_erpnext_connector.connector.posting.index_guard import duplicate_provenance_message
+	from retail_tower_erpnext_connector.patches import stock_entry_unique_provenance as patch
+
+	create_custom_fields(patch._INDEXED_FIELDS, ignore_validate=True)
+	frappe.db.commit()
+	duplicates = patch.duplicate_rows()
+	if duplicates:
+		raise G5IndexError(duplicate_provenance_message(duplicates))
+	frappe.db.add_unique("Stock Entry", list(STOCK_ENTRY_COLUMNS), constraint_name=STOCK_ENTRY_INDEX)
+
+
 def ensure_g5_indexes() -> None:
 	"""Ensure both Gate G5 indexes (install + every migrate)."""
 	ensure_posting_log_index()
@@ -121,12 +146,14 @@ def ensure_g5_indexes() -> None:
 def after_install() -> None:
 	ensure_g5_indexes()
 	ensure_stock_reconciliation_index()
+	ensure_stock_entry_index()
 	ensure_give_back_item()
 
 
 def after_migrate() -> None:
 	ensure_g5_indexes()
 	ensure_stock_reconciliation_index()
+	ensure_stock_entry_index()
 	ensure_give_back_item()
 
 

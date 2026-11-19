@@ -78,8 +78,9 @@ def provenance_id(work_item: PostingWorkItem) -> str:
 	"""
 	if work_item.kind == "reversal":
 		return work_item.work_item_ref
-	if work_item.kind in ("sale_post", "inventory_count"):
+	if work_item.kind in ("sale_post", "inventory_count", "transfer_dispatch", "transfer_receive"):
 		# `inventory_count` (RT-1422): `external_id` IS the provenance key `count:<sessionId>[:<chunk>]`.
+		# The transfer legs (RT-1514): `transfer_dispatch:<transferId>` and `transfer_receipt:<receiptId>` (888, 889).
 		return work_item.external_id
 	raise ValueError(f"provenance_id: unexpected work-item kind {work_item.kind!r}")
 

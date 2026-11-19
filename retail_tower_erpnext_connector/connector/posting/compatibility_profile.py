@@ -66,6 +66,14 @@ COUNT_CUSTOM_FIELDS = (
 	"Stock Reconciliation-rt_external_id",
 )
 
+# RT-1514: the transfer legs' provenance fields (Stock Entry) and the row field a receipt is checked against. NOT in
+# REQUIRED_CUSTOM_FIELDS for the same reason as the count fields: only the two transfer kinds pause without them.
+TRANSFER_CUSTOM_FIELDS = (
+	"Stock Entry-rt_source_system",
+	"Stock Entry-rt_external_id",
+	"Stock Entry Detail-rt_transfer_line_ref",
+)
+
 # ISO 4217 minor units for the currencies a Retail Tower tenant may post in. An unknown currency is
 # critical (never guessed): add it here when a tenant needs it.
 ISO_MINOR_UNITS = {

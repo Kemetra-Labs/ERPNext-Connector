@@ -91,13 +91,15 @@ class TestVersion:
 class TestCustomFields:
 	def test_the_required_list_is_the_hooks_fixture_list(self):
 		# One source of truth: the custom fields the app ships are the ones the profile requires, plus the
-		# count leg's own (RT-1422), which are deliberately NOT required: a site without them keeps posting sales.
+		# count leg's own (RT-1422) and the transfer legs' (RT-1514), which are deliberately NOT required: a
+		# site without them keeps posting sales.
 		(fixture,) = [f for f in hooks.fixtures if f["dt"] == "Custom Field"]
 		(name_filter,) = [f for f in fixture["filters"] if f[0] == "name"]
 		assert frozenset(name_filter[2]) == frozenset(cp.REQUIRED_CUSTOM_FIELDS) | frozenset(
 			cp.COUNT_CUSTOM_FIELDS
-		)
+		) | frozenset(cp.TRANSFER_CUSTOM_FIELDS)
 		assert not frozenset(cp.COUNT_CUSTOM_FIELDS) & frozenset(cp.REQUIRED_CUSTOM_FIELDS)
+		assert not frozenset(cp.TRANSFER_CUSTOM_FIELDS) & frozenset(cp.REQUIRED_CUSTOM_FIELDS)
 
 	def test_a_missing_custom_field_is_critical(self):
 		present = frozenset(cp.REQUIRED_CUSTOM_FIELDS) - {"Sales Invoice Item-rt_line_ref"}

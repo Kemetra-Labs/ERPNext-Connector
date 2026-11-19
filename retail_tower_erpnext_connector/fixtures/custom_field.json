@@ -87,5 +87,50 @@
   "print_hide": 1,
   "translatable": 0,
   "description": "count:<sessionId>[:<chunk>] provenance of an inventory_count work item (RT-1422). With rt_source_system forms the idempotency key; the connector looks it up across Draft, submitted and cancelled documents. Do not edit."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Stock Entry-rt_source_system",
+  "dt": "Stock Entry",
+  "fieldname": "rt_source_system",
+  "label": "RT Source System",
+  "fieldtype": "Data",
+  "length": 100,
+  "insert_after": "posting_time",
+  "read_only": 1,
+  "no_copy": 1,
+  "print_hide": 1,
+  "translatable": 0,
+  "description": "Data-Pulse-2 sourceSystem provenance of a transfer_dispatch or transfer_receive work item (posting feed 1.17.0-draft, RT-1514). Set by the Retail Tower connector; part of the (rt_source_system, rt_external_id) idempotency key. Do not edit."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Stock Entry-rt_external_id",
+  "dt": "Stock Entry",
+  "fieldname": "rt_external_id",
+  "label": "RT External Id",
+  "fieldtype": "Data",
+  "length": 200,
+  "insert_after": "rt_source_system",
+  "read_only": 1,
+  "no_copy": 1,
+  "print_hide": 1,
+  "translatable": 0,
+  "description": "transfer_dispatch:<transferId> or transfer_receipt:<receiptId> provenance of a transfer leg (RT-1514). With rt_source_system forms the idempotency key; the connector looks it up across Draft, submitted and cancelled documents. Do not edit."
+ },
+ {
+  "doctype": "Custom Field",
+  "name": "Stock Entry Detail-rt_transfer_line_ref",
+  "dt": "Stock Entry Detail",
+  "fieldname": "rt_transfer_line_ref",
+  "label": "RT Transfer Line Ref",
+  "fieldtype": "Data",
+  "length": 140,
+  "insert_after": "item_code",
+  "read_only": 1,
+  "no_copy": 1,
+  "print_hide": 1,
+  "translatable": 0,
+  "description": "The Backend-Core shipment Transfer line this row belongs to (RT-1514). Stored at dispatch and checked against the receipt line before a receipt posts. Do not edit."
  }
 ]

@@ -44,6 +44,11 @@ fixtures = [
 					# RT-1422: the provenance of an inventory_count Stock Reconciliation (unique key).
 					"Stock Reconciliation-rt_source_system",
 					"Stock Reconciliation-rt_external_id",
+					# RT-1514: the provenance of a transfer_dispatch / transfer_receive Stock Entry (unique key) and
+					# the shipment Transfer line a Stock Entry row belongs to (checked by a receipt).
+					"Stock Entry-rt_source_system",
+					"Stock Entry-rt_external_id",
+					"Stock Entry Detail-rt_transfer_line_ref",
 				],
 			]
 		],

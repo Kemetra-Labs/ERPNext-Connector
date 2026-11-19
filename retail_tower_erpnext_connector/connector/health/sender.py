@@ -40,7 +40,6 @@ from datetime import UTC, datetime
 
 import frappe
 
-from ..posting.contracts import WORK_ITEM_KINDS
 from ..request_id import new_request_id
 from ..text import scrub
 from .back_dated_role import UNKNOWN, BackDatedRole, assess_back_dated_role
@@ -50,6 +49,7 @@ from .heartbeat import (
 	HeartbeatRejected,
 	HeartbeatReport,
 	HeartbeatUnauthorized,
+	advertised_work_item_kinds,
 	format_source_clock,
 )
 
@@ -94,7 +94,7 @@ def _send_heartbeat(request_id: str) -> None:
 		connector_version=_connector_version(),
 		erpnext_reachable=_erpnext_reachable(),
 		source_clock_at=format_source_clock(datetime.now(UTC)),
-		accepted_work_item_kinds=tuple(sorted(WORK_ITEM_KINDS)),
+		accepted_work_item_kinds=advertised_work_item_kinds(),
 		back_dated_role=_back_dated_role(),
 	)
 	ack = client.report(report)

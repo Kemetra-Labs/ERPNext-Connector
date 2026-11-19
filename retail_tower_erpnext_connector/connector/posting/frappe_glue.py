@@ -554,6 +554,13 @@ def post_work_item(
 			work_item, client=client, store=store, uom_map=uom_map, correlation_id=correlation_id
 		)
 
+	# RT-1514: a `transfer_dispatch` or `transfer_receive` item posts a native Stock Entry through its own leg,
+	# which does its own Draft-aware provenance lookup (the Posting Log replay guard below is for sales).
+	if work_item.kind in ("transfer_dispatch", "transfer_receive"):
+		return _post_transfer(
+			work_item, client=client, store=store, uom_map=uom_map, correlation_id=correlation_id
+		)
+
 	key = key_for(work_item)
 
 	# T041 — idempotent replay: an already-posted key echoes the existing documentRef.
@@ -581,7 +588,8 @@ def post_work_item(
 			work_item,
 			correlation_id,
 			FailureKind.OTHER,
-			f"work-item kind {work_item.kind!r} not supported (012 kinds: sale_post, reversal)",
+			f"work-item kind {work_item.kind!r} not supported (012 kinds: sale_post, reversal, inventory_count, "
+			"transfer_dispatch, transfer_receive)",
 		)
 
 	# Build the Sales-Invoice payload from the pure-Python core (no frappe in the build).
@@ -638,6 +646,30 @@ def _post_count(
 		uom_map=uom_map,
 	)
 	_log_signal("posting.count", work_item, correlation_id, outcome=outcome)
+	return outcome
+
+
+def _post_transfer(
+	work_item: PostingWorkItem,
+	*,
+	client: PostingFeedClient,
+	store: IdempotencyStore,
+	uom_map: UomMap,
+	correlation_id: str,
+) -> str:
+	"""RT-1514 — post one transfer leg (⏳ BENCH-VALIDATION: the port reads and writes ERPNext)."""
+	from .frappe_transfer_port import FrappeTransferPort
+	from .transfer_flow import post_transfer_work_item
+
+	outcome = post_transfer_work_item(
+		work_item,
+		client=client,
+		store=store,
+		port=FrappeTransferPort(),
+		site_tz=frappe.utils.get_system_timezone(),
+		uom_map=uom_map,
+	)
+	_log_signal("posting.transfer", work_item, correlation_id, outcome=outcome)
 	return outcome
 
 

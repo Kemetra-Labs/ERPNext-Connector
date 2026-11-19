@@ -12,3 +12,6 @@ retail_tower_erpnext_connector.patches.sales_invoice_unique_provenance
 # RT-1422: composite UNIQUE on Stock Reconciliation (rt_source_system, rt_external_id), with a duplicate
 # preflight (fail closed): the inventory_count leg is exactly-once only while it exists.
 retail_tower_erpnext_connector.patches.stock_reconciliation_unique_provenance
+# RT-1514: composite UNIQUE on Stock Entry (rt_source_system, rt_external_id), with a duplicate preflight (fail
+# closed): the transfer_dispatch and transfer_receive legs are exactly-once only while it exists.
+retail_tower_erpnext_connector.patches.stock_entry_unique_provenance

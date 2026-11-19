@@ -37,6 +37,13 @@ COUNT_INDEXES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 )
 
 
+# RT-1514: the transfer legs' own exactly-once index. NOT part of G5_INDEXES or COUNT_INDEXES: a site without it
+# must keep posting sales, reversals and counts, and only pause the two transfer kinds (``failed_transient``).
+TRANSFER_INDEXES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+	("Stock Entry", "unique_rt_se_provenance", ("rt_source_system", "rt_external_id")),
+)
+
+
 @dataclass(frozen=True)
 class GuardResult:
 	"""``ok`` only when every required index is present; ``missing`` names the absent ones."""
