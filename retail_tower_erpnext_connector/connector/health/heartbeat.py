@@ -33,15 +33,13 @@ from ..posting.contracts import WORK_ITEM_KINDS
 from ..text import error_code
 from .back_dated_role import BackDatedRole
 
-# RT-1514: the transfer kinds are ACCEPTED by the feed parser but not yet ADVERTISED. Backend-Core's heartbeat
-# validator is a closed enum (`sale_post | reversal | inventory_count`), so advertising a kind it does not know
-# would make every heartbeat a 400. RT-1513 widens that enum and the connector-health contract, and lifts this.
-_NOT_YET_ADVERTISED: frozenset[str] = frozenset({"transfer_dispatch", "transfer_receive"})
-
 
 def advertised_work_item_kinds() -> tuple[str, ...]:
-	"""The ``acceptedWorkItemKinds`` this Connector reports: the accepted kinds Backend-Core's heartbeat knows."""
-	return tuple(sorted(WORK_ITEM_KINDS - _NOT_YET_ADVERTISED))
+	"""The ``acceptedWorkItemKinds`` this Connector reports: every kind it accepts.
+
+	RT-1519: connector-health 1.3.0-draft lists the transfer kinds, so nothing is held back any more.
+	"""
+	return tuple(sorted(WORK_ITEM_KINDS))
 
 
 # spec-003 substrate: the request_id correlation travels on every call (RT-39).

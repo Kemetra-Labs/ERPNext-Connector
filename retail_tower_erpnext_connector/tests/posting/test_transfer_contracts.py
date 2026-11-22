@@ -5,7 +5,7 @@
 
 The module under test imports no frappe. These pin the parse rules of ``transfer_dispatch`` and
 ``transfer_receive`` (flat, strict, one body per kind), the provenance key of each leg, and that the
-heartbeat keeps advertising only the kinds Backend-Core's closed enum accepts until RT-1513.
+heartbeat advertises every accepted kind, the transfer kinds included (RT-1519).
 """
 
 from __future__ import annotations
@@ -260,8 +260,15 @@ class TestReceiveParse:
 
 
 class TestHeartbeatAdvertisement:
-	def test_the_heartbeat_keeps_advertising_only_the_kinds_backend_core_knows(self):
-		assert advertised_work_item_kinds() == ("inventory_count", "reversal", "sale_post")
+	def test_the_heartbeat_advertises_the_transfer_kinds_too(self):
+		# RT-1519: connector-health 1.3.0-draft lists both kinds, so Backend-Core may emit them.
+		assert advertised_work_item_kinds() == (
+			"inventory_count",
+			"reversal",
+			"sale_post",
+			"transfer_dispatch",
+			"transfer_receive",
+		)
 
-	def test_the_advertised_kinds_are_a_subset_of_the_accepted_kinds(self):
-		assert set(advertised_work_item_kinds()) < c.WORK_ITEM_KINDS
+	def test_the_advertised_kinds_are_exactly_the_accepted_kinds(self):
+		assert set(advertised_work_item_kinds()) == c.WORK_ITEM_KINDS

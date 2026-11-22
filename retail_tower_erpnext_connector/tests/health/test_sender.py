@@ -190,6 +190,8 @@ class TestBeat:
 			"inventory_count",
 			"reversal",
 			"sale_post",
+			"transfer_dispatch",
+			"transfer_receive",
 		]
 
 
