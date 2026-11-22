@@ -18,9 +18,11 @@ The first refusal is reported once (Sentry + one log line); the recovery is one 
 from __future__ import annotations
 
 import hashlib
+import time
 from collections.abc import Callable
 
 from .auth_circuit import AuthCircuit, AuthCircuitOpen, CircuitState
+from .auth_circuit_status import AuthCircuitStatus, build_status
 from .observability.sentry_client import capture_auth_circuit_open
 
 CACHE_KEY = "rt_connector_auth_circuit"
@@ -84,6 +86,24 @@ def reset_auth_circuit() -> None:
 	Not needed after a token change, which is a new circuit key; useful to force an immediate probe.
 	"""
 	FrappeCircuitStore().clear()
+
+
+def read_auth_circuit() -> AuthCircuitStatus:
+	"""The circuit as an operator may see it (RT-1431): a READ of the shared cache, never a write.
+
+	It loads the record and compares it with the configured credential itself; the breaker's own read
+	(``AuthCircuit._state``) clears a record that belongs to another credential, which a view must not do.
+	"""
+	import frappe
+
+	settings = frappe.get_doc("Connector Settings")
+	return build_status(FrappeCircuitStore().load(), current_key=credential_key(settings), now=time.time())
+
+
+def read_auth_circuit_status() -> dict:
+	"""Scripted read: ``bench execute <this module>.read_auth_circuit_status`` prints the same values as the
+	"Connector Auth Circuit" report (state, last status, failures, changed at, next probe, note)."""
+	return read_auth_circuit().to_dict()
 
 
 def _logger():
