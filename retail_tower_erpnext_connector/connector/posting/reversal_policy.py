@@ -29,6 +29,13 @@ def assert_reversal_supported(work_item: PostingWorkItem) -> None:
 	"""Raise :class:`UnsupportedReversal` for a reversal kind that cannot be posted correctly."""
 	if work_item.kind != "reversal" or work_item.reversal_of is None:
 		return
+	if work_item.sale.responsibilities:
+		# RT-419: the contract leaves a reversal of a payer-bearing sale undefined (posting-feed RT-417,
+		# 035 OQ-4), and a credit note built on the store's Customer would credit the wrong debtor.
+		raise UnsupportedReversal(
+			"a reversal of a sale with payer responsibilities is not posted: the contract does not define "
+			"it (RT-417), and it would credit the store's Customer instead of the payer"
+		)
 	kind = work_item.reversal_of.reversal_kind
 	if kind in _UNSUPPORTED_KINDS:
 		raise UnsupportedReversal(

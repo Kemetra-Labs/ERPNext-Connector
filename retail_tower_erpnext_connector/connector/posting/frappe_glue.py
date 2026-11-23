@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import NamedTuple
 
 import frappe
@@ -45,10 +46,12 @@ from .batch_policy import (
 )
 from .builder import LineDiscountNotPostable, SaleTaxNotPosted, UnmappedUnit, build_sales_invoice
 from .contracts import ErpnextDocumentRef, OutcomeAckRequest, PostingWorkItem
+from .errors import UnmappedPayer
 from .frappe_count_port import FrappeCountPort
 from .frappe_exceptions import _dup_provenance_exceptions, _transient_exceptions
 from .give_back_item import GIVE_BACK_ITEM_CODE, GIVE_BACK_ITEM_FIELDS, resolve_give_back_item
 from .idempotency import IdempotencyConflict, IdempotencyStore, key_for, provenance_id
+from .payer import resolve_payer_customer
 from .posting_time import PostingClock, PostingStamp, apply_stamp, raise_to_original, stamp_for
 from .reasons import FailureKind, scrub_message, to_rejection_reason
 from .representation_check import (
@@ -81,10 +84,12 @@ from .stock_policy import (
 )
 from .tender import (
 	SETTLED_FIELDS,
+	CoverageMismatch,
 	SettlementDrift,
 	TenderMismatch,
 	TenderModeMap,
 	UnmappedTender,
+	assert_partially_settled,
 	assert_settled,
 	payments_total,
 	redemption_ids_in_row_order,
@@ -179,6 +184,12 @@ class _NotCompared:
 	def for_store(value: str) -> str:
 		return value
 
+	@staticmethod
+	def payer(value: str) -> str:
+		"""RT-419: the payer link IS the Customer name, so a replay compares the persisted customer with it
+		and reads no Customer row: a payer disabled after posting cannot break the replay."""
+		return value
+
 
 class _WarehouseNotCompared:
 	"""The warehouse map stand-in for a replay rebuild: the warehouse is exempt (RT-331 owns it), but
@@ -261,8 +272,13 @@ def _replay_expected(work_item: PostingWorkItem, company: str | None) -> Expecte
 	sale's tenders are dropped too: payments are never compared, and a sale posted before RT-78 may
 	carry tenders that do not sum to its lines (``TenderMismatch`` would make it unverifiable). A
 	return keeps its refund tenders, which its builder requires.
+
+	RT-419: a payer-bearing sale keeps its tenders. Its coverage check (Σ tenders + Σ responsibilities =
+	Σ lines) needs them, there are no pre-RT-419 sales of that shape to be unverifiable, and the customer
+	stays compared (:func:`replay_exemptions`): the payer link is the Customer name.
 	"""
-	work_item = dataclasses.replace(work_item, sale=dataclasses.replace(work_item.sale, tenders=()))
+	if not (work_item.kind == "sale_post" and work_item.sale.responsibilities):
+		work_item = dataclasses.replace(work_item, sale=dataclasses.replace(work_item.sale, tenders=()))
 	if work_item.kind == "reversal":
 		stand_in = _NotCompared()
 		payload = _build_reversal(
@@ -283,6 +299,7 @@ def _replay_expected(work_item: PostingWorkItem, company: str | None) -> Expecte
 			customer_for=_NotCompared.for_store,
 			mode_of_payment_for=_NotCompared.resolve,
 			company=company,
+			payer_customer_for=_NotCompared.payer,
 		)
 	return expected_from_payload(payload, exempt=replay_exemptions(work_item))
 
@@ -509,6 +526,8 @@ _SALE_BUILD_VALIDATION_ERRORS = (
 	UnmappedStore,
 	UnmappedTender,
 	TenderMismatch,
+	UnmappedPayer,  # RT-419: a null, blank, unknown, disabled or frozen payer; never the store's Customer
+	CoverageMismatch,  # RT-419: Σ tenders + Σ responsibilities differs from the lines
 	LineDiscountNotPostable,  # RT-857 / OD-28-13: fail closed, never a total off by a minor unit
 	SaleTaxNotPosted,  # RT-1312 F5 / D3: no tax rows, so a taxed line is never posted net
 )
@@ -722,6 +741,7 @@ def _build_sale_or_reject(
 			customer_for=customers.for_store,
 			posting_stamp=stamp,
 			mode_of_payment_for=tenders.resolve,
+			payer_customer_for=_NotCompared.payer,  # existence is read in the submit stage
 		)
 		return stamp, doc_payload
 
@@ -730,15 +750,36 @@ def _build_sale_or_reject(
 	)
 
 
+def _assert_payer_postable(work_item: PostingWorkItem) -> None:
+	"""⏳ BENCH-VALIDATION. RT-419: the payer's Customer must exist under exactly that name, enabled and unfrozen.
+
+	``payerExternalRef`` IS the Customer name, so the pure build already carries it as the debtor
+	(:meth:`_NotCompared.payer`); this is the one ERPNext read. It runs in the submit stage, before insert
+	(:func:`_on_sale_company`), like the RT-434 warehouse check, so a transient read acks
+	``failed_transient`` and a failure is :class:`UnmappedPayer`, which :func:`_submit_or_reject` recovers
+	(an invoice already submitted under this provenance, e.g. a crash before the Posting Log row, then the
+	payer disabled) or rejects as ``validation`` for this item only. A sale without responsibilities reads
+	nothing.
+	"""
+	if work_item.kind != "sale_post":
+		return
+	for responsibility in work_item.sale.responsibilities:
+		ref = responsibility.payer_external_ref  # the builder already refused a null or blank link
+		row = frappe.db.get_value("Customer", ref, ["name", "disabled", "is_frozen"], as_dict=True)
+		resolve_payer_customer(ref, row)
+
+
 def _on_sale_company(work_item: PostingWorkItem, doc_payload: dict) -> dict:
 	"""The sale payload on its explicit company (RT-378 finding 2: the site default).
 
 	Runs inside the submit stage (:func:`_submit_or_reject`), so a transient DB error is
 	failed_transient and a blank default is validation (SiteCompanyNotConfigured), before insert.
-	RT-434: a feed warehouseRef is checked against that company here, before insert.
+	RT-434: a feed warehouseRef is checked against that company here, before insert. RT-419: so is the
+	payer's Customer.
 	"""
 	company = _sale_company()
 	_assert_frozen_warehouse(work_item, company)
+	_assert_payer_postable(work_item)
 	return {**doc_payload, "company": company}
 
 
@@ -835,7 +876,8 @@ def _submit_or_reject(
 	reversal builder writes the reversal's work_item_ref into rt_external_id (#28 re-key), a reversal
 	does NOT collide with the original SI's slot.
 
-	FrozenWarehouseRejected and SiteCompanyNotConfigured are raised only by the sale's ``prepare``
+	FrozenWarehouseRejected, UnmappedPayer (the payer's Customer read) and SiteCompanyNotConfigured are
+	raised only by the sale's ``prepare``
 	(:func:`_on_sale_company`); on the reversal leg those clauses never match.
 	"""
 	try:
@@ -843,15 +885,19 @@ def _submit_or_reject(
 			doc_payload = prepare(doc_payload)
 		# RT-378: what ERPNext must persist (a reversal: company = the original's, linked).
 		expected = expected_from_payload(doc_payload)
-		sinv = _submit_atomically(doc_payload, expected, batch_intents)
+		sinv = _submit_atomically(
+			doc_payload, expected, batch_intents, expected_outstanding=_expected_outstanding(work_item)
+		)
 		document_ref = ErpnextDocumentRef(doctype=_SALES_INVOICE, name=sinv.name)
 	except _transient_exceptions() as exc:
 		# T051 — transient (timeout/lock) → failed_transient; DP2 re-offers (no self-retry).
 		return _ack_transient(client, work_item, correlation_id, exc)
-	except FrozenWarehouseRejected as exc:
+	except (FrozenWarehouseRejected, UnmappedPayer) as exc:
 		# RT-434 — the feed warehouseRef is a group / other-company / missing Warehouse: nothing was
 		# inserted. An invoice already submitted under this provenance (a crash before record_posted,
 		# then the Warehouse changed) is recovered, never rejected; otherwise reject as validation.
+		# RT-419 — the same for a payer Customer that was disabled, frozen or removed since the invoice was
+		# submitted: ERPNext must not hold an invoice that Backend-Core is told was rejected.
 		return _recover_or_reject_unsupported(
 			work_item, key, exc, client=client, store=store, correlation_id=correlation_id
 		)
@@ -1205,8 +1251,46 @@ def _recover_or_reject_unsupported(
 _SUBMIT_SAVEPOINT = "rt_posting_submit"
 
 
+def _expected_outstanding(work_item: PostingWorkItem) -> str | None:
+	"""RT-419: the payer's share the posted invoice must leave outstanding; ``None`` for any other item.
+
+	The exact sum of the sale's ``responsibilities`` (the builder already proved Σ tenders + Σ
+	responsibilities = Σ lines). Only a ``sale_post`` takes the payer path, so a reversal reads ``None``.
+	"""
+	if work_item.kind != "sale_post" or not work_item.sale.responsibilities:
+		return None
+	return str(sum((Decimal(r.amount) for r in work_item.sale.responsibilities), Decimal(0)))
+
+
+def _assert_settlement(sinv, doc_payload: dict, expected_outstanding: str | None) -> None:
+	"""Between insert and submit: ERPNext's computed totals must settle the invoice exactly as requested.
+
+	RT-78: a tender-bearing sale is paid in full. RT-419: a payer-bearing sale is paid by its tenders only
+	(``0`` for a full-credit sale, which has no payment row) and leaves exactly the payer's share
+	outstanding. A tender-unknown sale has nothing to check.
+	"""
+	totals = {field: sinv.get(field) for field in SETTLED_FIELDS}
+	payments = doc_payload.get("payments")
+	if expected_outstanding is not None:
+		assert_partially_settled(
+			{
+				**totals,
+				"currency": sinv.get("currency"),
+				"party_account_currency": sinv.get("party_account_currency"),
+			},
+			expected_paid=payments_total(payments) if payments else "0",
+			expected_outstanding=expected_outstanding,
+		)
+	elif payments:
+		assert_settled(totals, expected_total=payments_total(payments))
+
+
 def _submit_atomically(
-	doc_payload: dict, expected: ExpectedInvoice, batch_intents: dict[int, str] | None = None
+	doc_payload: dict,
+	expected: ExpectedInvoice,
+	batch_intents: dict[int, str] | None = None,
+	*,
+	expected_outstanding: str | None = None,
 ):
 	"""Insert + submit one Sales Invoice as a unit: on ANY failure, undo it before re-raising (RT-48).
 
@@ -1233,12 +1317,8 @@ def _submit_atomically(
 		mismatch = check_representation(expected, persisted_from_doc(sinv))
 		if mismatch is not None:
 			raise RepresentationMismatch(mismatch)
-		if doc_payload.get("payments"):
-			# RT-78: verify ERPNext's computed totals settle the invoice exactly before submitting.
-			assert_settled(
-				{field: sinv.get(field) for field in SETTLED_FIELDS},
-				expected_total=payments_total(doc_payload["payments"]),
-			)
+		# RT-78 / RT-419: verify ERPNext's computed totals settle the invoice exactly before submitting.
+		_assert_settlement(sinv, doc_payload, expected_outstanding)
 		sinv.submit()
 		if batch_intents:
 			_verify_batch_postings(sinv.name, batch_intents, inward=bool(doc_payload.get("is_return")))

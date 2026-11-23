@@ -175,9 +175,15 @@ def replay_exemptions(work_item: PostingWorkItem) -> frozenset[str]:
 	default may differ from the ones the invoice was posted with, so a replay relies on the
 	insert-time check for them. A credit note is still held to its ORIGINAL invoice's company, which
 	cannot change after submit.
+
+	RT-419: a payer-bearing sale keeps its ``customer`` compared. The frozen resolution carries the payer's
+	``payerExternalRef``, which IS the Customer name, so the replay is held to exactly that debtor (a sale
+	posted on the store's Customer, or another payer, is a mismatch) without reading any current map.
 	"""
 	if work_item.kind == "reversal":
 		return frozenset({"warehouse", "uom", "customer"})
+	if work_item.sale.responsibilities:
+		return frozenset({"warehouse", "uom", "company"})
 	return frozenset({"warehouse", "uom", "customer", "company"})
 
 

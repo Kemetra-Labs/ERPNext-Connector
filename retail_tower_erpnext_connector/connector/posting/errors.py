@@ -23,3 +23,19 @@ class UnmappedUnit(Exception):
 	def __init__(self, unit: str) -> None:
 		super().__init__(f"unit {unit!r} has no ERPNext UOM mapping (fail-closed → validation)")
 		self.unit = unit
+
+
+class UnmappedPayer(Exception):
+	"""A sale's payer cannot be posted against: null, blank, unknown, disabled or frozen (RT-419, fail closed).
+
+	``Sale.responsibilities[].payerExternalRef`` is the payer's ERPNext Customer link. The caller maps this
+	to a ``permanently_rejected`` / ``validation`` outcome: the connector never falls back to the store's
+	Customer or any default Customer (posting-feed ``SaleResponsibility.payerExternalRef``).
+	"""
+
+	def __init__(self, payer_external_ref: str | None, reason: str) -> None:
+		super().__init__(
+			f"payer {payer_external_ref!r} cannot be posted against: {reason} — fail-closed → validation "
+			"(RT-419: never the store's Customer or a default Customer)"
+		)
+		self.payer_external_ref = payer_external_ref

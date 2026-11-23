@@ -55,6 +55,10 @@ TRACKING_MODES: frozenset[str] = frozenset({"none", "batch", "serial"})
 # accepts a trailing "\n" while the contract's ECMA `$` does not, so they end in `\Z` (RT-875, RT-915)
 # and are applied with fullmatch.
 _NON_NEGATIVE_DECIMAL_RE = re.compile(r"^\d{1,15}(\.\d{1,4})?\Z", re.ASCII)
+# 012 PositiveDecimalAmount (RT-417): strictly positive, so "0", "0.00" and "000.0" are refused. The `$` in
+# the lookahead is the contract's own text (contracts/check compares it); the closing `\Z` still refuses a
+# trailing newline, so "0\n" and "5\n" never match.
+_POSITIVE_DECIMAL_RE = re.compile(r"^(?!0+(?:\.0+)?$)\d{1,15}(\.\d{1,4})?\Z", re.ASCII)
 _TENDER_REFERENCE_RE = re.compile(r"^[A-Z0-9]{1,6}\Z")
 # 012 SaleTender.tenderRef (`format: uuid`, RT-359): the canonical hyphenated 8-4-4-4-12 form only.
 # uuid.UUID() would also take braces, a urn:uuid: prefix or no hyphens.
@@ -444,6 +448,57 @@ def _assert_unique(values: list[object], field: str) -> None:
 
 
 @dataclass(frozen=True)
+class SaleResponsibility:
+	"""012 ``SaleResponsibility`` (RT-417 / RT-419) — one payer's gross share of the sale.
+
+	``payer_external_ref`` is the payer's ERPNext Customer link; ``None`` (an explicit null) and a blank
+	string parse, and the builder rejects them as an unmapped payer (:class:`errors.UnmappedPayer`), which
+	says exactly why. Everything else is parsed strictly (``ValueError`` → ``malformed_work_item`` →
+	``validation``): the amount is a strictly positive exact-decimal string and ``sequence`` an integer
+	>= 1. Not a receivable: no balance, no state.
+	"""
+
+	payer_external_ref: str | None
+	amount: str
+	sequence: int
+
+	@classmethod
+	def from_wire(cls, wire: object) -> SaleResponsibility:
+		if not isinstance(wire, Mapping):
+			raise ValueError(f"SaleResponsibility must be an object, got {type(wire).__name__}")
+		ref = wire.get("payerExternalRef")
+		if ref is not None and not isinstance(ref, str):
+			raise ValueError(f"SaleResponsibility.payerExternalRef must be a string or null, got {ref!r}")
+		amount = wire.get("amount")
+		if not isinstance(amount, str) or not _POSITIVE_DECIMAL_RE.fullmatch(amount):
+			raise ValueError(
+				f"SaleResponsibility.amount must be a strictly positive exact-decimal string, got {amount!r}"
+			)
+		sequence = wire.get("sequence")
+		if type(sequence) is not int or sequence < 1:
+			raise ValueError(f"SaleResponsibility.sequence must be an integer >= 1, got {sequence!r}")
+		return cls(payer_external_ref=ref, amount=amount, sequence=sequence)
+
+
+def _parse_responsibilities(raw: object) -> tuple[SaleResponsibility, ...]:
+	"""``Sale.responsibilities`` (RT-417): omitted → ``()``; else exactly one strictly parsed entry.
+
+	The contract caps the list at ``maxItems: 1`` (one Sales Invoice per work item, RT-419 decision), so a
+	second payer is a ``ValueError`` (→ ``validation``), never a split or a guess. An explicit ``null``, an
+	empty list or a non-list is refused too: letting any of them fall through to "no responsibilities"
+	would post a credit sale on the store's Customer, the wrong debtor (the RT-417 ROLLOUT ORDER).
+	"""
+	if raw is _ABSENT:
+		return ()
+	if not isinstance(raw, list) or len(raw) != 1:
+		raise ValueError(
+			"Sale.responsibilities must be a list of exactly one payer share (012 minItems/maxItems 1: one "
+			f"Sales Invoice per work item), got {raw!r}"
+		)
+	return (SaleResponsibility.from_wire(raw[0]),)
+
+
+@dataclass(frozen=True)
 class SaleLine:
 	"""012 ``SaleLine`` — a frozen 008 sale-line snapshot carrying the resolved Item identity.
 
@@ -537,6 +592,9 @@ class Sale:
 	# RT-331: the frozen ERP warehouse ({doctype: "Warehouse", name}) from Backend-Core's resolution
 	# (012 1.6.0-draft). None for an intent created before the freeze: the local warehouse map applies.
 	warehouse_ref: dict | None = None
+	# RT-419 (feed 1.8.0-draft, RT-417): who owes how much. Empty = the legacy sale (the store's Customer);
+	# non-empty (exactly one, today) = the debtor is the payer's Customer.
+	responsibilities: tuple[SaleResponsibility, ...] = ()
 
 	@classmethod
 	def from_wire(cls, wire: Mapping[str, object]) -> Sale:
@@ -563,6 +621,7 @@ class Sale:
 			lines=lines,
 			tenders=_parse_tenders(wire.get("tenders")),
 			warehouse_ref=_parse_warehouse_ref(wire.get("warehouseRef", _ABSENT)),
+			responsibilities=_parse_responsibilities(wire.get("responsibilities", _ABSENT)),
 		)
 
 

@@ -52,6 +52,23 @@ class TenderMismatch(Exception):
 		self.line_total = line_total
 
 
+class CoverageMismatch(Exception):
+	"""Σ tenders + Σ responsibilities differs from the invoice total built from the lines → validation.
+
+	RT-419 (posting-feed RT-417 coverage rule): for a payer-bearing sale the RT-76 tender check becomes a
+	coverage check. The connector never adjusts a line or moves an amount between payers to force a match.
+	"""
+
+	def __init__(self, tender_total: Decimal, responsibility_total: Decimal, line_total: Decimal) -> None:
+		super().__init__(
+			f"tenders {tender_total} + payer responsibilities {responsibility_total} != invoice line total "
+			f"{line_total} — rejected as validation (no line adjustment, no amount moved between payers)"
+		)
+		self.tender_total = tender_total
+		self.responsibility_total = responsibility_total
+		self.line_total = line_total
+
+
 class TenderModeMap:
 	"""Applies the operator-configured tender-method → Mode of Payment map (fail-closed on a miss)."""
 
@@ -71,16 +88,25 @@ def build_payments(
 	*,
 	line_amounts: Sequence[str],
 	mode_of_payment_for: Callable[[str], str] | None,
+	responsibility_amounts: Sequence[str] = (),
 ) -> list[dict]:
 	"""The Sales Invoice ``payments`` rows for ``tenders``; ``[]`` for a tender-unknown sale (D8).
 
 	Raises :class:`UnmappedTender` for an unmapped method (or when no resolver was wired — a
 	tender-bearing sale never posts unpaid by omission) and :class:`TenderMismatch` when the tender
 	total differs from ``Σ line_amounts``. Both compare as exact :class:`Decimal` (FR-009).
+
+	RT-419: a payer-bearing sale passes its ``responsibility_amounts``. The check is then a coverage check,
+	``Σ tenders + Σ responsibilities == Σ line_amounts`` (:class:`CoverageMismatch`), and it also runs when
+	there are no tenders (a full-credit sale posts no payment row, but its payer's share must still cover the
+	lines). Without responsibilities nothing here changes.
 	"""
+	if responsibility_amounts:
+		_assert_coverage(tenders, responsibility_amounts, line_amounts)
+	elif tenders:
+		_assert_tenders_cover_lines(tenders, line_amounts)
 	if not tenders:
 		return []
-	_assert_tenders_cover_lines(tenders, line_amounts)
 	resolve = mode_of_payment_for or _unwired
 	# RT-361 / RT-264 D4: one row per tender, same-method tenders included (never merged), in
 	# sequence order. tenderRef and sequence stay off the document.
@@ -117,6 +143,17 @@ def _assert_tenders_cover_lines(tenders: Sequence[SaleTender], line_amounts: Seq
 	line_total = _decimal_sum(line_amounts)
 	if tender_total != line_total:
 		raise TenderMismatch(tender_total, line_total)
+
+
+def _assert_coverage(
+	tenders: Sequence[SaleTender], responsibility_amounts: Sequence[str], line_amounts: Sequence[str]
+) -> None:
+	"""Raise :class:`CoverageMismatch` unless ``Σ tenders + Σ responsibilities == Σ line_amounts`` exactly."""
+	tender_total = _decimal_sum([t.amount for t in tenders])
+	responsibility_total = _decimal_sum(responsibility_amounts)
+	line_total = _decimal_sum(line_amounts)
+	if tender_total + responsibility_total != line_total:
+		raise CoverageMismatch(tender_total, responsibility_total, line_total)
 
 
 def _unwired(method: str) -> str:
@@ -160,6 +197,49 @@ def assert_settled(totals: Mapping[str, object], *, expected_total: str | None =
 			f"invoice does not settle exactly after ERPNext computed its totals: grand_total "
 			f"{values['grand_total']}, paid_amount {values['paid_amount']}, residual {residual or 'none'} "
 			"— rolled back, rejected as validation (amendment 4a)"
+		)
+
+
+def assert_partially_settled(
+	totals: Mapping[str, object], *, expected_paid: str, expected_outstanding: str
+) -> None:
+	"""Raise :class:`SettlementDrift` unless a payer-bearing invoice settles exactly as requested (RT-419).
+
+	The partial-settlement counterpart of :func:`assert_settled`, run between insert and submit: ERPNext's
+	computed ``paid_amount`` must equal the tenders the connector sent (``expected_paid``, ``"0"`` for a
+	full-credit sale) and ``outstanding_amount`` the payer's share (``expected_outstanding``), with
+	``grand_total`` their exact sum and no change or write-off. So rounding to the currency precision, an
+	ERPNext write-off or a dropped payment row cannot post a different split than the feed asked for.
+	"""
+	_assert_party_currency(totals)
+	values = {f: Decimal(str(totals.get(f) or 0)) for f in SETTLED_FIELDS}
+	paid, outstanding = Decimal(expected_paid), Decimal(expected_outstanding)
+	_assert_requested_total(values["grand_total"], str(paid + outstanding))
+	residual = {f: values[f] for f in ("change_amount", "write_off_amount") if values[f]}
+	if values["paid_amount"] != paid or values["outstanding_amount"] != outstanding or residual:
+		raise SettlementDrift(
+			f"invoice does not settle as requested after ERPNext computed its totals: paid_amount "
+			f"{values['paid_amount']} (requested {paid}), outstanding_amount {values['outstanding_amount']} "
+			f"(requested {outstanding}), residual {residual or 'none'} — rolled back, rejected as "
+			"validation (RT-419)"
+		)
+
+
+def _assert_party_currency(totals: Mapping[str, object]) -> None:
+	"""``outstanding_amount`` is held in the receivable account's currency, the rest in the invoice's.
+
+	With "Allow multi-currency invoices against single party account" ERPNext can book an invoice in a
+	currency other than its party account's, and then ``outstanding_amount`` is not comparable with the
+	invoice-currency share the connector requested. The connector converts nothing (no exchange-rate
+	decision belongs here), so that case is refused as drift instead of being compared across currencies.
+	Absent keys (a document that carries neither) are not checked.
+	"""
+	currency, party_currency = totals.get("currency"), totals.get("party_account_currency")
+	if currency and party_currency and currency != party_currency:
+		raise SettlementDrift(
+			f"the invoice currency {currency} differs from its receivable account currency {party_currency}: "
+			"the payer's outstanding amount cannot be verified without a conversion the connector does not "
+			"make — rolled back, rejected as validation (RT-419)"
 		)
 
 

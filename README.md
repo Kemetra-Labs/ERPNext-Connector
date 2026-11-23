@@ -129,7 +129,7 @@ entries, payment methods, return behavior). It is never the production Retail To
 | 004 Product to ERPNext Item mapping | [`specs/004-product-erpnext-item-mapping`](specs/004-product-erpnext-item-mapping) | Policy realised in the posting path: each line's pre-resolved `erpnextItemRef` is applied as the Item; the connector never resolves or creates Items. No product or price export from ERPNext exists (barred by the contract and the constitution) |
 | 006 Sales Posting Adapter | [`specs/006-sales-posting-adapter`](specs/006-sales-posting-adapter) | Implemented and scheduled; extended by later Jira issues (stock movement, tender settlement, void, partial return). See below |
 | 007 Connector Admin Counterpart | [`specs/007-connector-admin-counterpart`](specs/007-connector-admin-counterpart) | Codeable subset implemented: credential-lifecycle fields in Connector Settings, expiry warning and re-auth classification ([decision](docs/decisions/connector-credential-lifecycle.md), [cutover runbook](docs/runbooks/connector-credential-cutover.md)) |
-| 009 Receivables and Third-Party Posting | [`specs/009-receivables-and-third-party-posting-adapter`](specs/009-receivables-and-third-party-posting-adapter) | Planning only: no connector code, no gate marked satisfied |
+| 009 Third-Party (Payer) Posting | [`specs/009-receivables-and-third-party-posting-adapter`](specs/009-receivables-and-third-party-posting-adapter) | Re-scoped by RT-419: a credit sale posts as one Sales Invoice on the payer's Customer (`Sale.responsibilities`); no receivable, claim, remittance or Payment Entry commands |
 
 Specs `005` (Inventory Export and Reservation) and `008` (Upgrade and Compatibility Runbook) have no spec folder yet; their entries in the [roadmap](#spec-roadmap-and-delivery-waves) remain planned.
 The stock-view (Bin) client is implemented under the Backend-Core 019 / stock-view contract and has no
@@ -218,7 +218,7 @@ Posting Log `(source_system, external_id)` and `unique_rt_si_provenance` on Sale
 > | 005 Inventory Export and Reservation | No spec folder yet; the stock-view (Bin) client was built under the Backend-Core stock-view contract |
 > | 007 Tax and Fiscal Fields Egypt | No spec folder yet (gate G6 not passed). `007-connector-admin-counterpart` reuses the number for the credential-lifecycle subset |
 > | 008 Upgrade and Compatibility Runbook | No spec folder yet; see the [upgrade runbook](docs/runbooks/upgrade-compatibility.md) |
-> | not in the roadmap | `009-receivables-and-third-party-posting-adapter` (planning only) |
+> | not in the roadmap | `009-receivables-and-third-party-posting-adapter` (re-scoped by RT-419) |
 
 <details><summary><b>Roadmap entries, delivery waves and quality gates</b></summary>
 

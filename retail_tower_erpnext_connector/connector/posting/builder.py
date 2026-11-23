@@ -36,6 +36,10 @@ document payload the connector will submit. It:
   - sets ``disable_rounded_total = 1`` (RT-80): the site default rounds a fractional total to the
     whole unit (10.49 EGP -> AR 10.00 + 0.49 Round Off), so AR would no longer equal ``posTotal``.
     The reversal builder composes on this one, so credit notes inherit it.
+  - posts a credit / third-party sale against the PAYER's Customer (RT-419, owner decision R-1): a
+    ``sale_post`` whose ``Sale.responsibilities`` names one payer gets that payer's ERPNext Customer
+    (``payerExternalRef``) as the debtor instead of the store's. Its tenders still settle on the invoice
+    (below); the payer's share is the residual, outstanding on the payer. ``payer.py`` owns the resolution.
   - settles a tender-bearing sale on the invoice itself (RT-78, RT-10 D3(b), amendment
     011-DR-POSTING-A1): ``is_pos = 1`` plus one ``payments`` row per tender (Mode of Payment from
     the injected tender map), so the invoice is Paid in the same exactly-once submit. A
@@ -57,6 +61,7 @@ from decimal import Decimal, InvalidOperation, localcontext
 from .compatibility_profile import ISO_MINOR_UNITS
 from .contracts import PostingWorkItem, SaleLine
 from .errors import UnmappedUnit as UnmappedUnit  # re-export: the old import path stays valid
+from .payer import payer_customer
 from .posting_time import UTC_CLOCK, PostingStamp, apply_stamp, stamp_for
 from .tender import build_payments
 from .uom import assert_money_conformance
@@ -201,6 +206,7 @@ def build_sales_invoice(
 	posting_stamp: PostingStamp | None = None,
 	mode_of_payment_for: Callable[[str], str] | None = None,
 	company: str | None = None,
+	payer_customer_for: Callable[[str], str] | None = None,
 ) -> dict:
 	"""Build the ERPNext Sales-Invoice payload for one ``sale_post`` work-item.
 
@@ -217,13 +223,25 @@ def build_sales_invoice(
 	a tender-bearing sale without it fails closed rather than posting unpaid.
 	``company`` (RT-378) is set explicitly: the glue passes the site default, the value the
 	representation check expects. Without one the document carries no ``company`` key.
+	``payer_customer_for(payerExternalRef) -> Customer`` (RT-419) resolves the payer of a credit /
+	third-party sale. It is consulted only for a ``sale_post`` that carries ``responsibilities``: the
+	payer's Customer is then the debtor and the store map is not read; with no resolver wired the sale
+	fails closed (:class:`errors.UnmappedPayer`), never posts on the store's Customer. A reversal or return
+	composes on this builder with the original sale's snapshot and never takes the payer path
+	(``reversal_policy`` refuses a reversal of a payer-bearing sale).
 	"""
 	sale = work_item.sale
 	_assert_no_tax(sale.lines)  # RT-1312 F5: never drop a tax amount silently
 	warehouse = warehouse_for(sale.store_id)
+	responsibilities = sale.responsibilities if work_item.kind == "sale_post" else ()
 	# F-009: the 012 work-item carries no customer identity — only Sale.store_id. The operator
 	# maps each store to its ERPNext Customer (config, injected) exactly as for the warehouse.
-	customer = customer_for(sale.store_id)
+	# RT-419: a payer-bearing sale is posted against its payer's Customer instead.
+	customer = (
+		payer_customer(responsibilities, payer_customer_for)
+		if responsibilities
+		else customer_for(sale.store_id)
+	)
 
 	items = []
 	for line in sale.lines:
@@ -275,10 +293,13 @@ def build_sales_invoice(
 	}
 
 	# RT-78 / RT-10 D3(b): a tender-bearing sale is settled on this invoice (no Payment Entry).
+	# RT-419: for a payer-bearing sale the tenders settle their share and the payer's share stays
+	# outstanding on the payer's Customer; the coverage check replaces the tenders-cover-lines check.
 	payments = build_payments(
 		sale.tenders,
 		line_amounts=[item["amount"] for item in items],
 		mode_of_payment_for=mode_of_payment_for,
+		responsibility_amounts=[r.amount for r in responsibilities],
 	)
 	if payments:
 		doc["is_pos"] = 1
