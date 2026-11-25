@@ -32,7 +32,7 @@ The ticket's baseline was `9cb465e4` (2026-10-13). `main` has moved since then.
 **Third-party imports in app code.** Apart from the standard library, `frappe` and `erpnext`, the
 production code imports only `requests` (`connector/http_transport.py`, since RT-1218) and `sentry_sdk`
 (`connector/observability/sentry_client.py`, lazily, only when `RT_CONNECTOR_SENTRY_DSN` is set).
-Both come from Frappe's own environment (Frappe v15/v16 ship `requests` and
+Both come from Frappe's own environment (Frappe v16 ships `requests` and
 `sentry-sdk~=1.45.1`). The app therefore has **no runtime dependency of its own to lock**.
 
 **Install paths.**
@@ -79,17 +79,17 @@ it is today: the Frappe / ERPNext version pair.
        "pytest==9.1.1",
        "pytest-cov==7.1.0",
        "ruff==0.15.20",
-       "sentry-sdk==1.45.1",  # Frappe v15/v16 pin; see the RT-635 comment in ci.yml
+       "sentry-sdk==1.45.1",  # Frappe v16 pin; see the RT-635 comment in ci.yml
    ]
    ```
 
    `[project].dependencies` stays empty. bench does not install dependency groups, so the
    production install is unchanged.
 2. **Lock it** into a committed `pylock.toml` at the repo root, with sha256 hashes for every wheel,
-   wheels only, for the CI runtime (Linux x86_64, Python 3.11):
+   wheels only, for the CI runtime (Linux x86_64, Python 3.14):
 
    ```bash
-   uv pip compile pyproject.toml --group ci --python-version 3.11 \
+   uv pip compile pyproject.toml --group ci --python-version 3.14 \
      --python-platform x86_64-manylinux_2_28 --only-binary :all: -o pylock.toml
    ```
 
@@ -132,6 +132,9 @@ it is today: the Frappe / ERPNext version pair.
 ## 6. Evidence (prototype, scratchpad only; nothing committed)
 
 Run on 2026-10-17 against `391b717`, uv 0.11.32, CPython 3.11:
+
+> Note (RT-923, RT-925): this run record is history. The lock is now compiled for Python 3.14
+> (see the addendum at the end of this file).
 
 - §5.2 command, with the `[dependency-groups].ci` block added to a *copy* of `pyproject.toml`,
   resolved 12 packages, all with sha256 hashes: `certifi 2026.7.22`, `coverage 7.16.2`,
