@@ -95,9 +95,11 @@ class TestLifecycleFieldsAreNonSecret:
 	# they mirror DP-2's non-secret ConnectorInstance/CredentialStatus projections. ONLY dp2_token
 	# is a secret. Guard against a future field being authored as a Password by mistake (over-broad)
 	# OR a lifecycle field being the only Password (mis-classification).
-	def test_only_dp2_token_is_a_password_field(self, doctype: dict):
+	# RT-1362 S3: the dual-slot staging adds exactly one more secret, the PENDING credential's token;
+	# its id and times stay non-secret Data fields like the current ones.
+	def test_only_the_two_credential_tokens_are_password_fields(self, doctype: dict):
 		password_fields = [f["fieldname"] for f in doctype["fields"] if f.get("fieldtype") == "Password"]
-		assert password_fields == ["dp2_token"]
+		assert password_fields == ["dp2_token", "dp2_pending_token"]
 
 
 _TENDER_ROW_JSON = (

@@ -55,7 +55,14 @@ class SiteGateway(Protocol):
 	def new_site(self, site: str, db_name: str, admin_password: str) -> None: ...
 	def drop_site(self, site: str) -> None: ...
 	def install_app(self, site: str, app: str) -> None: ...
-	def site_op(self, site: str, op: str, args: dict | None = None, secret: str | None = None) -> dict: ...
+	def site_op(
+		self,
+		site: str,
+		op: str,
+		args: dict | None = None,
+		secret: str | None = None,
+		timeout: int | None = None,
+	) -> dict: ...
 	def count_sites(self) -> int: ...
 	def queue_depth(self) -> int: ...
 
@@ -110,11 +117,20 @@ class BenchGateway:
 			raise ProvisioningError(ErrorClass(error["class"]), str(error["reason"]))
 		return result
 
-	def site_op(self, site: str, op: str, args: dict | None = None, secret: str | None = None) -> dict:
+	def site_op(
+		self,
+		site: str,
+		op: str,
+		args: dict | None = None,
+		secret: str | None = None,
+		timeout: int | None = None,
+	) -> dict:
+		"""``timeout`` (seconds) caps the configured one: a caller bound to a lease passes what is left."""
 		spec: dict = {"op": op, "args": args or {}}
 		if secret is not None:
 			spec["secret"] = secret  # the only channel: this pipe, into the site process
-		timeout = self._c.short_timeout_seconds if op == "inspect" else self._c.site_step_timeout_seconds
+		configured = self._c.short_timeout_seconds if op == "inspect" else self._c.site_step_timeout_seconds
+		timeout = configured if timeout is None else max(1, min(configured, int(timeout)))
 		return self._command_json(
 			SITE_COMMAND, ["--site", site, SITE_COMMAND], timeout, json.dumps(spec).encode("utf-8")
 		)

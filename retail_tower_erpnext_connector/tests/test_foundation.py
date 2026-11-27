@@ -48,8 +48,9 @@ ALLOWED_SCHEDULED_JOBS = frozenset(
 )
 
 # Connector Settings fields approved by spec 006 (Data-Pulse-2 link, mapping tables), RT-321
-# (credential lifecycle), RT-379 (compatibility profile) and RT-883 (the pollers' feed state). A
-# field outside this set fails.
+# (credential lifecycle), RT-379 (compatibility profile), RT-883 (the pollers' feed state) and RT-1362
+# S3 (the PENDING credential slot of the dual-slot rotation, owner decision RT-1362 c19107). A field
+# outside this set fails.
 APPROVED_SETTINGS_FIELDS = frozenset(
 	{
 		"dp2_base_url",
@@ -59,6 +60,11 @@ APPROVED_SETTINGS_FIELDS = frozenset(
 		"dp2_credential_issued_at",
 		"dp2_credential_expires_at",
 		"dp2_credential_warn_days",
+		"dp2_current_credential_issued_at_utc",
+		"dp2_pending_token",
+		"dp2_pending_credential_id",
+		"dp2_pending_credential_issued_at",
+		"dp2_pending_credential_expires_at",
 		"uom_map",
 		"warehouse_map",
 		"store_customer_map",
@@ -202,7 +208,8 @@ class TestConnectorSettingsSingleton(unittest.TestCase):
 		self.assertEqual(doc.name, SETTINGS_DOCTYPE)
 
 	def test_connector_settings_has_only_approved_fields(self):
-		"""Every functional Connector Settings field is one a spec approved (006, RT-321, RT-379, RT-883)."""
+		"""Every functional Connector Settings field is one a spec approved (006, RT-321, RT-379, RT-883,
+		RT-1362)."""
 		meta = frappe.get_meta(SETTINGS_DOCTYPE)
 		functional = {
 			f.fieldname

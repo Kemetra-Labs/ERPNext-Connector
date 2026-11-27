@@ -12,8 +12,14 @@
   "dp2_connector_registration_id",
   "dp2_credential_id",
   "dp2_credential_issued_at",
+  "dp2_current_credential_issued_at_utc",
   "dp2_credential_expires_at",
   "dp2_credential_warn_days",
+  "pending_credential_section",
+  "dp2_pending_token",
+  "dp2_pending_credential_id",
+  "dp2_pending_credential_issued_at",
+  "dp2_pending_credential_expires_at",
   "maps_section",
   "uom_map",
   "warehouse_map",
@@ -72,6 +78,13 @@
    "description": "Provenance of the current credential (IssuedCredential issue time, 007 §5). NON-SECRET — audit/correlation."
   },
   {
+   "fieldname": "dp2_current_credential_issued_at_utc",
+   "fieldtype": "Data",
+   "label": "DP2 Credential Issued At (UTC)",
+   "read_only": 1,
+   "description": "RT-1362 S3: the current credential's issuedAt as sent by Backend-Core (ISO-8601 UTC), written with every bind or promotion. NON-SECRET. The unambiguous fence of a rotation's pending-slot write: a credential issued at or before it is never staged (the site-local Datetime above is ambiguous in a DST fall-back hour)."
+  },
+  {
    "fieldname": "dp2_credential_expires_at",
    "fieldtype": "Datetime",
    "label": "DP2 Credential Expires At",
@@ -83,6 +96,40 @@
    "label": "Credential Warn Days",
    "default": "14",
    "description": "How many days before dp2_credential_expires_at the connector starts logging the 'credential expiring — request rotation' ops alert each poll tick (007 OQ-1a). NON-SECRET. Blank/0 → the 14-day default; a negative value is a config error (fail-loud)."
+  },
+  {
+   "fieldname": "pending_credential_section",
+   "fieldtype": "Section Break",
+   "label": "Pending Credential (rotation)",
+   "description": "RT-1362 S3: the dual-slot staging of a credential rotation (provisioning-feed.yaml 1.2.0-draft). The provisioner writes a rotated credential here, never into the current one above; the connector presents it first, falls back to the current one if Backend-Core refuses it, and moves it into the current slot on the first accepted call. Written by the provisioner and the connector only."
+  },
+  {
+   "fieldname": "dp2_pending_token",
+   "fieldtype": "Password",
+   "label": "Pending Connector Token",
+   "read_only": 1,
+   "description": "RT-1362 S3: the rotated credential's secret while it is pending. SECRET: stored encrypted, read via get_password, never logged (Gate G4). Empty when no rotation is in progress."
+  },
+  {
+   "fieldname": "dp2_pending_credential_id",
+   "fieldtype": "Data",
+   "label": "Pending Credential Id",
+   "read_only": 1,
+   "description": "RT-1362 S3: the pending credential's id (NON-SECRET). Empty when no rotation is in progress."
+  },
+  {
+   "fieldname": "dp2_pending_credential_issued_at",
+   "fieldtype": "Data",
+   "label": "Pending Credential Issued At (UTC)",
+   "read_only": 1,
+   "description": "RT-1362 S3: the pending credential's issuedAt as sent by Backend-Core (ISO-8601 UTC). The fencing token of the provisioner's compare-and-set write: an older one never replaces a newer one."
+  },
+  {
+   "fieldname": "dp2_pending_credential_expires_at",
+   "fieldtype": "Data",
+   "label": "Pending Credential Expires At (UTC)",
+   "read_only": 1,
+   "description": "RT-1362 S3: the pending credential's expiresAt (ISO-8601 UTC). Copied to DP2 Credential Expires At when the credential is promoted."
   },
   {
    "fieldname": "maps_section",
@@ -186,7 +233,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-25 00:00:00.000000",
+ "modified": "2026-11-27 00:00:01.000000",
  "modified_by": "Administrator",
  "module": "Connector",
  "name": "Connector Settings",

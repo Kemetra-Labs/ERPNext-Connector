@@ -82,6 +82,41 @@ def run_heartbeat() -> None:
 		)
 
 
+def probe_credential(secret: str) -> int | None:
+	"""RT-1362 S3: send one heartbeat authenticated with ``secret`` alone and return Backend-Core's HTTP
+	status, or ``None`` when there was no answer (configuration, transport). No auth circuit and no
+	slot logic: the provisioner asks whether a credential still staged in the PENDING slot is now
+	Backend-Core's current one (2xx) or revoked (401/403) before it replaces it. Never raises."""
+	from .. import http_transport
+
+	request_id = new_request_id()
+	try:
+		transport = http_transport.build_probe_transport(frappe.get_doc("Connector Settings"), secret)
+		HeartbeatClient(transport, correlation_id=request_id).report(_report())
+	except HeartbeatError as exc:
+		return exc.status
+	except Exception as exc:  # no answer: the caller treats the slot as undetermined
+		frappe.logger(_LOGGER).warning(
+			{
+				"event": "connector.heartbeat.probe_failed",
+				"request_id": request_id,
+				"error_class": type(exc).__name__,
+			}
+		)
+		return None
+	return 200
+
+
+def _report() -> HeartbeatReport:
+	return HeartbeatReport(
+		connector_version=_connector_version(),
+		erpnext_reachable=_erpnext_reachable(),
+		source_clock_at=format_source_clock(datetime.now(UTC)),
+		accepted_work_item_kinds=advertised_work_item_kinds(),
+		back_dated_role=_back_dated_role(),
+	)
+
+
 def _send_heartbeat(request_id: str) -> None:
 	try:
 		client = _build_client(request_id)
@@ -90,14 +125,7 @@ def _send_heartbeat(request_id: str) -> None:
 			{"event": "connector.heartbeat.skipped", "request_id": request_id, "reason": scrub(str(exc))}
 		)
 		return
-	report = HeartbeatReport(
-		connector_version=_connector_version(),
-		erpnext_reachable=_erpnext_reachable(),
-		source_clock_at=format_source_clock(datetime.now(UTC)),
-		accepted_work_item_kinds=advertised_work_item_kinds(),
-		back_dated_role=_back_dated_role(),
-	)
-	ack = client.report(report)
+	ack = client.report(_report())
 	frappe.logger(_LOGGER).debug(
 		{
 			"event": "connector.heartbeat.sent",

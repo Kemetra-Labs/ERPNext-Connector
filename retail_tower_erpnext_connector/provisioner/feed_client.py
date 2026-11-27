@@ -1,8 +1,12 @@
 # Copyright (c) 2026, Retail Tower OS and contributors
 # For license information, please see license.txt
 
-"""The pull client for ``provisioning-feed.yaml`` 1.0.0-draft (Backend-Core): pull, step ack, one-time
+"""The pull client for ``provisioning-feed.yaml`` 1.2.0-draft (Backend-Core): pull, step ack, one-time
 credential issue, final outcome.
+
+Claim fencing (1.2.0-draft, RT-1362): a ``200`` step acknowledgement may carry the claim's ``leaseId``;
+the caller passes it back as ``Provisioning-Lease-Id`` on later calls (Backend-Core requires it on a
+``credential.rotate`` request and ignores it on the other kinds).
 
 It calls through the Connector's shared :class:`HttpTransport` (``self._transport``, module-level
 ``/api/`` path constants), so ``tools/contracts-check`` verifies every path and method it uses
@@ -29,6 +33,7 @@ _PULL_PATH = "/api/connector/v1/erpnext/provisioning/requests"
 _ACK_PATH = "/api/connector/v1/erpnext/provisioning/requests/{request_id}/steps"
 _CREDENTIAL_PATH = "/api/connector/v1/erpnext/provisioning/requests/{request_id}/credential"
 _OUTCOME_PATH = "/api/connector/v1/erpnext/provisioning/requests/{request_id}/outcome"
+LEASE_HEADER = "Provisioning-Lease-Id"
 
 
 @dataclass(frozen=True)
@@ -65,6 +70,9 @@ class ProvisioningRequest:
 	attempt_floor: int
 	not_before: str | None
 	stores: tuple[Store, ...]
+	# 1.2.0-draft: the registration's stored site binding. On ``credential.rotate`` it, never
+	# ``site_name``, names the site; absent on the other kinds.
+	erpnext_site_ref: str | None = None
 
 	@classmethod
 	def from_wire(cls, wire: dict) -> ProvisioningRequest:
@@ -88,6 +96,7 @@ class ProvisioningRequest:
 				attempt_floor=int(wire["attemptFloor"]),
 				not_before=wire.get("notBefore"),
 				stores=tuple(Store(s["storeId"], s["displayName"]) for s in wire.get("stores", [])),
+				erpnext_site_ref=wire.get("erpnextSiteRef"),
 			)
 		except (KeyError, TypeError, ValueError, AttributeError) as exc:
 			raise ValueError(f"malformed provisioning request: missing or invalid {exc}") from exc
@@ -150,6 +159,22 @@ def _lease_expiry(resp) -> datetime:
 	return expires
 
 
+def _lease_id(resp) -> str | None:
+	"""``leaseId`` of a 200 ack (1.2.0-draft), canonical, or ``None`` when absent. It is sent back in a
+	header, so anything but a UUID is a protocol error."""
+	raw = resp.body.get("leaseId") if isinstance(resp.body, dict) else None
+	if raw is None:
+		return None
+	try:
+		return _uuid(raw)
+	except ValueError as exc:
+		raise ProtocolError("ack: leaseId is not a UUID") from exc
+
+
+def _lease_headers(lease_id: str | None) -> dict:
+	return {LEASE_HEADER: lease_id} if lease_id else {}
+
+
 def _code(resp) -> str:
 	error = resp.body.get("error") if isinstance(resp.body, dict) else None
 	return error.get("code", "") if isinstance(error, dict) else ""
@@ -196,7 +221,24 @@ class FeedClient:
 		*,
 		reason: str | None = None,
 		detail: str | None = None,
+		lease_id: str | None = None,
 	) -> datetime:
+		return self.ack_lease(
+			request_id, step, outcome, attempt, reason=reason, detail=detail, lease_id=lease_id
+		)[0]
+
+	def ack_lease(
+		self,
+		request_id: str,
+		step: str,
+		outcome: str,
+		attempt: int,
+		*,
+		reason: str | None = None,
+		detail: str | None = None,
+		lease_id: str | None = None,
+	) -> tuple[datetime, str | None]:
+		"""The step ack; returns the lease expiry and the claim's ``leaseId`` (``None`` when not sent)."""
 		body: dict = {"step": step, "outcome": outcome, "attempt": attempt}
 		if outcome != "done":
 			body["errorClass"] = outcome
@@ -204,23 +246,25 @@ class FeedClient:
 			body["reason"] = reason
 		if detail:
 			body["detail"] = detail
-		headers = {"Idempotency-Key": f"{request_id}:{step}:{attempt}"}
+		headers = {"Idempotency-Key": f"{request_id}:{step}:{attempt}", **_lease_headers(lease_id)}
 		try:
 			resp = self._transport.post(_ACK_PATH.format(request_id=request_id), json=body, headers=headers)
 		except Exception as exc:
 			raise _failure(exc) from exc
 		_checked(resp)
 		if resp.status == 200:
-			return _lease_expiry(resp)
+			return _lease_expiry(resp), _lease_id(resp)
 		if resp.status == 409 and _code(resp) == "idempotency_key_conflict":
 			raise AttemptCollision(f"{step}:{attempt}")
 		if resp.status in (404, 409):
 			raise LeaseLost(request_id)
 		raise ProtocolError(f"ack {step}: HTTP {resp.status} {_code(resp)}")
 
-	def issue_credential(self, request_id: str) -> IssuedCredential:
+	def issue_credential(self, request_id: str, *, lease_id: str | None = None) -> IssuedCredential:
 		try:  # the call takes no body and no Idempotency-Key (a replay would have to store the secret)
-			resp = self._transport.post(_CREDENTIAL_PATH.format(request_id=request_id), json=None, headers={})
+			resp = self._transport.post(
+				_CREDENTIAL_PATH.format(request_id=request_id), json=None, headers=_lease_headers(lease_id)
+			)
 		except Exception as exc:
 			raise _failure(exc) from exc
 		_checked(resp)
@@ -251,13 +295,14 @@ class FeedClient:
 		*,
 		reason: str | None = None,
 		result: dict | None = None,
+		lease_id: str | None = None,
 	) -> None:
 		body: dict = {"outcome": outcome}
 		if reason:
 			body["reason"] = reason
 		if result is not None:
 			body["result"] = result
-		headers = {"Idempotency-Key": f"{request_id}:outcome:{attempt}"}
+		headers = {"Idempotency-Key": f"{request_id}:outcome:{attempt}", **_lease_headers(lease_id)}
 		try:
 			resp = self._transport.post(
 				_OUTCOME_PATH.format(request_id=request_id), json=body, headers=headers

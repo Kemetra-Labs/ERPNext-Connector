@@ -135,6 +135,10 @@ class TestProvisionerSiteOps(unittest.TestCase):
 		self.assertEqual(frappe.get_single(SETTINGS).get_password("dp2_token"), SECRET)
 		state = self.ops.inspect()
 		self.assertEqual(state["credential_id"], "9a4e1d2b-7c3f-4b86-8e0a-5d1f3c7a9b22")
+		# RT-1362 S3: the exact UTC issue time, the fence of a later rotation's pending-slot write.
+		self.assertEqual(
+			frappe.get_single(SETTINGS).dp2_current_credential_issued_at_utc, "2026-11-14T10:00:00Z"
+		)
 		self.assertNotIn(SECRET, str(state))
 		self.assertNotIn(SECRET, repr(frappe.get_site_config()))
 

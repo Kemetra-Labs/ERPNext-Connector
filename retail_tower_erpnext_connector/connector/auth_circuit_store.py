@@ -21,6 +21,7 @@ import hashlib
 import time
 from collections.abc import Callable
 
+from . import credential_slots
 from .auth_circuit import AuthCircuit, AuthCircuitOpen, CircuitState
 from .auth_circuit_status import AuthCircuitStatus, build_status
 from .observability.sentry_client import capture_auth_circuit_open
@@ -68,7 +69,11 @@ def credential_key(settings) -> str:
 	except Exception:  # an unreadable token is the same as none: the transport builder refuses it anyway
 		token = ""
 	fingerprint = _fingerprint(token) if token else ""
-	return f"{credential_id}:{fingerprint}"
+	key = f"{credential_id}:{fingerprint}"
+	# RT-1362 S3: a staged PENDING credential is a credential change too. The transport presents it first,
+	# so a circuit opened before it was staged must not hold it back. Its id alone names it (non-secret).
+	pending_id = str(getattr(settings, credential_slots.PENDING_ID, "") or "").strip()
+	return f"{key}|{pending_id}" if pending_id else key
 
 
 def _fingerprint(token: str) -> str:
@@ -154,4 +159,42 @@ def guarded_transport(settings, *, job_name: str, request_id: str):
 		circuit=circuit,
 		on_open=_on_open(job_name, request_id),
 		on_close=_on_close(job_name, request_id),
+		on_promote=_on_promote(job_name, request_id),
+		reload_token=credential_slots.reload_current_token,
+		on_slot_error=_on_slot_error(job_name, request_id),
 	)
+
+
+def _on_promote(job_name: str, request_id: str) -> Callable[[credential_slots.PendingCredential], bool]:
+	def promote(pending: credential_slots.PendingCredential) -> bool:
+		promoted = credential_slots.promote_pending(pending)
+		if promoted:
+			# One log line per rotation (a recovery, not an error); ids only, never a secret.
+			_logger().info(
+				{
+					"event": "connector.credential.promoted",
+					"credential_id": pending.credential_id,
+					"job_name": job_name,
+					"request_id": request_id,
+				}
+			)
+		return promoted
+
+	return promote
+
+
+def _on_slot_error(job_name: str, request_id: str) -> Callable[[str, Exception], None]:
+	def failed(what: str, exc: Exception) -> None:
+		# The class name only: a database error text could carry a value. The slot keeps the credential,
+		# so the next accepted call promotes it again.
+		_logger().warning(
+			{
+				"event": "connector.credential.slot_error",
+				"step": what,
+				"error": type(exc).__name__,
+				"job_name": job_name,
+				"request_id": request_id,
+			}
+		)
+
+	return failed

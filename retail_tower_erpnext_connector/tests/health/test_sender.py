@@ -378,3 +378,24 @@ class TestPostingUnaffected:
 				assert "health" not in (node.module or "")
 			elif isinstance(node, ast.Import):
 				assert all("health" not in alias.name for alias in node.names)
+
+
+class TestProbeCredential:
+	"""RT-1362 S3: one heartbeat with a given credential alone, so the provisioner can tell whether a
+	credential still in the PENDING slot is Backend-Core's current one before it replaces it."""
+
+	_PROBE = "rt-connector-probe-" + "z" * 12
+
+	def test_the_probe_authenticates_with_the_given_credential_only_and_returns_the_status(self, load):
+		fake, requests = _Frappe(), _Requests(status=401, body={"error": {"code": "unauthorized"}})
+		assert load(fake, requests).probe_credential(self._PROBE) == 401
+		assert [c["headers"]["Authorization"] for c in requests.calls] == ["Bearer " + self._PROBE]
+		assert _TOKEN not in json.dumps(requests.calls) and self._PROBE not in _logged_text(fake)
+
+	def test_an_accepted_probe_is_200(self, load):
+		assert load(_Frappe(), _Requests()).probe_credential(self._PROBE) == 200
+
+	def test_no_answer_is_none_and_never_raises(self, load):
+		fake = _Frappe()
+		assert load(fake, _Requests(error=ConnectionError("down"))).probe_credential(self._PROBE) is None
+		assert ("warning", "connector.heartbeat.probe_failed") in _levels(fake)

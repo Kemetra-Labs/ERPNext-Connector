@@ -47,6 +47,8 @@ def run(spec: dict) -> dict:
 		"enable_scheduler": lambda a, s: enable_scheduler(),
 		"bootstrap_stores": lambda a, s: bootstrap_stores(a),
 		"bind_credential": lambda a, s: bind_credential(a, s),
+		"stage_pending_credential": lambda a, s: stage_pending_credential(a, s),
+		"confirm_credential": lambda a, s: confirm_credential(a),
 	}
 	handler = handlers.get(spec.get("op"))
 	if handler is None:
@@ -106,6 +108,11 @@ def inspect() -> dict:
 		out["registration_id"] = (
 			frappe.db.get_single_value(_SETTINGS, "dp2_connector_registration_id") or None
 		)
+		# RT-1362 S3: whether Connector Settings carry the PENDING slot (``bench migrate`` ran for this
+		# Connector version); a rotation checks it before any credential is issued.
+		from ..connector import credential_slots
+
+		out["pending_slot"] = credential_slots.has_pending_slot()
 		out["indexes_ok"] = schema.index_present(
 			"Posting Log", schema.POSTING_LOG_INDEX, schema.POSTING_LOG_COLUMNS
 		) and schema.index_present("Sales Invoice", schema.SALES_INVOICE_INDEX, schema.SALES_INVOICE_COLUMNS)
@@ -373,9 +380,88 @@ def bind_credential(args: dict, secret: str | None) -> dict:
 	settings.dp2_credential_id = args["credential_id"]
 	settings.dp2_credential_issued_at = _site_naive(args["issued_at"])
 	settings.dp2_credential_expires_at = _site_naive(args["expires_at"])
+	# RT-1362 S3: the exact UTC issue time, the fence a later rotation's pending-slot write compares with
+	# (the site-local Datetime above is ambiguous in a DST fall-back hour).
+	settings.dp2_current_credential_issued_at_utc = args["issued_at"]
 	settings.save()
 	_commit()
 	return {"ok": True}
+
+
+def stage_pending_credential(args: dict, secret: str | None) -> dict:
+	"""RT-1362 S3 (``credential.rotate``, step 4): write the rotated credential into the PENDING slot of
+	Connector Settings, never the CURRENT one, as a compare-and-set on ``issuedAt``.
+
+	Returns ``{"ok": True, "staged": "write" | "noop" | "stale" | "expired" | "deferred"}``; all but
+	``write`` and ``noop`` write nothing (a newer worker owns the rotation, the writer's lease
+	``args["deadline"]`` passed, or the slot's occupant could not be settled). A site whose Connector
+	Settings have no pending slot yet (``bench migrate`` has not run for this Connector version) is a
+	``compatibility`` failure: nothing is written. The slot is read and written through
+	:mod:`..connector.credential_slots` (a locking read of the settings, Frappe's password API), so a
+	poller promoting at the same moment is serialised with this write.
+
+	Before a write REPLACES an occupied PENDING slot, the occupant is settled by one heartbeat
+	authenticated with it alone: Backend-Core may already have accepted it (a lost 2xx, the rotation
+	succeeded), in which case it is promoted to CURRENT first; a 401/403 shows it revoked; any other
+	answer, or none, defers the write (stop and re-pull), so the only working credential is never lost."""
+	from ..connector import credential_slots
+
+	if not secret:
+		raise OpError("permanently_rejected", "no credential supplied")
+	if not credential_slots.has_pending_slot():
+		raise OpError("compatibility", "Connector Settings have no pending credential slot")
+	try:
+		if not _settle_occupant(args["credential_id"], args["issued_at"]):
+			_commit()  # a promotion of the occupant may have run; nothing of this write
+			return {"ok": True, "staged": credential_slots.DEFERRED}
+		staged = credential_slots.stage_pending(
+			registration_id=args["registration_id"],
+			credential_id=args["credential_id"],
+			issued_at=args["issued_at"],
+			expires_at=args["expires_at"],
+			secret=secret,
+			deadline=args.get("deadline"),
+		)
+	except LookupError as exc:
+		raise OpError("conflict", "Connector Settings name another registration") from exc
+	except ValueError as exc:
+		raise OpError("permanently_rejected", "issuedAt or deadline is not a time with a zone") from exc
+	_commit()
+	return {"ok": True, "staged": staged}
+
+
+def _settle_occupant(credential_id: str, issued_at: str) -> bool:
+	"""True when the PENDING slot may be written: it is empty, holds nothing the write would replace, or
+	its occupant was shown revoked (401/403) or was accepted and is now promoted to CURRENT."""
+	from ..connector import credential_slots
+	from ..connector.health.sender import probe_credential
+
+	occupant = credential_slots.occupant_to_settle(credential_id, issued_at)
+	if occupant is None:
+		return True
+	status = probe_credential(occupant.secret)
+	if status in (401, 403):
+		return True
+	if status is not None and 200 <= status < 300:
+		credential_slots.promote_pending(occupant)  # commits; a lost race leaves the slot to the lock
+		return True
+	return False
+
+
+def confirm_credential(args: dict) -> dict:
+	"""RT-1362 S3 (step 6): make the Connector's next authenticated call now, then report both slots.
+
+	The call is one heartbeat through the shared transport, which presents the PENDING credential and
+	promotes it to CURRENT once Backend-Core accepts it; the heartbeat never raises. The caller compares
+	the returned ids with the credential it staged. ``args`` is unused (kept for the spec shape)."""
+	from ..connector import credential_slots
+	from ..connector.health.sender import run_heartbeat
+
+	del args
+	run_heartbeat()
+	ids = credential_slots.slot_ids()
+	_commit()  # the heartbeat's own writes (a promotion commits itself or rolls back as one unit)
+	return {"ok": True, **ids}
 
 
 # --- bench-level (no site) ------------------------------------------------------------------------

@@ -36,7 +36,30 @@ from .errors import (
 from .feed_client import FeedClient, ProvisioningRequest
 from .gateway import SiteGateway, SiteUnreadable
 from .lease import AckSession
+from .outcomes import (
+	CAPACITY,
+	CONFLICT,
+	REJECTED,
+	SKIPPED,
+	SUCCEEDED,
+	TRANSIENT,
+	VERIFIED,
+	report_failure,
+)
+from .rotate import ROTATE_KIND, CredentialRotator
 from .template import FISCAL_READINESS, TemplateSpec, locale_matches, spec_for
+
+__all__ = (
+	"CAPACITY",
+	"CONFLICT",
+	"REJECTED",
+	"SKIPPED",
+	"SUCCEEDED",
+	"TRANSIENT",
+	"VERIFIED",
+	"ProvisioningEngine",
+	"db_name_for",
+)
 
 LOG = logging.getLogger("rt.provisioner")
 _SITE_NAME = re.compile(r"^t[0-9a-f]{20}[a-z0-9.-]*$")  # the derived prefix, then Frappe-safe characters
@@ -46,13 +69,6 @@ _WAREHOUSE_SUFFIX = " - RT"
 _DIRTY_STEPS = frozenset({"install_erpnext", "install_connector"})
 _CONNECTOR_STEP = "install_connector"
 _PASSWORD_BYTES = 24
-
-SUCCEEDED = "succeeded"
-REJECTED = "rejected"
-CONFLICT = "conflict"
-TRANSIENT = "transient"
-CAPACITY = "capacity"
-SKIPPED = "skipped"
 _PASSTHROUGH = (LeaseLost, LeaseTooShort, AuthRejected, FeedUnavailable, ProtocolError)
 
 
@@ -85,6 +101,9 @@ class ProvisioningEngine:
 
 	# --- one request -----------------------------------------------------------------------------
 	def process(self, request: ProvisioningRequest) -> str:
+		if request.kind == ROTATE_KIND:  # RT-1362 S3: its own sequence (rotate.py)
+			rotator = CredentialRotator(self._gw, self._feed, self._c, clock=self._clock, sleep=self._sleep)
+			return rotator.process(request)
 		if request.kind != "tenant.provision":
 			LOG.info("skipping request of kind %s: no handler in this provisioner", request.kind)
 			return SKIPPED
@@ -136,21 +155,7 @@ class ProvisioningEngine:
 			) from exc
 
 	def _fail(self, session: AckSession, step: str, err: ProvisioningError) -> str:
-		LOG.warning("step %s failed: %s", step, err)
-		session.ack(step, err.error_class.value, reason=err.reason, detail=err.detail)
-		cls = err.error_class
-		if cls is ErrorClass.failed_transient:
-			return TRANSIENT
-		if cls is ErrorClass.capacity:
-			return CAPACITY
-		if cls is ErrorClass.conflict:
-			session.complete("conflict", reason=err.reason)
-			return CONFLICT
-		reason = (
-			err.reason if cls is ErrorClass.permanently_rejected else scrub(f"{cls.value}: {err.reason}", 200)
-		)
-		session.complete("permanently_rejected", reason=reason)
-		return REJECTED
+		return report_failure(session, step, err)
 
 	# --- validation and gates --------------------------------------------------------------------
 	def _validate(self, request: ProvisioningRequest) -> TemplateSpec:

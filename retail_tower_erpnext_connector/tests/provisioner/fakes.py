@@ -4,17 +4,30 @@
 """Test doubles for the tenant provisioner (RT-1359): a fake Backend-Core feed that follows
 ``provisioning-feed.yaml`` (pull, lease, ack idempotency, credential, outcome), a fake bench
 (:class:`FakeGateway`) holding simulated site state, a fake clock and a crash plan that kills the
-run at every mutating call. No bench, no network, no frappe."""
+run at every mutating call. No bench, no network, no frappe.
+
+RT-1362 S3 adds the ``credential.rotate`` rules of 1.2.0-draft to the fake feed (a ``leaseId`` per claim,
+``Provisioning-Lease-Id`` checked on every later call, a replayed ``claimed`` refused, pending credentials
+with a strictly increasing ``issuedAt``, completion only when the pending one is presented) and the
+dual-slot Connector Settings to the fake bench."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+from retail_tower_erpnext_connector.connector import credential_slots
+from retail_tower_erpnext_connector.provisioner.errors import ErrorClass, ProvisioningError
 from retail_tower_erpnext_connector.provisioner.feed_client import Response
 from retail_tower_erpnext_connector.provisioner.gateway import SiteUnreadable
+
+ROTATE = "credential.rotate"
+ADOPTED_SITE = "lab.localhost"
+REGISTRATION = "3d2c7f60-91a4-4c0b-9f3e-6f1c2a8b4e55"
+LEASE_HEADER = "Provisioning-Lease-Id"
 
 LEASE_S = 900
 SECRET = "-".join(["S3cr3t", "credential", "value", "9f8e7d6c5b4a"])  # built, not a literal
@@ -67,6 +80,18 @@ class FakeRequestState:
 	terminal_body: dict | None = None
 	credentials_issued: int = 0
 	credential_presented: bool = False
+	# credential.rotate (1.2.0-draft)
+	lease_id: str | None = None
+	final_lease_id: str | None = None
+	claimed_keys: set = field(default_factory=set)
+	pending_id: str | None = None
+	revoked: list = field(default_factory=list)
+	current_id: str = "cred-current"
+	lease_headers: list = field(default_factory=list)  # (call, header) for the fencing assertions
+
+	@property
+	def rotate(self) -> bool:
+		return self.wire["kind"] == ROTATE
 
 
 def make_wire(**over) -> dict:
@@ -89,6 +114,16 @@ def make_wire(**over) -> dict:
 	}
 	base.update(over)
 	return base
+
+
+def make_rotate_wire(**over) -> dict:
+	"""A ``credential.rotate`` request as S2 fills it: the stored site binding in ``erpnextSiteRef``, the
+	tenant-derived ``siteName`` and the template/locale as compatibility fields only, no ``legalName``,
+	``stores: []``."""
+	wire = make_wire(kind=ROTATE, erpnextSiteRef=ADOPTED_SITE, stores=[])
+	wire.pop("legalName")
+	wire.update(over)
+	return wire
 
 
 class HttpStatusError(OSError):
@@ -122,6 +157,30 @@ class FakeFeed:
 		self.requests[wire["provisioningRequestId"]] = state
 		return state
 
+	def add_rotate(self, **over) -> FakeRequestState:
+		wire = make_rotate_wire(**over)
+		state = FakeRequestState(wire=wire)
+		self.requests[wire["provisioningRequestId"]] = state
+		return state
+
+	def present(self, credential_id: str) -> bool:
+		"""A Connector call authenticated with ``credential_id`` (the heartbeat): True when accepted.
+
+		Accepting the pending credential of an open rotation promotes it, revokes the old one and
+		records ``succeeded`` (the request's FINAL lease id is the live one), in one step."""
+		for s in self.requests.values():
+			if not s.rotate:
+				continue
+			if credential_id == s.current_id:
+				return True
+			if credential_id == s.pending_id and not s.terminal:
+				s.revoked.append(s.current_id)
+				s.current_id, s.pending_id = credential_id, None
+				s.terminal = s.status = "succeeded"
+				s.final_lease_id = s.lease_id
+				return True
+		return False
+
 	# --- the shared HttpTransport surface (GET returns the body, POST a status-aware response) ----
 	def get(self, path, *, params, headers):
 		resp = self.request("GET", path, params=params, headers=headers)
@@ -149,6 +208,8 @@ class FakeFeed:
 		state = self.requests.get(rid)
 		if state is None:
 			return _err(404, "not_found")
+		if state.rotate:
+			return self._rotate_request(state, path, json or {}, headers)
 		if path.endswith("/steps"):
 			return self._ack(state, json or {}, headers)
 		if path.endswith("/credential"):
@@ -234,6 +295,95 @@ class FakeFeed:
 		self.plan.hit("feed.outcome", "after")
 		return Response(200, {}, {"requestId": s.wire["provisioningRequestId"], "outcome": body["outcome"]})
 
+	# --- credential.rotate (1.2.0-draft "Credential rotation") ---------------------------------------
+	def _rotate_request(self, s: FakeRequestState, path: str, body: dict, headers: dict) -> Response:
+		s.lease_headers.append((path.rsplit("/", 1)[-1], headers.get(LEASE_HEADER)))
+		if path.endswith("/steps"):
+			return self._rotate_ack(s, body, headers)
+		if path.endswith("/credential"):
+			return self._rotate_credential(s, headers)
+		if path.endswith("/outcome"):
+			return self._rotate_outcome(s, body, headers)
+		return _err(404, "not_found")
+
+	def _rotate_ack(self, s: FakeRequestState, body: dict, headers: dict) -> Response:
+		self.plan.hit(f"feed.ack:{body.get('step')}")
+		step = body["step"]
+		lease = headers.get(LEASE_HEADER)
+		if s.terminal:  # a late report: 200 and no change only with the FINAL lease id
+			if s.terminal == "succeeded" and lease and lease == s.final_lease_id and step != "claimed":
+				return Response(200, {}, self._ack_result(s, step))
+			return _err(409, "lease_lost")
+		if step == "claimed":
+			key = headers.get("Idempotency-Key", "")
+			if key in s.claimed_keys or not self._offerable(s):  # a replayed claim never shares a lease id
+				return _err(409, "lease_lost")
+			s.claimed_keys.add(key)
+			s.lease_id = str(uuid.uuid4())
+		elif not self._live(s) or lease != s.lease_id:
+			return _err(409, "lease_lost")
+		if body["attempt"] <= s.max_attempt:
+			return _err(409, "idempotency_key_conflict")
+		s.max_attempt = body["attempt"]
+		s.lease_expires = self.clock() + timedelta(seconds=LEASE_S)
+		s.steps.append((step, body["outcome"]))
+		self.plan.hit(f"feed.ack:{step}", "after")
+		return Response(200, {}, self._ack_result(s, step))
+
+	@staticmethod
+	def _ack_result(s: FakeRequestState, step: str) -> dict:
+		return {
+			"requestId": s.wire["provisioningRequestId"],
+			"step": step,
+			"leaseExpiresAt": (s.lease_expires or datetime.now(UTC)).isoformat().replace("+00:00", "Z"),
+			"leaseId": s.final_lease_id if s.terminal else s.lease_id,
+		}
+
+	def _rotate_credential(self, s: FakeRequestState, headers: dict) -> Response:
+		self.plan.hit("feed.credential")
+		if self.credential_status:
+			return _err(self.credential_status, "not_found")
+		if s.terminal or not self._live(s) or headers.get(LEASE_HEADER) != s.lease_id:
+			return _err(404, "not_found")
+		if s.pending_id:  # a repeat while the pending one is unpresented: revoke it, issue a new one
+			s.revoked.append(s.pending_id)
+		s.credentials_issued += 1
+		s.pending_id = f"cred-rot-{s.credentials_issued}"
+		# Strictly increasing per registration, even when the clock does not move (the fencing token).
+		issued = self.clock() + timedelta(microseconds=s.credentials_issued)
+		self.plan.hit("feed.credential", "after")
+		return Response(
+			201,
+			{"Cache-Control": "no-store"},
+			{
+				"credentialId": s.pending_id,
+				"registrationId": s.wire["connectorRegistrationId"],
+				"secret": f"{SECRET}-{s.credentials_issued}",
+				"issuedAt": issued.isoformat().replace("+00:00", "Z"),
+				"expiresAt": (issued + timedelta(days=90)).isoformat().replace("+00:00", "Z"),
+				"rotated": True,
+			},
+		)
+
+	def _rotate_outcome(self, s: FakeRequestState, body: dict, headers: dict) -> Response:
+		self.plan.hit("feed.outcome")
+		lease = headers.get(LEASE_HEADER)
+		if s.terminal:
+			if lease and lease == s.final_lease_id and body.get("outcome") == "succeeded":
+				return Response(
+					200, {}, {"requestId": s.wire["provisioningRequestId"], "outcome": "succeeded"}
+				)
+			return _err(409, "lease_lost")
+		if not self._live(s) or lease != s.lease_id or body.get("outcome") == "succeeded":
+			return _err(409, "lease_lost")  # no succeeded outcome on an open rotation
+		if s.pending_id:  # a terminal state other than succeeded revokes the pending credential
+			s.revoked.append(s.pending_id)
+			s.pending_id = None
+		s.terminal = s.status = body["outcome"]
+		s.terminal_body = body
+		self.plan.hit("feed.outcome", "after")
+		return Response(200, {}, {"requestId": s.wire["provisioningRequestId"], "outcome": body["outcome"]})
+
 
 def _err(status: int, code: str) -> Response:
 	return Response(status, {}, {"error": {"code": code, "message": "x"}})
@@ -256,6 +406,28 @@ class FakeGateway:
 		self.fail_op: dict[str, Exception] = {}
 		self.versions = {"frappe": "16.52.0", "erpnext": "16.51.0", "connector": "1.0.0"}
 		self.site_limit_count: int | None = None
+		# RT-1362 S3: what Backend-Core answers to a Connector call with a credential id (the heartbeat
+		# the confirm step makes). Tests point it at ``FakeFeed.present``.
+		self.backend = lambda credential_id: False
+		self.stage_fails: list[Exception] = []  # raised by the next pending-slot writes
+		self.timeouts: list[tuple[str, int | None]] = []
+		self.clock = None  # set by a test to check the write deadline against the fake clock
+		self.probe = lambda credential_id: 401  # what Backend-Core answers the occupant's own heartbeat
+
+	def seed_adopted(
+		self, site: str = ADOPTED_SITE, registration_id: str = REGISTRATION, credential_id="cred-current"
+	) -> dict:
+		"""A bound site with no RT marker (an adopted registration, RT-1557): Connector installed,
+		Connector Settings naming the registration, a CURRENT credential, an empty pending slot."""
+		self.sites[site] = {
+			"marker": None,
+			"apps": ["frappe", "erpnext", "retail_tower_erpnext_connector"],
+			**_blank_site(),
+			"credential_id": credential_id,
+			"registration_id": registration_id,
+			"pending": None,
+		}
+		return self.sites[site]
 
 	# --- helpers ---------------------------------------------------------------------------------
 	def _mut(self, label: str) -> None:
@@ -335,8 +507,16 @@ class FakeGateway:
 			s["indexes_ok"] = True
 			s["has_settings"] = True
 
-	def site_op(self, site: str, op: str, args: dict | None = None, secret: str | None = None) -> dict:
+	def site_op(
+		self,
+		site: str,
+		op: str,
+		args: dict | None = None,
+		secret: str | None = None,
+		timeout: int | None = None,
+	) -> dict:
 		args = args or {}
+		self.timeouts.append((op, timeout))
 		self.calls.append(("site_op", site, op, dict(args)))
 		self.stdin_payloads.append({"op": op, "args": dict(args), "secret": secret})
 		if op in self.fail_op:
@@ -345,6 +525,10 @@ class FakeGateway:
 		if op == "inspect":
 			return self._inspect(s)
 		self._mut(f"site_op:{op}")
+		if op == "stage_pending_credential":
+			return self._stage(s, args, secret)
+		if op == "confirm_credential":
+			return self._confirm(s)
 		self._apply_op(s, op, args, secret)
 		return {"ok": True}
 
@@ -378,10 +562,71 @@ class FakeGateway:
 		else:
 			raise AssertionError(f"unknown op {op}")
 
+	def _stage(self, s: dict, args: dict, secret: str | None) -> dict:
+		"""``stage_pending_credential`` with the real compare-and-set rule (``credential_slots``)."""
+		if self.stage_fails:
+			raise self.stage_fails.pop(0)
+		if not secret:
+			raise RuntimeError("stage without secret")
+		if s.get("registration_id") != args["registration_id"]:
+			raise ProvisioningError(ErrorClass.conflict, "Connector Settings name another registration")
+
+		def decide() -> str:
+			pending = s.get("pending") or {}
+			return credential_slots.stage_decision(
+				current_id=s.get("credential_id"),
+				pending_id=pending.get("credential_id"),
+				pending_issued_at=pending.get("issued_at"),
+				new_id=args["credential_id"],
+				new_issued_at=args["issued_at"],
+				current_issued_at=s.get("current_issued_at"),
+			)
+
+		# Settle an occupant the write would replace (site_ops._settle_occupant): its own heartbeat.
+		occupant = s.get("pending") or {}
+		if (
+			decide() == credential_slots.WRITE
+			and occupant
+			and occupant["credential_id"] != args["credential_id"]
+		):
+			status = self.probe(occupant["credential_id"])
+			if status is not None and 200 <= status < 300:
+				self._promote(s, occupant)  # accepted: promoted first
+			elif status not in (401, 403):
+				return {"ok": True, "staged": credential_slots.DEFERRED}
+		deadline = credential_slots.parse_utc(args.get("deadline"))
+		if deadline is not None and self.clock is not None and self.clock() >= deadline:
+			return {"ok": True, "staged": credential_slots.EXPIRED}
+		staged = decide()
+		if staged == credential_slots.WRITE:
+			s["pending"] = {"credential_id": args["credential_id"], "issued_at": args["issued_at"]}
+		return {"ok": True, "staged": staged}
+
+	@staticmethod
+	def _promote(s: dict, pending: dict) -> None:
+		"""PENDING becomes CURRENT, with its ``issuedAt`` (the fence a later stage compares with)."""
+		s["credential_id"], s["current_issued_at"], s["pending"] = (
+			pending["credential_id"],
+			pending["issued_at"],
+			None,
+		)
+
+	def _confirm(self, s: dict) -> dict:
+		"""One heartbeat through the dual-slot transport: PENDING first, promoted when accepted."""
+		pending = s.get("pending")
+		if pending and self.backend(pending["credential_id"]):
+			self._promote(s, pending)
+		return {
+			"ok": True,
+			"current_credential_id": s.get("credential_id"),
+			"pending_credential_id": (s.get("pending") or {}).get("credential_id"),
+		}
+
 	def _inspect(self, s: dict) -> dict:
 		if s.get("broken"):
 			raise SiteUnreadable("database incomplete")
 		return {
+			"pending_slot": s.get("pending_slot", True),  # False: a site not migrated to this Connector
 			"setup_complete": s["setup_complete"],
 			"companies": list(s["companies"]),
 			"default_company": s["default_company"],
